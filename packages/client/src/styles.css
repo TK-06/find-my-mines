@@ -123,7 +123,9 @@ body {
 .join-card h2 { margin: 0 0 6px; font-size: 22px; }
 .join-card p { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
 
-input[type='text'] {
+input[type='text'],
+input[type='email'],
+input[type='password'] {
   width: 100%;
   padding: 13px 15px;
   font-size: 15px;
@@ -133,7 +135,9 @@ input[type='text'] {
   border-radius: 10px;
   outline: none;
 }
-input[type='text']:focus { border-color: var(--accent); }
+input[type='text']:focus,
+input[type='email']:focus,
+input[type='password']:focus { border-color: var(--accent); }
 
 button {
   font: inherit;
@@ -422,6 +426,7 @@ button.small { padding: 7px 13px; font-size: 13px; }
 .tab-row { display: flex; gap: 8px; margin-bottom: 16px; }
 .tab-row button { flex: 1; padding: 9px 10px; font-size: 14px; }
 .join-card input + input { margin-top: 10px; }
+.join-card form > button { margin-top: 12px; }
 .oauth-row { display: flex; gap: 10px; margin-top: 12px; }
 .oauth-row button { flex: 1; }
 .form-error {

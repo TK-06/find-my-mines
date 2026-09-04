@@ -28,6 +28,7 @@ cp .env.example .env
 | `SUPABASE_URL`, `VITE_SUPABASE_URL` | Supabase dashboard → Settings → API | No |
 | `VITE_SUPABASE_ANON_KEY` | Same page, the **publishable** key | No — safe in the browser |
 | `SUPABASE_SERVICE_ROLE_KEY` | Same page, the **secret** key | **YES** |
+| `VITE_OAUTH_PROVIDERS` | Leave empty unless Google/GitHub OAuth apps exist | No |
 
 > **The secret key bypasses all database security.** Never commit it, never paste it in
 > Discord/LINE/chat, never give it a `VITE_` prefix. Ask the project owner for it over a

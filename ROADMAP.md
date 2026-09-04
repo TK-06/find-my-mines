@@ -3,6 +3,9 @@
 Single source of truth for what is built, what is left, and what is blocked.
 Update this file whenever a feature lands.
 
+New to the project? Read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, the rules, and
+how work is split.
+
 **Last updated:** 2026-09-04 — v1.0.0 MVP scope complete except the AI bot
 
 ---
@@ -64,7 +67,7 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | 8 | **Play with AI** | **On hold** | Mandatory AI feature, 2 points. Awaiting team discussion |
 | 9 | Matchmaking | **Done** | Casual/Ranked pools, Elo window widens while waiting, auto-start |
 | 10 | Elo | **Done** | Live end to end; verified writing to the database |
-| 11 | Login: guest (800) / registered | **Done** | Email/password live. Google + GitHub need OAuth apps |
+| 11 | Login: guest (800) / registered | **Done** | Guest, email/password and **GitHub** live. Google paused until hosting gives a real domain |
 | 12 | Theme | **Done** | Light/dark toggle, remembered, follows the OS by default |
 | 13 | Leaderboard | **Done** | Live in-match ranking **and** the persistent `/ranks` page |
 | 14 | Leave button | **Done** | Plus host succession and room cleanup |
@@ -78,6 +81,7 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | Server dashboard | **Done** | `/admin` — the connection display the assignment asks for |
 | Casual vs Ranked modes | **Done** | Elo only moves in Ranked |
 | Matchmaking pool on the console | **Done** | `/admin` shows who is queued, their rating, wait and current window |
+| Contributor guide | **Done** | `CONTRIBUTING.md` — setup, rules, work split, gotchas |
 | Match history schema | **Applied** | `supabase/migrations/0001_accounts_and_elo.sql`, advisors clean |
 
 ---
@@ -99,7 +103,77 @@ checks were run against the live database and all passed:
 | Step | Why |
 |---|---|
 | ~~Paste the secret key into `.env`~~ | **Done.** Server reports "Supabase connected". |
-| Add Google + GitHub OAuth apps | Still outstanding, and optional. Needed only for those two buttons; email/password works without them. Redirect URLs must cover `localhost:5173` **and** the EC2 host. |
+| ~~Add GitHub OAuth app~~ | **Done.** Enabled and live. |
+| Add Google OAuth | **Paused** until hosting — needs a real domain. See "Social sign-in" below. |
+
+### Social sign-in (Google / GitHub)
+
+The buttons are **hidden by default**. An unconfigured provider fails with
+"Unsupported provider", and a button that cannot work is worse than no button.
+
+To turn them on, all three steps are needed:
+
+1. Create an OAuth app on the provider — Google Cloud Console, or GitHub → Settings →
+   Developer settings → OAuth Apps. The callback URL is
+   `https://uyodtnchsjvxqzalcsmh.supabase.co/auth/v1/callback`.
+2. Paste the client id and secret into Supabase → Authentication → Sign In / Providers,
+   and enable the provider.
+3. Set `VITE_OAUTH_PROVIDERS=google,github` in `.env` (either name alone also works), then
+   rebuild the client.
+
+#### Status: GitHub live, Google PAUSED
+
+**GitHub OAuth is configured and enabled** — `VITE_OAUTH_PROVIDERS=github`.
+
+**Google OAuth is paused until hosting is done**, because publishing its consent screen needs
+three public URLs that cannot exist on `localhost`:
+
+| Field | What it needs |
+|---|---|
+| Application home page | Public link to the running app |
+| Application privacy policy link | Public page |
+| Application terms of service link | Public page |
+
+Plus an **Authorized domain** matching them.
+
+Two separate Google blockers, both solved by the same thing — a real domain:
+
+1. Authorized JavaScript origins must be `https` and cannot be a raw IP.
+2. The consent screen above cannot be published without public links.
+
+**Resume Google after AWS hosting**, once the domain exists. Until then the Google button
+stays hidden, and email/password plus guest cover every sign-in need. If Google is wanted
+before that, the fallback is leaving it in "Testing" and adding each person under
+Google Auth Platform → Audience → Add users (cap 100 for the app's lifetime).
+
+Email/password and guest play work without any of this.
+
+#### When you deploy — what changes, and one blocker
+
+The **callback URL never changes**. OAuth always bounces through Supabase, never through the
+game server, so `https://uyodtnchsjvxqzalcsmh.supabase.co/auth/v1/callback` stays as-is in
+both Google and GitHub.
+
+What does change:
+
+| Where | Change |
+|---|---|
+| Supabase → URL Configuration | Site URL, and add `https://<host>/**` to Redirect URLs |
+| Google → Authorized JavaScript origins | Add `https://<host>` |
+| GitHub → Homepage URL | Update (cosmetic) |
+| `shared/src/config.ts` | `SERVER_HOST` → the public address, then rebuild the client |
+
+**Blocker: Google rejects a bare EC2 IP.** Authorized JavaScript origins must be `https`, and
+Google does not accept raw IP addresses — it requires a real domain. `http://54.x.x.x:3000`
+fails on both counts.
+
+Options, cheapest first:
+
+1. **Free subdomain + Caddy** — DuckDNS or nip.io, with Caddy in front for automatic Let's
+   Encrypt certificates. About 20 minutes of work.
+2. **ALB + ACM certificate** — fits the EC2/CloudWatch/ELB plan, but still needs a domain.
+3. **Drop Google in production** — GitHub only validates the (unchanged) Supabase callback, so
+   it survives a bare IP. Email/password and guest play work over plain HTTP too.
 
 **Email confirmation stays ON** — a deliberate choice, not an oversight. Consequence for the
 demo: every new account needs a real inbox before it can sign in, so create the demo accounts
@@ -126,6 +200,10 @@ Ordered by marks per hour of work.
 6. **Puzzle mode** — single-player solvable boards against the clock. Scores as a non-AI
    feature and reuses the engine.
 7. **AWS hosting** — last, once the feature set is frozen (EC2, CloudWatch, ELB).
+   **Get a real domain as part of this.** It unblocks Google OAuth in two ways at once, and
+   Google is the only feature currently parked. See "When you deploy" under Social sign-in.
+8. **Resume Google OAuth** — after the domain exists: add the three consent-screen links,
+   set the authorized domain, publish, then set `VITE_OAUTH_PROVIDERS=google,github`.
 
 ### v1.0.0 MVP
 

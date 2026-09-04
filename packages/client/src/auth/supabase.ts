@@ -15,6 +15,23 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
 export const authEnabled = Boolean(url && anonKey);
 
+export type OAuthProvider = 'google' | 'github';
+
+/**
+ * Which social sign-in buttons to show.
+ *
+ * A provider only works once an OAuth app exists on the provider's side AND it
+ * is enabled in the Supabase dashboard. Showing a button before then gives an
+ * "Unsupported provider" dead end, so they stay hidden until opted in with
+ * VITE_OAUTH_PROVIDERS=google,github.
+ */
+export const oauthProviders: OAuthProvider[] = String(
+  import.meta.env.VITE_OAUTH_PROVIDERS ?? '',
+)
+  .split(',')
+  .map((name) => name.trim().toLowerCase())
+  .filter((name): name is OAuthProvider => name === 'google' || name === 'github');
+
 export const supabase: SupabaseClient | null = authEnabled
   ? createClient(url!, anonKey!, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },

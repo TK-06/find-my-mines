@@ -12,7 +12,9 @@ it is full. **Create game** opens a room of your own: the **Classic** preset is 
 6×6 / 11-mine / 2-player configuration, and **Custom** lets you set board size, mine count,
 and a player limit (or no limit at all).
 
-> Architecture, design decisions and the feature roadmap live in **[scaffold.md](./scaffold.md)**.
+> **Working on this?** Start with **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup and the
+> rules, and **[ROADMAP.md](./ROADMAP.md)** for what is built and what is left.
+> Architecture and design decisions live in **[scaffold.md](./scaffold.md)**.
 
 ---
 

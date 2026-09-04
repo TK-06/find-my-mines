@@ -1,6 +1,6 @@
 import { CLASSIC_PRESET, STARTING_ELO } from '@fmm/shared';
 import { useState } from 'react';
-import { authEnabled, supabase } from '../auth/supabase.js';
+import { authEnabled, oauthProviders, supabase, type OAuthProvider } from '../auth/supabase.js';
 
 interface Props {
   /** Continue without an account. Always available, always one click. */
@@ -51,7 +51,7 @@ export function AuthScreen({ onGuest, connected }: Props) {
       return result;
     });
 
-  const oauth = (provider: 'google' | 'github') =>
+  const oauth = (provider: OAuthProvider) =>
     withSupabase(() =>
       supabase!.auth.signInWithOAuth({
         provider,
@@ -139,14 +139,22 @@ export function AuthScreen({ onGuest, connected }: Props) {
               {busy ? 'Working…' : tab === 'signin' ? 'Sign in' : 'Create account'}
             </button>
 
-            <div className="oauth-row">
-              <button type="button" className="ghost" disabled={busy} onClick={() => void oauth('google')}>
-                Google
-              </button>
-              <button type="button" className="ghost" disabled={busy} onClick={() => void oauth('github')}>
-                GitHub
-              </button>
-            </div>
+            {/* Hidden until the provider is actually configured — see supabase.ts. */}
+            {oauthProviders.length > 0 && (
+              <div className="oauth-row">
+                {oauthProviders.map((provider) => (
+                  <button
+                    key={provider}
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => void oauth(provider)}
+                  >
+                    {provider === 'google' ? 'Google' : 'GitHub'}
+                  </button>
+                ))}
+              </div>
+            )}
           </form>
         )}
 
