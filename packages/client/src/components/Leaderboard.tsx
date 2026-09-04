@@ -80,6 +80,13 @@ export function Leaderboard({ state, myId }: Props) {
                 <span className="points">
                   <strong>{player.score}</strong>
                   <span className="muted"> / {player.totalScore}</span>
+                  <span className="muted"> · {player.elo}</span>
+                  {/* Only set after a ranked match, and only for real accounts. */}
+                  {player.eloDelta !== undefined && player.eloDelta !== 0 && (
+                    <span className={`elo-delta ${player.eloDelta > 0 ? 'up' : 'down'}`}>
+                      {player.eloDelta > 0 ? `+${player.eloDelta}` : player.eloDelta}
+                    </span>
+                  )}
                 </span>
               </li>
             );

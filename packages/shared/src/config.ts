@@ -53,7 +53,26 @@ export const CLASSIC_PRESET = {
   cols: GRID_COLS,
   mineCount: BOMB_COUNT,
   maxPlayers: MAX_PLAYERS as number | null,
+  /** Casual by default — a grader should never accidentally affect ratings. */
+  mode: 'casual' as 'casual' | 'ranked',
 } as const;
+
+/** Everyone starts here: guests and newly registered accounts alike. */
+export const STARTING_ELO = 800;
+
+/**
+ * K-factor tiers, following the FIDE/chess.com convention: provisional players
+ * move fast, established players move slowly, masters barely move at all.
+ */
+export const ELO_K_PROVISIONAL = 40;
+export const ELO_K_STANDARD = 20;
+export const ELO_K_MASTER = 10;
+
+/** Below this many games a player is provisional and uses the larger K. */
+export const ELO_PROVISIONAL_GAMES = 30;
+
+/** At or above this rating the smallest K applies. */
+export const ELO_MASTER_RATING = 2400;
 
 /** Bounds for custom rooms. Keeps boards renderable and matches winnable. */
 export const MIN_GRID = 4;

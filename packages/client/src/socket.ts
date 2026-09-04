@@ -29,6 +29,15 @@ export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(tar
   transports: ['websocket', 'polling'],
 });
 
+/**
+ * Attaches the Supabase access token to the handshake so the server can verify
+ * who this connection belongs to. Called before connecting, and again after a
+ * sign-in or sign-out so the next connection carries the right identity.
+ */
+export function setAccessToken(accessToken: string | undefined): void {
+  socket.auth = accessToken ? { accessToken } : {};
+}
+
 export const adminSocket: Socket<ServerToAdminEvents, AdminToServerEvents> = io(
   `${target}${ADMIN_NAMESPACE}`,
   { autoConnect: false, transports: ['websocket', 'polling'] },

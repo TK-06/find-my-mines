@@ -17,16 +17,16 @@ describe('validateRoomConfig', () => {
   });
 
   it('rejects a mine count equal to the cell count', () => {
-    const errors = validateRoomConfig({ rows: 4, cols: 4, mineCount: 16, maxPlayers: 2 });
+    const errors = validateRoomConfig({ rows: 4, cols: 4, mineCount: 16, maxPlayers: 2, mode: 'casual' });
     expect(errors.join(' ')).toMatch(/less than 16/);
   });
 
   it('rejects a mine count above the cell count', () => {
-    expect(validateRoomConfig({ rows: 4, cols: 4, mineCount: 99, maxPlayers: 2 })).not.toEqual([]);
+    expect(validateRoomConfig({ rows: 4, cols: 4, mineCount: 99, maxPlayers: 2, mode: 'casual' })).not.toEqual([]);
   });
 
   it('accepts one fewer mine than there are cells', () => {
-    expect(validateRoomConfig({ rows: 4, cols: 4, mineCount: 15, maxPlayers: 2 })).toEqual([]);
+    expect(validateRoomConfig({ rows: 4, cols: 4, mineCount: 15, maxPlayers: 2, mode: 'casual' })).toEqual([]);
   });
 
   it('rejects zero mines', () => {
@@ -35,22 +35,22 @@ describe('validateRoomConfig', () => {
 
   it('rejects a grid below the minimum', () => {
     expect(
-      validateRoomConfig({ rows: MIN_GRID - 1, cols: 6, mineCount: 5, maxPlayers: 2 }),
+      validateRoomConfig({ rows: MIN_GRID - 1, cols: 6, mineCount: 5, maxPlayers: 2, mode: 'casual' }),
     ).not.toEqual([]);
   });
 
   it('rejects a grid above the maximum', () => {
     expect(
-      validateRoomConfig({ rows: MAX_GRID + 1, cols: 6, mineCount: 5, maxPlayers: 2 }),
+      validateRoomConfig({ rows: MAX_GRID + 1, cols: 6, mineCount: 5, maxPlayers: 2, mode: 'casual' }),
     ).not.toEqual([]);
   });
 
   it('rejects non-integer dimensions', () => {
-    expect(validateRoomConfig({ rows: 6.5, cols: 6, mineCount: 5, maxPlayers: 2 })).not.toEqual([]);
+    expect(validateRoomConfig({ rows: 6.5, cols: 6, mineCount: 5, maxPlayers: 2, mode: 'casual' })).not.toEqual([]);
   });
 
   it('rejects a one-player room, since a match needs two', () => {
-    expect(validateRoomConfig({ ...classic(), maxPlayers: 1 })).not.toEqual([]);
+    expect(validateRoomConfig({ ...classic(), maxPlayers: 1, mode: 'casual' })).not.toEqual([]);
   });
 
   it('rejects a player limit above the ceiling', () => {
@@ -60,7 +60,7 @@ describe('validateRoomConfig', () => {
   });
 
   it('reports every problem at once rather than only the first', () => {
-    const errors = validateRoomConfig({ rows: 1, cols: 1, mineCount: 0, maxPlayers: 1 });
+    const errors = validateRoomConfig({ rows: 1, cols: 1, mineCount: 0, maxPlayers: 1, mode: 'casual' });
     expect(errors.length).toBeGreaterThan(1);
   });
 });
@@ -111,5 +111,29 @@ describe('custom boards', () => {
   it('places an exact mine count at the minimum grid size', () => {
     const board = createBoard({ rows: MIN_GRID, cols: MIN_GRID, bombCount: 3 }, createRng(11));
     expect(board.bombs.flat().filter(Boolean)).toHaveLength(3);
+  });
+});
+
+describe('room mode', () => {
+  it('defaults to casual so a room is never ranked by accident', () => {
+    expect(coerceRoomConfig(undefined).mode).toBe('casual');
+    expect(coerceRoomConfig({ rows: 6 }).mode).toBe('casual');
+  });
+
+  it('coerces an unrecognised mode to casual', () => {
+    expect(coerceRoomConfig({ mode: 'competitive' } as never).mode).toBe('casual');
+  });
+
+  it('keeps an explicit ranked mode', () => {
+    expect(coerceRoomConfig({ mode: 'ranked' }).mode).toBe('ranked');
+  });
+
+  it('rejects an invalid mode in validation', () => {
+    expect(validateRoomConfig({ ...classic(), mode: 'nope' as never })).not.toEqual([]);
+  });
+
+  it('accepts both valid modes', () => {
+    expect(validateRoomConfig({ ...classic(), mode: 'casual' })).toEqual([]);
+    expect(validateRoomConfig({ ...classic(), mode: 'ranked' })).toEqual([]);
   });
 });

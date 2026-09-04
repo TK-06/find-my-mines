@@ -6,6 +6,7 @@ import {
   MIN_PLAYERS_TO_START,
   validateRoomConfig,
   type RoomConfig,
+  type RoomMode,
   type RoomSummary,
 } from '@fmm/shared';
 import { useMemo, useState } from 'react';
@@ -82,6 +83,7 @@ function RoomRow({
         <div className="room-title">
           <span className="room-code">{room.id}</span>
           <strong>{room.name}</strong>
+          <span className={`tag mode-${room.config.mode}`}>{room.config.mode}</span>
           <span className={`tag status-${room.status}`}>{room.status}</span>
         </div>
         <div className="muted room-meta">
@@ -111,11 +113,15 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
   const [mineCount, setMineCount] = useState(CLASSIC.mineCount);
   const [unlimited, setUnlimited] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState(CLASSIC.maxPlayers ?? 2);
+  const [mode, setMode] = useState<RoomMode>('casual');
 
-  const config: RoomConfig =
+  const board =
     preset === 'classic'
-      ? CLASSIC
+      ? { rows: CLASSIC.rows, cols: CLASSIC.cols, mineCount: CLASSIC.mineCount, maxPlayers: CLASSIC.maxPlayers }
       : { rows, cols, mineCount, maxPlayers: unlimited ? null : maxPlayers };
+
+  // Mode is independent of the board preset — you can play Classic ranked.
+  const config: RoomConfig = { ...board, mode };
 
   // Same validator the server runs, so the message matches what it would say.
   const errors = useMemo(() => validateRoomConfig(config), [config]);
@@ -205,6 +211,28 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
           </div>
         </div>
       )}
+
+      <div className="preset-row">
+        <button
+          type="button"
+          className={mode === 'casual' ? '' : 'ghost'}
+          onClick={() => setMode('casual')}
+        >
+          Casual
+        </button>
+        <button
+          type="button"
+          className={mode === 'ranked' ? '' : 'ghost'}
+          onClick={() => setMode('ranked')}
+        >
+          Ranked
+        </button>
+        <span className="muted">
+          {mode === 'casual'
+            ? 'Recorded, but nobody’s rating changes'
+            : 'Elo moves for signed-in players; guests count as an 800 opponent'}
+        </span>
+      </div>
 
       {errors.length > 0 && (
         <ul className="errors">

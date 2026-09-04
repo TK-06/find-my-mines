@@ -6,6 +6,9 @@ export type Seat = 'player' | 'spectator';
 
 export type MatchStatus = 'waiting' | 'playing' | 'ended';
 
+/** Ranked matches move Elo. Casual matches are recorded but do not. */
+export type RoomMode = 'casual' | 'ranked';
+
 /**
  * Per-room settings, chosen when the room is created.
  * `maxPlayers: null` means unlimited seats.
@@ -15,6 +18,7 @@ export interface RoomConfig {
   cols: number;
   mineCount: number;
   maxPlayers: number | null;
+  mode: RoomMode;
 }
 
 export interface PlayerPublic {
@@ -25,6 +29,25 @@ export interface PlayerPublic {
   /** Bombs found across all matches in this room. Only Reset clears it. */
   totalScore: number;
   connected: boolean;
+  /** Current rating. Guests always show the starting value. */
+  elo: number;
+  /** True when this seat has no account — rating is not persisted. */
+  isGuest: boolean;
+  /** Set for the duration of the end-of-match screen after a ranked game. */
+  eloDelta?: number;
+}
+
+/**
+ * Who a socket belongs to. Resolved server-side from the handshake token —
+ * never from anything the client claims about itself.
+ */
+export interface Identity {
+  /** Supabase user id, or null for a guest. */
+  profileId: string | null;
+  nickname: string;
+  elo: number;
+  gamesPlayed: number;
+  isGuest: boolean;
 }
 
 /** A connected client as shown in the server console's client list. */
@@ -85,11 +108,33 @@ export interface RoomSummary {
   joinable: boolean;
 }
 
+/** What a waiting player is told about their own place in the queue. */
+export interface QueueSnapshot {
+  mode: RoomMode;
+  waitedMs: number;
+  /** Current Elo tolerance — widens the longer they wait. */
+  eloWindow: number;
+  /** How many players are waiting in the same mode, including them. */
+  queued: number;
+}
+
+/** One row of the server console's matchmaking pool. */
+export interface QueuePoolRow {
+  id: string;
+  nickname: string;
+  elo: number;
+  mode: RoomMode;
+  waitedMs: number;
+  eloWindow: number;
+}
+
 export interface AdminState {
   /** Spec: "the number of concurrent clients currently connected". */
   clientCount: number;
   /** Spec: "a list of those connected clients". */
   clients: ClientInfo[];
   rooms: RoomSummary[];
+  /** Live matchmaking pool. */
+  queue: QueuePoolRow[];
   serverStartedAt: number;
 }

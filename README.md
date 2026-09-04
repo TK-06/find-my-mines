@@ -26,6 +26,8 @@ npm run dev
 | What | Where |
 |---|---|
 | Game client | http://localhost:5173 |
+| Profile | http://localhost:5173/profile |
+| Game log | http://localhost:5173/games |
 | Server console | http://localhost:5173/admin |
 | Server (API + sockets) | http://localhost:3000 |
 

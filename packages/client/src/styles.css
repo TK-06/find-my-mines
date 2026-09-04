@@ -15,6 +15,45 @@
   color-scheme: dark;
 }
 
+/* Light theme overrides only the tokens — no component rule changes. */
+:root[data-theme='light'] {
+  --bg: #eef1fa;
+  --bg-soft: #e3e8f6;
+  --panel: #ffffff;
+  --panel-2: #e8ecf9;
+  --line: #c6cee8;
+  --text: #131a2e;
+  --muted: #5a6588;
+  --accent: #3563d6;
+  --accent-2: #6b46d6;
+  --bomb: #d33453;
+  --safe: #12855f;
+  --warn: #b06a05;
+  color-scheme: light;
+}
+
+:root[data-theme='light'] body {
+  background:
+    radial-gradient(1200px 600px at 15% -10%, #d8e0fb 0%, transparent 60%),
+    radial-gradient(900px 500px at 110% 10%, #e4dcfb 0%, transparent 55%),
+    var(--bg);
+}
+
+:root[data-theme='light'] button { color: #fff; }
+:root[data-theme='light'] button.ghost { color: var(--text); }
+/* The blanket white above would make these invisible on a light background. */
+:root[data-theme='light'] .theme-toggle { color: var(--muted); }
+:root[data-theme='light'] .nav-link { color: var(--muted); }
+:root[data-theme='light'] .nav-link.active { color: var(--text); }
+:root[data-theme='light'] .nav-link { color: var(--muted); }
+:root[data-theme='light'] .nav-link.active { color: var(--text); }
+:root[data-theme='light'] .cell {
+  background: linear-gradient(180deg, #ffffff, #eef1fa);
+}
+:root[data-theme='light'] .cell.revealed { background: var(--bg-soft); }
+:root[data-theme='light'] .toast { background: #fde8ee; color: #7a1730; }
+:root[data-theme='light'] .overlay { background: rgba(230, 234, 246, 0.82); }
+
 * { box-sizing: border-box; }
 
 body {
@@ -378,3 +417,147 @@ input[type='number']:disabled { opacity: 0.4; }
 .result-actions { display: flex; gap: 10px; margin-top: 14px; }
 .result-actions button { flex: 1; }
 button.small { padding: 7px 13px; font-size: 13px; }
+
+/* ── auth ───────────────────────────────────────────────── */
+.tab-row { display: flex; gap: 8px; margin-bottom: 16px; }
+.tab-row button { flex: 1; padding: 9px 10px; font-size: 14px; }
+.join-card input + input { margin-top: 10px; }
+.oauth-row { display: flex; gap: 10px; margin-top: 12px; }
+.oauth-row button { flex: 1; }
+.form-error {
+  color: var(--bomb);
+  font-size: 13px;
+  margin: 12px 0 0;
+}
+
+.identity-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  font-size: 13px;
+}
+.identity-bar button { margin-left: auto; }
+
+.tag.mode-casual { background: #2a3766; color: #a9b8e8; }
+.tag.mode-ranked { background: #4a2a5e; color: #d8b4ff; }
+
+.leader-row .elo-delta { font-weight: 700; margin-left: 6px; }
+.leader-row .elo-delta.up { color: var(--safe); }
+.leader-row .elo-delta.down { color: var(--bomb); }
+
+/* ── navigation ─────────────────────────────────────────── */
+.header-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.nav-bar { display: flex; gap: 4px; }
+.nav-link {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 7px 13px;
+  font-size: 14px;
+  border-radius: 9px;
+}
+.nav-link:hover:not(:disabled) { color: var(--text); background: var(--panel); filter: none; }
+.nav-link.active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+
+/* ── profile ────────────────────────────────────────────── */
+.name-row { display: flex; gap: 10px; align-items: center; }
+.name-row input { flex: 1; }
+
+/* ── match cards ────────────────────────────────────────── */
+.match-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.match-card { padding: 14px 16px; }
+.match-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.match-when { margin-left: auto; }
+
+.seat-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.seat {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.seat.is-me { border-color: var(--accent); background: var(--panel); }
+.seat-place { font-weight: 800; color: var(--muted); text-align: center; }
+.seat-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.seat-score { color: var(--muted); font-size: 13px; white-space: nowrap; }
+
+.elo-delta.flat { color: var(--muted); }
+
+.filter-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.filter-row .preset-row button { padding: 8px 14px; font-size: 13px; }
+
+@media (max-width: 640px) {
+  .header-right { width: 100%; justify-content: space-between; }
+  .match-when { margin-left: 0; width: 100%; }
+}
+
+/* ── rankings ───────────────────────────────────────────── */
+.rank-list li { display: flex; justify-content: space-between; gap: 12px; }
+.rank-list li.is-me { border-color: var(--accent); background: var(--panel); }
+.rank-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.rank-number {
+  min-width: 30px;
+  font-weight: 800;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.rank-stats { white-space: nowrap; font-size: 13px; }
+
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  padding: 6px 11px;
+  font-size: 13px;
+  border-radius: 999px;
+}
+.theme-toggle:hover:not(:disabled) { color: var(--text); filter: none; }
+
+/* ── matchmaking ────────────────────────────────────────── */
+.queue-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+}
+.queue-card.searching { border-color: var(--accent); }
+.queue-copy h3 { display: flex; align-items: center; gap: 9px; font-size: 16px; }
+
+.pulse-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}

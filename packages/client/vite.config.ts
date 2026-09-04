@@ -7,6 +7,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
+  // Secrets live in the repo-root .env, not in this package.
+  envDir: path.resolve(__dirname, '../..'),
   resolve: {
     // Point straight at the workspace source so editing shared types
     // hot-reloads without a separate build step.

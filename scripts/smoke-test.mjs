@@ -275,10 +275,10 @@ if (ended) {
 // ── admin: clients, rooms, reset ────────────────────────────────────────────
 section('admin console state');
 
-const adminSnapshot = await new Promise((resolve) => {
-  admin.once('admin:state', resolve);
-  setTimeout(() => resolve(null), 2500);
-});
+// Use the tracked snapshot rather than waiting for a fresh push: by this point
+// the state may already be settled, and no new push would arrive.
+await sleep(400);
+const adminSnapshot = latestAdmin;
 
 if (adminSnapshot) {
   // An absolute count is fragile — any stray browser tab left open connects a
@@ -332,6 +332,61 @@ if (resetState) {
     Boolean(aliceView.state?.players.every((p) => p.score === 0 && p.totalScore === 0)),
   );
 }
+
+
+// ── matchmaking ─────────────────────────────────────────────────────────────
+section('matchmaking');
+
+for (const socket of [alice, bob, carol, dave]) socket.emit('room:leave');
+await sleep(300);
+
+const aliceQueued = waitFor(alice, 'queue:status', 4000).catch(() => null);
+alice.emit('queue:join', { mode: 'casual' });
+const queueStatus = await aliceQueued;
+check('joining the pool reports a status', Boolean(queueStatus), queueStatus?.mode ?? 'none');
+check('the pool reports the waiting mode', queueStatus?.mode === 'casual');
+
+// One player alone must never be paired with themselves. Assert against the
+// server's own pool, not the client's stale room state.
+await sleep(1500);
+check('a lone player stays queued and is not self-matched',
+  latestAdmin?.queue?.length === 1 && latestAdmin.queue[0].nickname === 'Alice',
+  `${latestAdmin?.queue?.length ?? 0} queued`);
+
+const aliceMatched = waitFor(alice, 'queue:matched', 8000).catch(() => null);
+const bobMatched = waitFor(bob, 'queue:matched', 8000).catch(() => null);
+bob.emit('queue:join', { mode: 'casual' });
+
+const [aMatch, bMatch] = await Promise.all([aliceMatched, bobMatched]);
+check('both players were matched', Boolean(aMatch) && Boolean(bMatch));
+check('both landed in the same room', aMatch?.roomId === bMatch?.roomId, aMatch?.roomId ?? '');
+
+await sleep(500);
+check('the matched room auto-started', aliceView.state?.status === 'playing', aliceView.state?.status ?? 'none');
+check('the matched room seats exactly two', aliceView.state?.players.length === 2);
+check('the matched room uses the queued mode', aliceView.state?.config.mode === 'casual');
+
+// Cancelling must clear the status and empty the pool.
+for (const socket of [alice, bob]) socket.emit('room:leave');
+await sleep(300);
+
+// The queue ticks every second, so a single once() can catch a periodic update
+// instead of the cancellation. Track the latest value and assert on that.
+let carolStatus = 'unset';
+carol.on('queue:status', (payload) => { carolStatus = payload; });
+
+carol.emit('queue:join', { mode: 'ranked' });
+await sleep(600);
+check('the queued player has a live status', carolStatus !== null && carolStatus !== 'unset',
+  JSON.stringify(carolStatus));
+check('the admin pool shows the queued player', latestAdmin?.queue?.length === 1);
+
+carol.emit('queue:leave');
+await sleep(800);
+check('cancelling clears the queue status', carolStatus === null, JSON.stringify(carolStatus));
+check('the admin console reports an empty pool', (latestAdmin?.queue?.length ?? -1) === 0,
+  String(latestAdmin?.queue?.length ?? 'missing'));
+carol.off('queue:status');
 
 // ── unlimited room with 4 players ───────────────────────────────────────────
 section('free-for-all room');

@@ -46,6 +46,10 @@ export function validateRoomConfig(config: RoomConfig): ConfigError[] {
     }
   }
 
+  if (config.mode !== 'casual' && config.mode !== 'ranked') {
+    errors.push('Mode must be either casual or ranked.');
+  }
+
   return errors;
 }
 
@@ -63,6 +67,9 @@ export function coerceRoomConfig(input: Partial<RoomConfig> | undefined): RoomCo
         : input.maxPlayers === null
           ? null
           : Number(input.maxPlayers),
+    // Anything unrecognised falls back to casual: a room should never become
+    // ranked by accident.
+    mode: input?.mode === 'ranked' ? 'ranked' : 'casual',
   };
 }
 

@@ -63,6 +63,10 @@ export function AdminConsole() {
             <div className="k">Matches running</div>
             <div className="v">{state ? playing : '–'}</div>
           </div>
+          <div className="stat">
+            <div className="k">In matchmaking</div>
+            <div className="v">{state ? (state.queue?.length ?? 0) : '–'}</div>
+          </div>
         </div>
 
         <div className="card">
@@ -84,6 +88,30 @@ export function AdminConsole() {
             </ul>
           ) : (
             <p className="muted">No clients connected.</p>
+          )}
+        </div>
+
+        <div className="card">
+          <h3>Matchmaking pool</h3>
+          {(state?.queue?.length ?? 0) > 0 ? (
+            <ul className="list">
+              {state!.queue.map((row) => (
+                <li key={row.id}>
+                  <span>
+                    <strong>{row.nickname}</strong>{' '}
+                    <span className="muted">{row.elo} Elo</span>
+                  </span>
+                  <span>
+                    <span className={`tag mode-${row.mode}`}>{row.mode}</span>{' '}
+                    <span className="muted">
+                      {Math.round(row.waitedMs / 1000)}s · ±{row.eloWindow}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">Nobody is queued.</p>
           )}
         </div>
 

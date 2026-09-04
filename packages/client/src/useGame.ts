@@ -1,4 +1,12 @@
-import type { PublicMatchState, RoomActionResult, RoomConfig, RoomSummary } from '@fmm/shared';
+import {
+  STARTING_ELO,
+  type PublicMatchState,
+  type RoomActionResult,
+  type QueueSnapshot,
+  type RoomConfig,
+  type RoomMode,
+  type RoomSummary,
+} from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { socket } from './socket.js';
 
@@ -15,6 +23,9 @@ export function useGame() {
   const [clientCount, setClientCount] = useState(0);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [welcome, setWelcome] = useState<string | null>(null);
+  const [isGuest, setIsGuest] = useState(true);
+  const [elo, setElo] = useState(STARTING_ELO);
+  const [queue, setQueue] = useState<QueueSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -53,6 +64,8 @@ export function useGame() {
     socket.on('turn:tick', ({ secondsLeft }) =>
       setState((prev) => (prev ? { ...prev, secondsLeft } : prev)),
     );
+    socket.on('queue:status', setQueue);
+    socket.on('queue:matched', () => setQueue(null));
     socket.on('error:msg', ({ message }) => showError(message));
 
     // Listeners are registered first so the initial lobby:rooms isn't missed.
@@ -70,6 +83,8 @@ export function useGame() {
       socket.off('room:closed');
       socket.off('turn:changed');
       socket.off('turn:tick');
+      socket.off('queue:status');
+      socket.off('queue:matched');
       socket.off('error:msg');
       if (errorTimer.current) clearTimeout(errorTimer.current);
     };
@@ -79,6 +94,8 @@ export function useGame() {
     socket.emit('player:join', { nickname }, (result) => {
       setPlayerId(result.playerId);
       setWelcome(result.welcome);
+      setIsGuest(result.isGuest);
+      setElo(result.elo);
     });
   }, []);
 
@@ -119,6 +136,12 @@ export function useGame() {
     setState(null);
   }, []);
 
+  const joinQueue = useCallback((mode: RoomMode) => socket.emit('queue:join', { mode }), []);
+  const leaveQueue = useCallback(() => {
+    socket.emit('queue:leave');
+    setQueue(null);
+  }, []);
+
   const startMatch = useCallback(() => socket.emit('game:start'), []);
   const reveal = useCallback(
     (row: number, col: number) => socket.emit('game:reveal', { row, col }),
@@ -133,12 +156,17 @@ export function useGame() {
     clientCount,
     playerId,
     welcome,
+    isGuest,
+    elo,
+    queue,
     error,
     join,
     createRoom,
     joinRoom,
     spectateRoom,
     leaveRoom,
+    joinQueue,
+    leaveQueue,
     startMatch,
     reveal,
     rematch,

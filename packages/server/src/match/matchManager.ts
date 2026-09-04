@@ -6,8 +6,10 @@ import {
   createRng,
   isRoomFull,
   pickOne,
+  rateMatch,
   revealCell,
   type Board,
+  type Identity,
   type PlayerPublic,
   type PublicMatchState,
   type RevealedCell,
@@ -25,6 +27,32 @@ interface Occupant {
   connected: boolean;
   /** Join order. Drives host succession and spectator promotion. */
   joinedAt: number;
+  /** Supabase user id, or null for a guest. Resolved from the handshake token. */
+  profileId: string | null;
+  isGuest: boolean;
+  elo: number;
+  gamesPlayed: number;
+  /** Set on the seats of the match that just ended, for the result screen. */
+  eloDelta?: number;
+}
+
+/** What the server needs in order to persist a finished match. */
+export interface FinishedMatch {
+  roomId: string;
+  mode: RoomConfig['mode'];
+  config: RoomConfig;
+  winnerProfileId: string | null;
+  players: {
+    profileId: string | null;
+    displayName: string;
+    isGuest: boolean;
+    score: number;
+    placement: number;
+    eloBefore: number;
+    eloAfter: number;
+    eloDelta: number;
+    outcome: 'win' | 'loss' | 'draw';
+  }[];
 }
 
 /** Everything the room needs to push to its members. Keeps this class free of socket.io. */
@@ -61,6 +89,8 @@ export class MatchManager {
 
   /** Spec: "the winner of the previous match becomes the first player". */
   private lastWinnerId: string | null = null;
+
+  private lastResult: FinishedMatch | null = null;
 
   readonly createdAt = Date.now();
   private readonly timer: TurnTimer;
@@ -106,15 +136,8 @@ export class MatchManager {
    * live turn rotation would be unfair to everyone already playing. They are
    * promoted automatically when the match ends.
    */
-  addPlayer(id: string, nickname: string): Seat {
-    const occupant: Occupant = {
-      id,
-      nickname,
-      score: 0,
-      totalScore: 0,
-      connected: true,
-      joinedAt: this.seq++,
-    };
+  addPlayer(id: string, identity: Identity): Seat {
+    const occupant = this.newOccupant(id, identity);
 
     if (isRoomFull(this.config, this.players.length) || this.status === 'playing') {
       this.spectators.push(occupant);
@@ -127,17 +150,25 @@ export class MatchManager {
     return 'player';
   }
 
-  addSpectator(id: string, nickname: string): Seat {
-    this.spectators.push({
+  addSpectator(id: string, identity: Identity): Seat {
+    this.spectators.push(this.newOccupant(id, identity));
+    this.out.changed();
+    return 'spectator';
+  }
+
+  private newOccupant(id: string, identity: Identity): Occupant {
+    return {
       id,
-      nickname,
+      nickname: identity.nickname,
       score: 0,
       totalScore: 0,
       connected: true,
       joinedAt: this.seq++,
-    });
-    this.out.changed();
-    return 'spectator';
+      profileId: identity.profileId,
+      isGuest: identity.isGuest,
+      elo: identity.elo,
+      gamesPlayed: identity.gamesPlayed,
+    };
   }
 
   /** Removes a member. Returns true when the room is now empty and should close. */
@@ -231,7 +262,11 @@ export class MatchManager {
     this.revealed = [];
     this.winnerId = null;
     this.rematchVotes.clear();
-    for (const player of this.players) player.score = 0;
+    for (const player of this.players) {
+      player.score = 0;
+      player.eloDelta = undefined;
+    }
+    this.lastResult = null;
 
     const candidate =
       firstPlayerId && seated.some((p) => p.id === firstPlayerId)
@@ -261,8 +296,71 @@ export class MatchManager {
 
     for (const player of seated) player.totalScore += player.score;
 
+    this.applyRatings(seated);
+
     this.out.matchEnded(this.publicState());
     this.out.changed();
+  }
+
+  /**
+   * Rates the finished match and stashes the result for the server to persist.
+   *
+   * Ratings are applied in memory here so the result screen can show the change
+   * immediately; writing them to Supabase is the server's job and may fail
+   * without breaking the game.
+   */
+  private applyRatings(seated: Occupant[]): void {
+    this.lastResult = null;
+    if (seated.length < MIN_PLAYERS_TO_START) return;
+
+    const ranked = this.config.mode === 'ranked';
+    const results = rateMatch(
+      seated.map((p) => ({
+        id: p.id,
+        rating: p.elo,
+        gamesPlayed: p.gamesPlayed,
+        score: p.score,
+        isGuest: p.isGuest,
+      })),
+      ranked,
+    );
+
+    const byId = new Map(results.map((r) => [r.id, r]));
+
+    for (const player of seated) {
+      const result = byId.get(player.id)!;
+      player.eloDelta = result.delta;
+      player.elo = result.ratingAfter;
+      if (ranked && !player.isGuest) player.gamesPlayed += 1;
+    }
+
+    this.lastResult = {
+      roomId: this.roomId,
+      mode: this.config.mode,
+      config: this.config,
+      winnerProfileId: seated.find((p) => p.id === this.winnerId)?.profileId ?? null,
+      players: seated.map((player) => {
+        const result = byId.get(player.id)!;
+        return {
+          profileId: player.profileId,
+          displayName: player.nickname,
+          isGuest: player.isGuest,
+          score: player.score,
+          placement: result.placement,
+          eloBefore: result.ratingBefore,
+          eloAfter: result.ratingAfter,
+          eloDelta: result.delta,
+          outcome: result.outcome,
+        };
+      }),
+    };
+  }
+
+  /** The match that just finished, or null. Cleared when the next one starts. */
+  takeResult(): FinishedMatch | null {
+    const result = this.lastResult;
+    this.lastResult = null;
+    return result;
   }
 
   // ── gameplay ─────────────────────────────────────────────────────────────
@@ -400,6 +498,9 @@ export class MatchManager {
       score: player.score,
       totalScore: player.totalScore,
       connected: player.connected,
+      elo: player.elo,
+      isGuest: player.isGuest,
+      eloDelta: player.eloDelta,
     };
   }
 

@@ -2,11 +2,17 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { AdminConsole } from './admin/AdminConsole.js';
 import { App } from './App.js';
+import { routeFromPath } from './router.js';
+import { applyTheme, initialTheme } from './theme.js';
 import './styles.css';
 
-// Two entry points, one bundle: /admin is the server console, everything
-// else is the game. Avoids pulling in a router for two routes.
-const isAdmin = window.location.pathname.replace(/\/+$/, '') === '/admin';
+// Applied before the first paint so the page never flashes the wrong theme.
+// Also covers the admin console, which mounts its own root below.
+applyTheme(initialTheme());
+
+// The admin console is a separate app with its own socket namespace, so it is
+// split off here. Everything else runs inside App, which routes internally.
+const isAdmin = routeFromPath(window.location.pathname) === 'admin';
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>{isAdmin ? <AdminConsole /> : <App />}</React.StrictMode>,

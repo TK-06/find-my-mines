@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p packages/server && tsc --noEmit -p packages/client",
-    "test:e2e": "node scripts/smoke-test.mjs"
+    "test:e2e": "node scripts/smoke-test.mjs",
+    "test:ranked": "node --env-file-if-exists=.env scripts/ranked-test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

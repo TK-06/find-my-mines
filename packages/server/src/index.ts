@@ -11,10 +11,15 @@ import {
   type JoinResult,
   type RevealedCell,
   type RoomActionResult,
+  type Identity,
   type ServerToAdminEvents,
   type ServerToClientEvents,
 } from '@fmm/shared';
+import { CLASSIC_PRESET, type QueueEntry, type RoomMode } from '@fmm/shared';
 import { ADVERTISED_HOST, CORS_ORIGIN, HOST, PORT } from './config.js';
+import { MatchmakingQueue } from './matchmaking/queue.js';
+import { recordMatch } from './persistence/matchRecorder.js';
+import { guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
 import type { MatchBroadcaster } from './match/matchManager.js';
 import { RoomManager } from './rooms/roomManager.js';
 import { ClientRegistry } from './state/registry.js';
@@ -50,12 +55,61 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
     turnChanged: (currentPlayerId, secondsLeft) =>
       to().emit('turn:changed', { currentPlayerId, secondsLeft }),
     turnTick: (secondsLeft) => to().emit('turn:tick', { secondsLeft }),
-    matchEnded: (state) => to().emit('match:ended', state),
+    matchEnded: (state) => {
+      to().emit('match:ended', state);
+      // Ratings are already applied in memory; persisting is best-effort and
+      // must never block or break the match that just finished.
+      const result = rooms.get(roomId)?.takeResult();
+      if (result) void recordMatch(result);
+    },
     matchReset: (state) => to().emit('match:reset', state),
     stateSync: (state) => to().emit('state:sync', state),
     error: (playerId, code, message) => io.to(playerId).emit('error:msg', { code, message }),
     changed: () => pushUpdates(),
   };
+});
+
+/**
+ * Matchmaking pool.
+ *
+ * A paired match is auto-started: neither player chose the room, so there is no
+ * meaningful host to wait on. The earliest-seated player still holds the host
+ * role for anything that happens afterwards, like a rematch.
+ */
+const queue = new MatchmakingQueue({
+  onPair: (a: QueueEntry, b: QueueEntry, mode: RoomMode) => {
+    const created = rooms.create(`${a.nickname} vs ${b.nickname}`, {
+      ...CLASSIC_PRESET,
+      maxPlayers: 2,
+      mode,
+    });
+    if (!created.ok || !created.roomId) return null;
+
+    const room = rooms.get(created.roomId)!;
+
+    for (const entry of [a, b]) {
+      const socket = io.sockets.sockets.get(entry.id);
+      if (!socket) continue;
+
+      room.addPlayer(entry.id, identityOf(entry.id));
+      rooms.track(entry.id, created.roomId);
+      socket.join(created.roomId);
+      registry.setRoom(entry.id, created.roomId);
+      registry.setSeat(entry.id, 'player');
+      socket.emit('queue:status', null);
+      socket.emit('queue:matched', { roomId: created.roomId });
+    }
+
+    io.to(created.roomId).emit('state:sync', room.publicState());
+    if (room.hostId) room.start(room.hostId);
+    return created.roomId;
+  },
+  onChange: () => {
+    for (const row of queue.snapshot()) {
+      io.to(row.id).emit('queue:status', queue.statusFor(row.id));
+    }
+    pushUpdates();
+  },
 });
 
 // ── broadcasting ────────────────────────────────────────────────────────────
@@ -65,6 +119,7 @@ function adminState(): AdminState {
     clientCount: registry.count,
     clients: registry.list(),
     rooms: rooms.list(),
+    queue: queue.snapshot(),
     serverStartedAt: SERVER_STARTED_AT,
   };
 }
@@ -100,6 +155,12 @@ function printConsole(): void {
         `${r.playerCount}/${r.config.maxPlayers ?? '∞'} players, ${r.spectatorCount} watching  ` +
         `${r.config.rows}x${r.config.cols}, ${r.config.mineCount} mines`,
     ),
+    `  Matchmaking pool: ${queue.size}`,
+    ...queue.snapshot().map(
+      (q) =>
+        `   • ${q.nickname}  ${q.elo} Elo  ${q.mode}  ` +
+        `waiting ${Math.round(q.waitedMs / 1000)}s (±${q.eloWindow})`,
+    ),
     '───────────────────────────────────────────────────────────',
   ];
   console.log(lines.join('\n'));
@@ -119,6 +180,13 @@ function leaveCurrentRoom(socket: { id: string; leave: (room: string) => void })
   }
 }
 
+/** Verified identity per socket. Populated on player:join, cleared on disconnect. */
+const identities = new Map<string, Identity>();
+
+function identityOf(socketId: string): Identity {
+  return identities.get(socketId) ?? guestIdentity('Player');
+}
+
 // ── game namespace ──────────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
@@ -128,15 +196,25 @@ io.on('connection', (socket) => {
 
   socket.emit('lobby:rooms', { rooms: rooms.list(), clientCount: registry.count });
 
-  socket.on('player:join', ({ nickname }, ack) => {
+  socket.on('player:join', async ({ nickname }, ack) => {
     const clean = String(nickname ?? '').trim().slice(0, 20) || 'Player';
-    registry.setNickname(socket.id, clean);
+
+    // The access token comes from the handshake, and the server verifies it
+    // against Supabase. Nothing the client says about its own identity is
+    // trusted — no token simply means guest.
+    const token = socket.handshake.auth?.accessToken as string | undefined;
+    const identity = await identityFromToken(token, clean);
+    identities.set(socket.id, identity);
+
+    registry.setNickname(socket.id, identity.nickname);
 
     const result: JoinResult = {
       ok: true,
       playerId: socket.id,
       // Spec: "a welcome message with their nickname will appear".
-      welcome: `Welcome, ${clean}.`,
+      welcome: `Welcome, ${identity.nickname}.`,
+      isGuest: identity.isGuest,
+      elo: identity.elo,
     };
     ack?.(result);
     pushUpdates();
@@ -149,11 +227,11 @@ io.on('connection', (socket) => {
       return;
     }
 
+    queue.leave(socket.id);
     leaveCurrentRoom(socket);
 
     const room = rooms.get(created.roomId)!;
-    const nickname = registry.get(socket.id)?.nickname ?? 'Player';
-    const seat = room.addPlayer(socket.id, nickname);
+    const seat = room.addPlayer(socket.id, identityOf(socket.id));
 
     rooms.track(socket.id, created.roomId);
     socket.join(created.roomId);
@@ -176,12 +254,13 @@ io.on('connection', (socket) => {
       return;
     }
 
+    queue.leave(socket.id);
     leaveCurrentRoom(socket);
 
-    const nickname = registry.get(socket.id)?.nickname ?? 'Player';
+    const identity = identityOf(socket.id);
     const seat = asSpectator
-      ? room.addSpectator(socket.id, nickname)
-      : room.addPlayer(socket.id, nickname);
+      ? room.addSpectator(socket.id, identity)
+      : room.addPlayer(socket.id, identity);
 
     rooms.track(socket.id, room.roomId);
     socket.join(room.roomId);
@@ -204,6 +283,18 @@ io.on('connection', (socket) => {
     pushUpdates();
   });
 
+  socket.on('queue:join', ({ mode }) => {
+    // Cannot sit in a room and a queue at once.
+    leaveCurrentRoom(socket);
+    queue.join(socket.id, identityOf(socket.id), mode === 'ranked' ? 'ranked' : 'casual');
+    socket.emit('queue:status', queue.statusFor(socket.id));
+  });
+
+  socket.on('queue:leave', () => {
+    queue.leave(socket.id);
+    socket.emit('queue:status', null);
+  });
+
   socket.on('game:start', () => {
     rooms.roomOf(socket.id)?.start(socket.id);
   });
@@ -217,8 +308,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    queue.leave(socket.id);
     leaveCurrentRoom(socket);
     registry.remove(socket.id);
+    identities.delete(socket.id);
     pushUpdates();
   });
 });
@@ -262,6 +355,7 @@ httpServer.listen(PORT, HOST, () => {
   Find My Mines server listening on ${HOST}:${PORT}
   Game    →  http://${ADVERTISED_HOST}:${PORT}
   Console →  http://${ADVERTISED_HOST}:${PORT}/admin
+  Accounts→  ${supabaseEnabled ? 'Supabase connected' : 'guest-only (no SUPABASE_URL / SERVICE_ROLE_KEY)'}
 `);
   printConsole();
 });
