@@ -1,0 +1,29 @@
+{
+  "name": "findmymines",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Find My Mines - a two-player online minesweeper-style game over Socket.IO (Net-Centric course assignment)",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm run dev --workspace @fmm/server",
+    "dev:client": "npm run dev --workspace @fmm/client",
+    "build": "npm run build --workspace @fmm/client",
+    "start": "npm run start --workspace @fmm/server",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p packages/server && tsc --noEmit -p packages/client",
+    "test:e2e": "node scripts/smoke-test.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
