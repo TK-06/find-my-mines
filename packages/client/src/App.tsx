@@ -3,7 +3,7 @@ import { authEnabled, currentAccessToken, supabase } from './auth/supabase.js';
 import { Board } from './components/Board.js';
 import { Leaderboard } from './components/Leaderboard.js';
 import { QueuePanel } from './components/QueuePanel.js';
-import { ResultOverlay } from './components/ResultOverlay.js';
+import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
 import { NavBar, useRoute, type Route } from './router.js';
 import { AuthScreen } from './screens/AuthScreen.js';
 import { GameLogScreen } from './screens/GameLogScreen.js';
@@ -12,7 +12,7 @@ import { LobbyScreen } from './screens/LobbyScreen.js';
 import { ProfileScreen } from './screens/ProfileScreen.js';
 import { setAccessToken } from './socket.js';
 import { useTheme } from './theme.js';
-import { useGame } from './useGame.js';
+import { storedGuestName, useGame } from './useGame.js';
 
 export function App() {
   const {
@@ -25,8 +25,10 @@ export function App() {
     isGuest,
     elo,
     queue,
+    forfeit,
     error,
     join,
+    forgetGuest,
     createRoom,
     joinRoom,
     spectateRoom,
@@ -36,6 +38,7 @@ export function App() {
     startMatch,
     reveal,
     rematch,
+    dismissForfeit,
   } = useGame();
 
   const [signedIn, setSignedIn] = useState(false);
@@ -76,6 +79,12 @@ export function App() {
     if (ready && signedIn && !named && connected) join('');
   }, [ready, signedIn, named, connected, join]);
 
+  // A guest who already picked a name is let straight back in after a refresh.
+  const guestName = storedGuestName();
+  useEffect(() => {
+    if (ready && !signedIn && !named && connected && guestName) join(guestName);
+  }, [ready, signedIn, named, connected, guestName, join]);
+
   // Profile, rankings and the game log read public data, so they work before a
   // nickname is chosen. Only the game itself needs an identity.
   if (route === 'profile') {
@@ -105,11 +114,11 @@ export function App() {
   if (!named) {
     return (
       <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
-        {ready ? (
+        {ready && !(guestName && !signedIn) ? (
           <AuthScreen connected={connected} onGuest={join} />
         ) : (
           <div className="center-screen">
-            <p className="muted">Checking your session…</p>
+            <p className="muted">{connected ? 'Signing you back in…' : 'Connecting to the server…'}</p>
           </div>
         )}
       </Shell>
@@ -120,6 +129,7 @@ export function App() {
     return (
       <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
         <div className="stack">
+        <IdentityBar isGuest={isGuest} elo={elo} onForgetGuest={forgetGuest} />
         <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
         <LobbyScreen
           rooms={rooms}
@@ -142,7 +152,7 @@ export function App() {
   return (
     <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
       <div className="stack">
-        <IdentityBar isGuest={isGuest} elo={elo} />
+        <IdentityBar isGuest={isGuest} elo={elo} onForgetGuest={forgetGuest} />
         <div className="room-bar card">
           <div>
             <span className="room-code">{state.roomId}</span>
@@ -187,7 +197,11 @@ export function App() {
         </div>
       </div>
 
-      {state.status === 'ended' && (
+      {forfeit && (
+        <ForfeitOverlay notice={forfeit} myId={playerId} onStay={dismissForfeit} onLeave={leaveRoom} />
+      )}
+
+      {state.status === 'ended' && !forfeit && (
         <ResultOverlay
           state={state}
           myId={playerId}
@@ -205,16 +219,28 @@ function socketNeedsReconnect(): boolean {
   return document.readyState === 'complete';
 }
 
-function IdentityBar({ isGuest, elo }: { isGuest: boolean; elo: number }) {
+function IdentityBar({
+  isGuest,
+  elo,
+  onForgetGuest,
+}: {
+  isGuest: boolean;
+  elo: number;
+  onForgetGuest: () => void;
+}) {
   const client = supabase;
   return (
     <div className="identity-bar">
-      <span className={`tag ${isGuest ? 'spectator' : 'player'}`}>
-        {isGuest ? 'guest' : 'signed in'}
+      <span className="elo-badge">
+        <strong>{elo}</strong> Elo
       </span>
-      <span className="muted">
-        {elo} Elo{isGuest && ' · not saved between visits'}
-      </span>
+      <span className="tag">{isGuest ? 'guest' : 'signed in'}</span>
+      {isGuest && <span className="muted">Guest ratings aren’t saved</span>}
+      {isGuest && (
+        <button className="ghost small" onClick={onForgetGuest}>
+          Change name
+        </button>
+      )}
       {!isGuest && client && (
         <button
           className="ghost small"

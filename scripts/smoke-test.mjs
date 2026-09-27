@@ -492,6 +492,64 @@ check(
   finalAdmin ? `${finalAdmin.rooms.length} room(s) left` : 'no admin:state received',
 );
 
+// ── forfeit and leaving after a match ──────────────────────────────────────
+section('forfeit and leaving');
+
+{
+  const p1 = await connect();
+  const p2 = await connect();
+  await setName(p1, 'Fern');
+  await setName(p2, 'Gus');
+  const p1View = track(p1);
+  const p2View = track(p2);
+  const forfeits = [];
+  const notices = [];
+  p1.on('match:forfeit', (n) => forfeits.push(n));
+  p1.on('room:notice', (n) => notices.push(n.message));
+
+  const room = await emitAck(p1, 'room:create', { name: 'Forfeit', config: CLASSIC });
+  await emitAck(p2, 'room:join', { roomId: room.roomId });
+  p1.emit('game:start');
+  await sleep(400);
+
+  let lateToLeaver = 0;
+  p2.on('state:sync', () => lateToLeaver++);
+  p2.emit('room:leave');
+  await sleep(500);
+
+  const forfeit = forfeits[0];
+  check('leaving mid-match hands the other player a forfeit win',
+    forfeit?.winnerId === p1.id && forfeit?.leaverNickname === 'Gus',
+    forfeit ? `winner ${forfeit.winnerNickname}` : 'no match:forfeit');
+  check('the room goes back to waiting after a forfeit', p1View.state?.status === 'waiting',
+    p1View.state?.status);
+  check('the leaver gets no room updates after leaving', lateToLeaver === 0, `${lateToLeaver} late`);
+
+  // Finish a real match, have one side vote rematch, then the other leaves.
+  await emitAck(p2, 'room:join', { roomId: room.roomId });
+  await sleep(200);
+  p1.emit('game:start');
+  await sleep(300);
+  const done = await playOut(p1View, { [p1.id]: p1, [p2.id]: p2 });
+  check('second match ended', Boolean(done));
+
+  p1.emit('game:rematch');
+  await sleep(200);
+  lateToLeaver = 0;
+  p2.emit('room:leave');
+  await sleep(500);
+
+  check('leaving after a rematch vote sends the leaver nothing further', lateToLeaver === 0,
+    `${lateToLeaver} late`);
+  check('the remaining player is told the other left', notices.some((m) => m.includes('Gus left')),
+    notices.join(' | ') || 'no room:notice');
+  check('the remaining player is back to waiting, not stuck on the result',
+    p1View.state?.status === 'waiting', p1View.state?.status);
+
+  p1.close();
+  p2.close();
+}
+
 for (const socket of [alice, bob, carol, dave, admin]) socket.close();
 
 console.log(`\n${passed.length} passed, ${failed.length} failed\n`);

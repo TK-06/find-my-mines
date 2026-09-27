@@ -24,6 +24,8 @@ export function Leaderboard({ state, myId }: Props) {
 
   return (
     <div className="stack">
+      {/* Only meaningful while a turn is running; hidden in the waiting room. */}
+      {state.status === 'playing' && (
       <div className={`timer wide-timer ${urgent ? 'urgent' : ''}`}>
         <div className="label">
           {state.status === 'playing' ? 'TIME LEFT THIS TURN' : 'TURN TIMER'}
@@ -39,6 +41,7 @@ export function Leaderboard({ state, myId }: Props) {
           />
         </div>
       </div>
+      )}
 
       <div className="card">
         <div className="lobby-head" style={{ marginBottom: 12 }}>

@@ -64,6 +64,11 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
     },
     matchReset: (state) => to().emit('match:reset', state),
     stateSync: (state) => to().emit('state:sync', state),
+    matchForfeited: (notice, result) => {
+      to().emit('match:forfeit', notice);
+      if (result) void recordMatch(result);
+    },
+    notice: (message) => to().emit('room:notice', { message }),
     error: (playerId, code, message) => io.to(playerId).emit('error:msg', { code, message }),
     changed: () => pushUpdates(),
   };
@@ -168,10 +173,16 @@ function printConsole(): void {
 
 /** Moves a socket out of its current room, closing that room if it emptied. */
 function leaveCurrentRoom(socket: { id: string; leave: (room: string) => void }): void {
+  const current = rooms.roomIdOf(socket.id);
+  if (!current) return;
+
+  // Leave the socket.io room BEFORE the match reacts to the departure. The
+  // room's final state:sync would otherwise still reach the leaver and pull
+  // their client back onto a room they already left.
+  socket.leave(current);
   const { roomId, closed } = rooms.leave(socket.id);
   if (!roomId) return;
 
-  socket.leave(roomId);
   registry.setRoom(socket.id, null);
   registry.setSeat(socket.id, 'spectator');
 

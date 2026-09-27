@@ -94,6 +94,18 @@ export interface PublicMatchState {
   rematchVotes: string[];
 }
 
+/**
+ * Sent when a match ends because the other side left. The room itself goes
+ * back to waiting, so this is the only record of the result on the client.
+ */
+export interface ForfeitNotice {
+  roomId: string;
+  winnerId: string;
+  winnerNickname: string;
+  leaverNickname: string;
+  players: { id: string; nickname: string; score: number; eloDelta?: number }[];
+}
+
 /** One row of the landing page's game list. */
 export interface RoomSummary {
   id: string;

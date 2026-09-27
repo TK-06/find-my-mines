@@ -1,5 +1,6 @@
 import type {
   AdminState,
+  ForfeitNotice,
   PublicMatchState,
   QueueSnapshot,
   RevealedCell,
@@ -73,6 +74,10 @@ export interface ServerToClientEvents {
   'turn:tick': (payload: { secondsLeft: number }) => void;
   'match:ended': (state: PublicMatchState) => void;
   'match:reset': (state: PublicMatchState) => void;
+  /** The opponent left mid-match; the remaining player wins by forfeit. */
+  'match:forfeit': (notice: ForfeitNotice) => void;
+  /** Something happened in the room worth a toast, e.g. "Bob left the room." */
+  'room:notice': (payload: { message: string }) => void;
 
   /** Queue progress while waiting. null means no longer queued. */
   'queue:status': (payload: QueueSnapshot | null) => void;

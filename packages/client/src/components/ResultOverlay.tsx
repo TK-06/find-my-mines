@@ -1,4 +1,4 @@
-import type { PublicMatchState } from '@fmm/shared';
+import type { ForfeitNotice, PublicMatchState } from '@fmm/shared';
 
 interface Props {
   state: PublicMatchState;
@@ -75,6 +75,60 @@ export function ResultOverlay({ state, myId, isSpectator, onRematch, onLeave }: 
             </p>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The opponent left mid-match, so the player still seated wins. The room is
+ * already back to waiting underneath; this is the only record of the result.
+ */
+export function ForfeitOverlay({
+  notice,
+  myId,
+  onStay,
+  onLeave,
+}: {
+  notice: ForfeitNotice;
+  myId: string | null;
+  onStay: () => void;
+  onLeave: () => void;
+}) {
+  const iWon = notice.winnerId === myId;
+
+  return (
+    <div className="overlay">
+      <div className="card result">
+        <p className="muted">{notice.leaverNickname} left the match</p>
+        <h2 className={`verdict ${iWon ? 'win' : 'draw'}`}>
+          {iWon ? 'Win' : `${notice.winnerNickname} wins`}
+        </h2>
+        <p className="muted">{iWon ? 'You win by forfeit.' : 'Won by forfeit.'}</p>
+
+        <div className="final">
+          {notice.players.map((player) => (
+            <div className="line" key={player.id}>
+              <span>
+                {player.nickname}
+                {player.id === myId && <span className="tag me">you</span>}
+                {player.id === notice.winnerId ? (
+                  <span className="tag winner">winner</span>
+                ) : (
+                  <span className="tag">left</span>
+                )}
+              </span>
+              <strong>{player.score}</strong>
+            </div>
+          ))}
+        </div>
+
+        <div className="result-actions">
+          <button onClick={onStay}>Stay in room</button>
+          <button className="ghost" onClick={onLeave}>
+            Leave room
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ import {
   rateMatch,
   revealCell,
   type Board,
+  type ForfeitNotice,
   type Identity,
   type PlayerPublic,
   type PublicMatchState,
@@ -64,6 +65,10 @@ export interface MatchBroadcaster {
   matchEnded(state: PublicMatchState): void;
   matchReset(state: PublicMatchState): void;
   stateSync(state: PublicMatchState): void;
+  /** The last opponent left mid-match. `result` is set when there is a rating to persist. */
+  matchForfeited(notice: ForfeitNotice, result: FinishedMatch | null): void;
+  /** A room-wide toast. */
+  notice(message: string): void;
   error(playerId: string, code: string, message: string): void;
   /** Anything changed — refresh the lobby list and the server console. */
   changed(): void;
@@ -173,7 +178,8 @@ export class MatchManager {
 
   /** Removes a member. Returns true when the room is now empty and should close. */
   remove(id: string): boolean {
-    const wasSeated = this.isSeated(id);
+    const leaver = this.players.find((p) => p.id === id);
+    const wasSeated = leaver !== undefined;
     const wasCurrent = this.currentPlayerId === id;
 
     this.players = this.players.filter((p) => p.id !== id);
@@ -185,14 +191,21 @@ export class MatchManager {
       return true;
     }
 
-    if (wasSeated && this.status === 'playing') {
-      if (this.seatedPlayers().length < MIN_PLAYERS_TO_START) {
-        // Not enough players left to continue. Abandon the match.
-        this.abandonMatch();
+    const tooFew = this.seatedPlayers().length < MIN_PLAYERS_TO_START;
+
+    if (leaver && this.status === 'playing') {
+      if (tooFew) {
+        // The last opponent walked out: whoever is left wins by forfeit.
+        this.forfeitMatch(leaver);
       } else if (wasCurrent) {
         // The player on turn walked away — hand the turn on rather than stall.
         this.passTurn();
       }
+    } else if (leaver && this.status === 'ended' && tooFew) {
+      // Nobody is left to rematch, so the result screen has nothing to wait
+      // for. Back to waiting, and tell whoever is still here why.
+      this.abandonMatch();
+      this.out.notice(`${leaver.nickname} left the room.`);
     }
 
     if (this.status === 'ended') this.settleRematch();
@@ -211,6 +224,42 @@ export class MatchManager {
     this.winnerId = null;
     this.rematchVotes.clear();
     this.promoteSpectators();
+  }
+
+  /**
+   * Ends the match in favour of the one player still seated. The leaver takes
+   * the loss (and, in ranked, the rating hit), and the winner starts the next
+   * match. The room returns to waiting for a new opponent.
+   */
+  private forfeitMatch(leaver: Occupant): void {
+    const winner = this.seatedPlayers()[0];
+    if (!winner) {
+      this.abandonMatch();
+      return;
+    }
+
+    this.timer.stop();
+    winner.totalScore += winner.score;
+    this.winnerId = winner.id;
+    this.lastWinnerId = winner.id;
+    this.applyRatings([winner, leaver], winner.id);
+
+    const notice: ForfeitNotice = {
+      roomId: this.roomId,
+      winnerId: winner.id,
+      winnerNickname: winner.nickname,
+      leaverNickname: leaver.nickname,
+      players: [winner, leaver].map((p) => ({
+        id: p.id,
+        nickname: p.nickname,
+        score: p.score,
+        eloDelta: p.eloDelta,
+      })),
+    };
+    const result = this.takeResult();
+
+    this.abandonMatch();
+    this.out.matchForfeited(notice, result);
   }
 
   /** Fills free seats from the spectator queue, oldest first. */
@@ -309,7 +358,7 @@ export class MatchManager {
    * immediately; writing them to Supabase is the server's job and may fail
    * without breaking the game.
    */
-  private applyRatings(seated: Occupant[]): void {
+  private applyRatings(seated: Occupant[], forfeitWinnerId?: string): void {
     this.lastResult = null;
     if (seated.length < MIN_PLAYERS_TO_START) return;
 
@@ -319,7 +368,8 @@ export class MatchManager {
         id: p.id,
         rating: p.elo,
         gamesPlayed: p.gamesPlayed,
-        score: p.score,
+        // A forfeit is decided by who stayed, not by mines found so far.
+        score: forfeitWinnerId ? (p.id === forfeitWinnerId ? 1 : 0) : p.score,
         isGuest: p.isGuest,
       })),
       ranked,
