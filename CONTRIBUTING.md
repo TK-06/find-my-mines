@@ -88,8 +88,10 @@ These are not style preferences — breaking them causes real bugs.
 
 1. **The server decides everything.** The client draws what `state:sync` last told it and
    forwards clicks. If client code decides a game outcome, that is a bug.
-2. **Mine positions never leave the server.** `Board.bombs` is not serialised. Do not add
-   board data to `publicState()`.
+2. **Mine positions never reach a player's or spectator's client.** `Board.bombs` is not
+   serialised. Do not add board data to `publicState()`. The one exception: a verified admin
+   watching a room with the mine toggle on gets them through `MatchManager.minePositions()`,
+   on the `/admin` namespace only.
 3. **Game rules go in `shared/` with a unit test**, never inline in a socket handler. Pure
    functions there test with no mocks, no sockets, no database.
 4. **Anything crossing the wire gets an assertion in `scripts/smoke-test.mjs`.** Unit tests
@@ -98,7 +100,11 @@ These are not style preferences — breaking them causes real bugs.
    everyone at once — TypeScript will tell you immediately, which is the point. **Discuss
    before changing it.**
 6. **Validate untrusted input on the server.** The client form may run the same validator for
-   a faster message, but the server's check is the one that counts.
+   a faster message, but the server's check is the one that counts. Register socket handlers
+   with `listen(...)`, never bare `socket.on(...)`; read payload fields defensively
+   (`text(payload, 'roomId')`, `payload?.x`), never by destructuring; reply with
+   `respond(ack, …)`, never `ack(…)`. Anyone can send anything, and one throw in a bare
+   handler used to crash the whole server.
 7. **Never trust what a client says about who it is.** Identity comes from the verified
    Supabase token; no token means guest.
 8. **Ratings are written by the server only.** A database trigger blocks everything else.
@@ -168,7 +174,9 @@ Agree on any `protocol.ts` change **before** two people start building against i
 This is graded coursework (25 points). Two things must not regress:
 
 - **Classic stays the create-game default** — 6×6, 11 mines, 2 players, Casual. A grader
-  should see the specified behaviour without touching a setting.
+  should see the specified behaviour without touching a setting. A Classic room also keeps the
+  original rules: anyone joins directly, and the host cannot kick or ban (`isClassicConfig` in
+  `shared/src/rooms.ts`). Extras like ask-to-join live in Custom rooms.
 - **"Play as guest" stays one click.** A grader must never need an account.
 
 The fundamentals are worth 10 points and extras score **zero** if the fundamentals are

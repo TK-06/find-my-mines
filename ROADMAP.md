@@ -6,7 +6,8 @@ Update this file whenever a feature lands.
 New to the project? Read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, the rules, and
 how work is split.
 
-**Last updated:** 2026-09-04 — v1.0.0 MVP scope complete except the AI bot
+**Last updated:** 2026-09-28 — join requests, guest game log, Classic kept to the original rules,
+and a fix for signed-in tabs reloading each other forever. AI bot still on hold.
 
 ---
 
@@ -21,6 +22,7 @@ Every graded row below is implemented and verified by an automated test.
 | Socket-based client–server model | Done | `server/src/index.ts`, `client/src/socket.ts` |
 | Client never asks for IP or port | Done | `SERVER_URL` constant in `shared/src/config.ts` |
 | Server shows connected count **and** client list | Done | `/admin` console **and** stdout `printConsole()` |
+| Client receives info about other connected clients | Done 2026-09-27 | Lobby **Online now** list — `lobby:rooms.online`. Before this, clients only got a count. |
 | Nickname + welcome message | Done | `player:join` ack |
 | 11 mines on a 6×6 grid | Done | `engine/board.ts`, exact by construction |
 | Player name and score on the client | Done | `components/Leaderboard.tsx` |
@@ -41,6 +43,11 @@ list with addresses and which room each is in, open rooms, match status, turn ti
 matchmaking pool, and Reset. The same information is also printed to the server's stdout, so
 it is visible in the terminal without a browser.
 
+Since 2026-09-27 the console also has a **terminal panel** (raw connect / disconnect / room
+events, optional game traffic), a **game viewer** with a mine toggle, and **kick / ban / end
+game** with reasons. It opens on the server machine with no login, or for an account listed in
+`public.admins` from anywhere else. Design: `docs/specs/2026-09-27-admin-and-online-list.md`.
+
 ### (a) Demo and creativity — 5 points
 
 Judged on the day. The custom board sizes, free-for-all rooms and the live leaderboard are
@@ -53,7 +60,7 @@ fundamentals are incomplete, so the fundamentals stay protected.
 
 ---
 
-## 2. The 14 requested features
+## 2. The requested features
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
@@ -71,6 +78,8 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | 12 | Theme | **Done** | Light/dark toggle, remembered, follows the OS by default |
 | 13 | Leaderboard | **Done** | Live in-match ranking **and** the persistent `/ranks` page |
 | 14 | Leave button | **Done** | Plus host succession and room cleanup |
+| 15 | Private room, invite | **Partly done** | **Ask to join** is built (Custom rooms; the host accepts or declines from a popup). Invite cards in world chat and share links come with chat; link testing waits for hosting (§4) |
+| 16 | Online, friends | **Online list done** | Lobby shows everyone connected and where they are. Friends not started |
 
 ### Also built (not in the original 14)
 
@@ -79,6 +88,12 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | User profile page | **Done** | `/profile` — rating, record, rename, recent matches |
 | Game log page | **Done** | `/games` — history, filter by scope and mode |
 | Server dashboard | **Done** | `/admin` — the connection display the assignment asks for |
+| Server console v2 | **Done** | Terminal panel, game viewer + mine toggle, kick / ban / end game with reasons, admin-only access |
+| Host moderation | **Done** | Host of a casual room a player created can kick or room-ban players and spectators, with reasons |
+| Removed page | **Done** | Kicked / banned / room-ended players see who did it and why. Bans are not stored |
+| Ask to join | **Done 2026-09-28** | Custom rooms can require the host's approval: request dialog (Cancel / Request / ×), host popup with Accept / Decline, also reachable from the Online now list. Spec: `docs/specs/2026-09-28-join-requests-and-guest-log.md` |
+| Guest game log | **Done 2026-09-28** | "Mine" works for guests: the server sends each seat the saved match id and the browser remembers it |
+| Classic stays original | **Done 2026-09-28** | A 6×6 / 11-mine / 2-player room always lets anyone join and has no host kick or ban — exactly the assignment |
 | Casual vs Ranked modes | **Done** | Elo only moves in Ranked |
 | Matchmaking pool on the console | **Done** | `/admin` shows who is queued, their rating, wait and current window |
 | Contributor guide | **Done** | `CONTRIBUTING.md` — setup, rules, work split, gotchas |
@@ -104,7 +119,29 @@ checks were run against the live database and all passed:
 |---|---|
 | ~~Paste the secret key into `.env`~~ | **Done.** Server reports "Supabase connected". |
 | ~~Add GitHub OAuth app~~ | **Done.** Enabled and live. |
+| ~~Apply `supabase/migrations/0002_admins.sql`~~ | **Done 2026-09-27.** `public.admins` exists; `test:ranked` confirms a non-admin is refused, an admin is let in, and the public key gets "permission denied". |
+| **Add yourself as an admin** | The `insert` statement at the bottom of the migration file, with your username. Needed only to open `/admin` from a machine other than the server. |
 | Add Google OAuth | **Paused** until hosting — needs a real domain. See "Social sign-in" below. |
+
+**Fixed 2026-09-28 — one malformed message could crash the server.** Any client sending an
+event with a missing or odd payload (e.g. `room:join` with nothing) threw inside a Socket.IO
+handler, which killed the whole process and every match on it. Now every handler reads its
+payload defensively, only calls a reply callback that really is a function, and runs inside
+`contain()` (`server/src/safety.ts`) so an unexpected error stays with that one event. The turn
+timer and matchmaking tick are contained too, database lookups time out after 5 s (a player
+continues as a guest), and a last-resort process guard logs instead of exiting. A port conflict
+still exits with a clear message. The e2e suite sends garbage to every event and checks the
+server keeps answering.
+
+**Fixed 2026-09-28 — signed-in tabs reloading each other forever.** supabase-js broadcasts
+`SIGNED_IN` to every other tab whenever a tab loads with a stored session; the client reloaded
+on any auth event, so two open tabs bounced each other. It now reloads only when the signed-in
+identity changes, and the socket reads the token itself at handshake time.
+
+**Note on "Supabase connected":** the startup line only means the keys are present in `.env`;
+the server does not contact the database at boot. A free-tier project pauses after about a week
+without activity — resume it in the dashboard. A paused database does not error loudly: signed-in
+players quietly become guests.
 
 ### Social sign-in (Google / GitHub)
 
@@ -193,17 +230,36 @@ Ordered by marks per hour of work.
 3. ~~Theme~~ — **done**.
 4. ~~Matchmaking (item 9)~~ — **done**. Casual and Ranked pools, widening Elo window,
    auto-started rooms, live pool on the server console.
-5. **AI opponent (item 8)** — **on hold, pending team discussion.** Worth 2 points and
-   mandatory to claim *any* AI points, so it should not slip far. Real constraint propagation
-   over the revealed adjacency numbers, not random guessing. Reuses `shared/engine`, so it is
-   testable without a socket.
-6. **Puzzle mode** — single-player solvable boards against the clock. Scores as a non-AI
-   feature and reuses the engine.
-7. **AWS hosting** — last, once the feature set is frozen (EC2, CloudWatch, ELB).
+5. ~~Online players list + server console v2~~ — **done 2026-09-27**. Closes the graded
+   "client receives information about other connected clients" gap. Spec in `docs/specs/`.
+6. **Chat + invites** — **next.** World chat in the lobby, in-room chat, invite cards posted
+   into world chat, share links (copy, LINE, phone share sheet), optional private rooms
+   (item 15).
+7. **Puzzle mode** — classic single-player Minesweeper (first click safe, flood-fill, flags),
+   as its own mode. After chat. Scores as a non-AI feature and reuses the engine.
+8. **AI opponent (item 8)** — **on hold, pending team discussion.** Worth 2 points and
+   mandatory to claim *any* AI points, so it should not slip far. Options on the table:
+   constraint propagation over the revealed numbers, or an LLM opponent (mind the 10-second
+   turn and demo-day network). Reuses `shared/engine`, so a solver is testable without a socket.
+9. **AWS hosting** — last, once the feature set is frozen (EC2, CloudWatch, ELB).
    **Get a real domain as part of this.** It unblocks Google OAuth in two ways at once, and
    Google is the only feature currently parked. See "When you deploy" under Social sign-in.
-8. **Resume Google OAuth** — after the domain exists: add the three consent-screen links,
-   set the authorized domain, publish, then set `VITE_OAUTH_PROVIDERS=google,github`.
+   Vercel was considered and ruled out for the game server: its WebSockets close at the
+   function's max duration and new connections can land on a different instance, while this
+   server keeps every room in one process's memory. For temporary public access before AWS,
+   run a Cloudflare quick tunnel from the server laptop.
+10. **Resume Google OAuth** — after the domain exists: add the three consent-screen links,
+    set the authorized domain, publish, then set `VITE_OAUTH_PROVIDERS=google,github`.
+
+### Parked until the game is online
+
+Decided 2026-09-27. Each of these needs a public server, so revisit them once hosting is done.
+
+| Item | Why it waits |
+|---|---|
+| **AWS stats on the server console** — CPU, memory and network from CloudWatch, shown alongside the socket stats | Needs the EC2 instance to exist |
+| **Test invite links end to end** — copy link, LINE share, phone share sheet | A link only works when the server has a public address |
+| **Admin password** (`ADMIN_PASSWORD`) as a second way into `/admin` | Admin access is account-based for now; a password comes later |
 
 ### v1.0.0 MVP
 
@@ -235,10 +291,19 @@ Every claim of "done" above is backed by a command that can be re-run.
 
 ```
 npm run typecheck   # clean across all three packages
-npm test            # 117 unit tests: engine, room config, Elo, matchmaking, formatting
-npm run test:e2e    # 63 socket assertions — needs a running server
-npm run test:ranked # 28 assertions against the real database — needs a server + credentials
+npm test            # 223 unit tests: engine, room config, Elo, matchmaking, moderation,
+                    #   join requests, presence, admin access check, activity log,
+                    #   handler safety, session handling, guest history, formatting
+npm run test:e2e    # 130 socket assertions — needs a running server
+npm run test:ranked # 32 assertions against the real database — needs a server + credentials
+                    #   and migration 0002 (applied)
 ```
+
+The e2e suite covers the online list, host and admin moderation, join requests (ask, cancel,
+accept, decline, room closing, no approval bypass through spectating), Classic staying open with
+no host kick, the admin game viewer and mine toggle (mines reach the admin socket only), the
+terminal log, a remote-looking console connection being refused with `ADMIN_ONLY`, and garbage
+payloads on every game and console event leaving the server running.
 
 `test:ranked` creates two confirmed accounts, plays a ranked match and a casual one, checks
 that the rows landed and the ratings moved, then deletes everything it made.

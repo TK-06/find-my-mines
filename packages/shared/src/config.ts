@@ -55,6 +55,8 @@ export const CLASSIC_PRESET = {
   maxPlayers: MAX_PLAYERS as number | null,
   /** Casual by default — a grader should never accidentally affect ratings. */
   mode: 'casual' as 'casual' | 'ranked',
+  /** Anyone may join a Classic room directly, exactly as the assignment describes. */
+  joinByRequest: false as boolean,
 } as const;
 
 /** Everyone starts here: guests and newly registered accounts alike. */
@@ -86,3 +88,6 @@ export const MAX_PLAYERS_LIMIT = 12;
 
 /** Socket.IO namespace used by the server's own admin console. */
 export const ADMIN_NAMESPACE = '/admin';
+
+/** connect_error message when someone who is not an admin opens the console. */
+export const ADMIN_ONLY_ERROR = 'ADMIN_ONLY';

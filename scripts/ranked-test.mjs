@@ -3,6 +3,7 @@
  *
  * Creates two real (confirmed) accounts, signs them in, plays a ranked match
  * over sockets, then checks that the match was written and both ratings moved.
+ * Also checks the server console's account-based access (migration 0002).
  *
  * Needs Supabase credentials AND a running server. Skips cleanly without them,
  * so it never breaks a run on a machine with no secrets.
@@ -156,6 +157,11 @@ const started = waitFor(sockA, 'match:start');
 sockA.emit('game:start');
 await started;
 
+// After the write, the server tells every seat the saved match's id — that is
+// how a guest's browser builds its own game log.
+const recordedA = waitFor(sockA, 'match:recorded', 60000).catch(() => null);
+const recordedB = waitFor(sockB, 'match:recorded', 60000).catch(() => null);
+
 const byId = { [joinA.playerId]: sockA, [joinB.playerId]: sockB };
 const attempted = new Set();
 const deadline = Date.now() + 45000;
@@ -213,6 +219,11 @@ check('it is recorded as ranked', matchRows?.[0]?.mode === 'ranked');
 check('the winner was recorded', Boolean(matchRows?.[0]?.winner_profile_id));
 
 const matchId = matchRows?.[0]?.id;
+
+const [recordedForA, recordedForB] = await Promise.all([recordedA, recordedB]);
+check('both players are told the saved match id',
+  Boolean(matchId) && recordedForA?.matchId === matchId && recordedForB?.matchId === matchId,
+  `${recordedForA?.matchId} / ${recordedForB?.matchId} vs ${matchId}`);
 const { data: seatRows } = await admin
   .from('match_players')
   .select('profile_id, display_name, is_guest, score, placement, elo_before, elo_after, elo_delta, outcome')
@@ -277,6 +288,53 @@ check('a casual match did not count as a game played',
 
 const { data: casualMatch } = await admin.from('matches').select('id, mode').eq('room_id', casual.roomId);
 check('the casual match was still recorded in history', (casualMatch?.length ?? 0) === 1);
+
+// ── server console access by account ────────────────────────────────────────
+// A forwarding header makes the connection look remote, so the server-machine
+// exception does not apply: only the admins table can let it in.
+function connectConsole(accessToken) {
+  return new Promise((resolve) => {
+    const socket = io(`${URL}/admin`, {
+      transports: ['websocket'],
+      forceNew: true,
+      auth: accessToken ? { accessToken } : {},
+      extraHeaders: { 'x-forwarded-for': '203.0.113.9' },
+    });
+    const done = (result) => {
+      socket.close();
+      resolve(result);
+    };
+    socket.once('connect', () => done('connected'));
+    socket.once('connect_error', (err) => done(err.message));
+    setTimeout(() => done('timeout'), 6000);
+  });
+}
+
+const notYetAdmin = await connectConsole(accounts[0].token);
+check('a remote console connection from a non-admin account is refused',
+  notYetAdmin === 'ADMIN_ONLY', notYetAdmin);
+
+const { error: addAdminError } = await admin
+  .from('admins')
+  .insert({ profile_id: accounts[0].id, note: 'ranked-test' });
+
+if (addAdminError) {
+  check('test account added to the admins table', false,
+    `${addAdminError.message} — apply supabase/migrations/0002_admins.sql`);
+} else {
+  const nowAdmin = await connectConsole(accounts[0].token);
+  check('the same account, once listed in admins, is let in', nowAdmin === 'connected', nowAdmin);
+
+  const publicClient = createClient(SUPABASE_URL, ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: leaked, error: leakError } = await publicClient.from('admins').select('profile_id');
+  check('the admin list cannot be read with the public key',
+    Boolean(leakError) || (leaked?.length ?? 0) === 0,
+    leakError?.message ?? `${leaked?.length ?? 0} rows visible`);
+
+  await admin.from('admins').delete().eq('profile_id', accounts[0].id);
+}
 
 // ── cleanup ─────────────────────────────────────────────────────────────────
 for (const socket of [sockA, sockB]) socket.close();

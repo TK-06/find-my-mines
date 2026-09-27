@@ -1,7 +1,14 @@
 import type {
+  AdminRoomView,
   AdminState,
+  JoinRequestOutcome,
+  LogLine,
+  ModerationResult,
+  OnlinePlayer,
   PublicMatchState,
   QueueSnapshot,
+  RemovalNote,
+  RemovalNotice,
   RevealedCell,
   RoomConfig,
   RoomMode,
@@ -51,6 +58,31 @@ export interface ClientToServerEvents {
   'room:spectate': (payload: { roomId: string }, ack: (result: RoomActionResult) => void) => void;
   'room:leave': () => void;
 
+  /**
+   * Ask the host of an ask-to-join room for a seat. One pending request per
+   * client: asking elsewhere, joining, creating or queueing withdraws it.
+   */
+  'room:requestJoin': (
+    payload: { roomId: string },
+    ack: (result: ModerationResult) => void,
+  ) => void;
+  /** Withdraw your pending request, if you have one. */
+  'room:cancelRequest': () => void;
+  /** Host only: let a requester in, or turn them away. */
+  'room:answerRequest': (
+    payload: { requesterId: string; accept: boolean },
+    ack: (result: ModerationResult) => void,
+  ) => void;
+
+  /**
+   * Host only, casual rooms a player created only. `ban` also stops the target
+   * rejoining this room. The note is validated server-side.
+   */
+  'room:kick': (
+    payload: { targetId: string; ban: boolean; note: RemovalNote },
+    ack: (result: ModerationResult) => void,
+  ) => void;
+
   /** Matchmaking: join the pool for a mode, or leave it. */
   'queue:join': (payload: { mode: RoomMode }) => void;
   'queue:leave': () => void;
@@ -62,8 +94,16 @@ export interface ClientToServerEvents {
 }
 
 export interface ServerToClientEvents {
-  /** The landing page's game list. Sent on nickname join and on any room change. */
-  'lobby:rooms': (payload: { rooms: RoomSummary[]; clientCount: number }) => void;
+  /**
+   * The landing page's game list and who is online. Sent on connect and on any
+   * change. Spec: "the server will provide information about the other
+   * connected client."
+   */
+  'lobby:rooms': (payload: {
+    rooms: RoomSummary[];
+    clientCount: number;
+    online: OnlinePlayer[];
+  }) => void;
 
   /** Full room snapshot. Sent on join/spectate, reset, and every match event. */
   'state:sync': (state: PublicMatchState) => void;
@@ -82,14 +122,65 @@ export interface ServerToClientEvents {
   /** The room was destroyed (everyone left, or an admin closed it). */
   'room:closed': (payload: { roomId: string; reason: string }) => void;
 
+  /** You were kicked, banned, or your room was ended — and why. Sent only to you. */
+  'player:removed': (notice: RemovalNotice) => void;
+
+  /**
+   * Your join request was answered (or the room closed). On 'accepted' you are
+   * already seated; a state:sync for the room arrives alongside this.
+   */
+  'room:requestResolved': (payload: {
+    roomId: string;
+    roomName: string;
+    outcome: JoinRequestOutcome;
+    /** The host who answered, when there was one. */
+    byName: string | null;
+  }) => void;
+
+  /**
+   * The match you just played was saved to the database, under this id. Lets a
+   * guest's browser remember its own games for the game log.
+   */
+  'match:recorded': (payload: { matchId: string }) => void;
+
   'error:msg': (payload: { code: string; message: string }) => void;
 }
 
+/**
+ * The server console's contract. Only the server machine itself, or a verified
+ * admin account, may connect — anyone else gets a connect_error with
+ * ADMIN_ONLY_ERROR.
+ */
 export interface AdminToServerEvents {
   /** Spec: "The server has a reset button to reset the game and players' scores." */
   'admin:reset': (payload?: { roomId?: string }) => void;
+
+  /** Out of their room (and the queue) and onto the kicked page. Stays connected. */
+  'admin:kick': (
+    payload: { clientId: string; note: RemovalNote },
+    ack: (result: ModerationResult) => void,
+  ) => void;
+  /** Kicked, shown the banned page, then disconnected. Nothing is stored. */
+  'admin:ban': (
+    payload: { clientId: string; note: RemovalNote },
+    ack: (result: ModerationResult) => void,
+  ) => void;
+  /** Ends a room: every member lands on the "room closed" page. */
+  'admin:closeRoom': (
+    payload: { roomId: string; note: RemovalNote },
+    ack: (result: ModerationResult) => void,
+  ) => void;
+
+  /** Start watching a room, or stop with null. */
+  'admin:watch': (payload: { roomId: string | null }) => void;
+  /** The mine toggle for the watched room. */
+  'admin:mines': (payload: { show: boolean }) => void;
 }
 
 export interface ServerToAdminEvents {
   'admin:state': (state: AdminState) => void;
+  /** Terminal lines: a backfill on connect, then each new line as it happens. */
+  'admin:log': (lines: LogLine[]) => void;
+  /** The watched room. null once it closes or watching stops. */
+  'admin:room': (view: AdminRoomView | null) => void;
 }

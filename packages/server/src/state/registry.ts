@@ -19,6 +19,7 @@ export class ClientRegistry {
       connectedAt: Date.now(),
       address,
       roomId: null,
+      isGuest: true,
     });
   }
 
@@ -26,9 +27,12 @@ export class ClientRegistry {
     this.clients.delete(id);
   }
 
-  setNickname(id: string, nickname: string): void {
+  /** Set once the server has resolved who the client is. */
+  setIdentity(id: string, nickname: string, isGuest: boolean): void {
     const client = this.clients.get(id);
-    if (client) client.nickname = nickname;
+    if (!client) return;
+    client.nickname = nickname;
+    client.isGuest = isGuest;
   }
 
   setSeat(id: string, seat: Seat): void {
@@ -52,10 +56,5 @@ export class ClientRegistry {
 
   list(): ClientInfo[] {
     return [...this.clients.values()].sort((a, b) => a.connectedAt - b.connectedAt);
-  }
-
-  /** Roster shape sent to game clients (no addresses — that is admin-only). */
-  roster(): { id: string; nickname: string; seat: Seat }[] {
-    return this.list().map(({ id, nickname, seat }) => ({ id, nickname, seat }));
   }
 }

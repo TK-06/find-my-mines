@@ -1,8 +1,36 @@
 import { TURN_SECONDS, type PublicMatchState } from '@fmm/shared';
 
+/** Kick and ban buttons, present only when this viewer is allowed to moderate. */
+export interface ModerationControls {
+  onKick: (id: string, nickname: string) => void;
+  onBan: (id: string, nickname: string) => void;
+}
+
 interface Props {
   state: PublicMatchState;
   myId: string | null;
+  moderation?: ModerationControls;
+}
+
+function MemberActions({
+  id,
+  nickname,
+  moderation,
+}: {
+  id: string;
+  nickname: string;
+  moderation: ModerationControls;
+}) {
+  return (
+    <span className="row-actions">
+      <button className="ghost small" onClick={() => moderation.onKick(id, nickname)}>
+        Kick
+      </button>
+      <button className="danger small" onClick={() => moderation.onBan(id, nickname)}>
+        Ban
+      </button>
+    </span>
+  );
 }
 
 /**
@@ -12,7 +40,7 @@ interface Props {
  * covers that for two players and stays readable for a free-for-all room.
  * Ties keep the same rank, so three players on 2 points all read "1".
  */
-export function Leaderboard({ state, myId }: Props) {
+export function Leaderboard({ state, myId, moderation }: Props) {
   const ranked = [...state.players].sort(
     (a, b) => b.score - a.score || b.totalScore - a.totalScore,
   );
@@ -63,7 +91,7 @@ export function Leaderboard({ state, myId }: Props) {
             return (
               <li
                 key={player.id}
-                className={`leader-row ${onTurn ? 'on-turn' : ''} ${isMe ? 'is-me' : ''}`}
+                className={`leader-row ${onTurn ? 'on-turn' : ''} ${isMe ? 'is-me' : ''} ${moderation ? 'moderated' : ''}`}
               >
                 <span className="rank">{rank}</span>
                 <span className="who">
@@ -88,10 +116,39 @@ export function Leaderboard({ state, myId }: Props) {
                     </span>
                   )}
                 </span>
+                {moderation &&
+                  (isMe ? (
+                    <span />
+                  ) : (
+                    <MemberActions id={player.id} nickname={player.nickname} moderation={moderation} />
+                  ))}
               </li>
             );
           })}
         </ul>
+
+        {state.spectators.length > 0 && (
+          <div className="spectator-block">
+            <div className="field-label">Watching</div>
+            <ul className="list spectator-list">
+              {state.spectators.map((spectator) => (
+                <li key={spectator.id}>
+                  <span>
+                    {spectator.nickname}
+                    {spectator.id === myId && <span className="tag me" style={{ marginLeft: 8 }}>you</span>}
+                  </span>
+                  {moderation && spectator.id !== myId && (
+                    <MemberActions
+                      id={spectator.id}
+                      nickname={spectator.nickname}
+                      moderation={moderation}
+                    />
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   );

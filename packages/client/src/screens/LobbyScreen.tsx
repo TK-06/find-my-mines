@@ -76,6 +76,7 @@ function RoomRow({
 }) {
   const limit = room.config.maxPlayers ?? '∞';
   const playing = room.status === 'playing';
+  const ask = room.config.joinByRequest === true;
 
   return (
     <li className="room-row card">
@@ -85,6 +86,7 @@ function RoomRow({
           <strong>{room.name}</strong>
           <span className={`tag mode-${room.config.mode}`}>{room.config.mode}</span>
           <span className={`tag status-${room.status}`}>{room.status}</span>
+          {ask && <span className="tag ask">ask to join</span>}
         </div>
         <div className="muted room-meta">
           Host {room.hostNickname} · {room.config.rows}×{room.config.cols} ·{' '}
@@ -95,7 +97,7 @@ function RoomRow({
 
       <div className="room-actions">
         <button onClick={() => onJoin(room.id)} disabled={!room.joinable}>
-          {!room.joinable ? 'Full' : playing ? 'Join next' : 'Join'}
+          {!room.joinable ? 'Full' : ask ? 'Ask to join' : playing ? 'Join next' : 'Join'}
         </button>
         <button className="ghost" onClick={() => onSpectate(room.id)}>
           Spectate
@@ -114,6 +116,8 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
   const [unlimited, setUnlimited] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState(CLASSIC.maxPlayers ?? 2);
   const [mode, setMode] = useState<RoomMode>('casual');
+  // Custom rooms showcase the host approving players; Classic stays open.
+  const [askToJoin, setAskToJoin] = useState(true);
 
   const board =
     preset === 'classic'
@@ -121,7 +125,7 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
       : { rows, cols, mineCount, maxPlayers: unlimited ? null : maxPlayers };
 
   // Mode is independent of the board preset — you can play Classic ranked.
-  const config: RoomConfig = { ...board, mode };
+  const config: RoomConfig = { ...board, mode, joinByRequest: preset === 'custom' && askToJoin };
 
   // Same validator the server runs, so the message matches what it would say.
   const errors = useMemo(() => validateRoomConfig(config), [config]);
@@ -165,10 +169,21 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
         </button>
         <span className="muted">
           {preset === 'classic'
-            ? `${CLASSIC.rows}×${CLASSIC.cols}, ${CLASSIC.mineCount} mines, ${CLASSIC.maxPlayers} players — the assignment spec`
+            ? `${CLASSIC.rows}×${CLASSIC.cols}, ${CLASSIC.mineCount} mines, ${CLASSIC.maxPlayers} players — the original assignment rules: anyone can join`
             : 'Pick your own board and player limit'}
         </span>
       </div>
+
+      {preset === 'custom' && (
+        <label className="checkbox" style={{ marginTop: 0 }}>
+          <input
+            type="checkbox"
+            checked={askToJoin}
+            onChange={(e) => setAskToJoin(e.target.checked)}
+          />
+          Players ask to join — you approve each one
+        </label>
+      )}
 
       {preset === 'custom' && (
         <div className="field-grid">

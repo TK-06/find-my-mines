@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { authEnabled } from '../auth/supabase.js';
 import { MatchCard } from '../components/MatchCard.js';
+import { loadGuestMatches, type GuestMatch } from '../data/guestHistory.js';
 import {
   currentUserId,
+  fetchMatchesByIds,
   fetchMatchesForProfile,
   fetchRecentMatches,
   type MatchRow,
@@ -15,6 +17,7 @@ type ModeFilter = 'all' | 'ranked' | 'casual';
 export function GameLogScreen() {
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
+  const [guestMatches, setGuestMatches] = useState<GuestMatch[]>(() => loadGuestMatches());
   const [scope, setScope] = useState<Scope>('all');
   const [mode, setMode] = useState<ModeFilter>('all');
   const [loading, setLoading] = useState(true);
@@ -23,12 +26,27 @@ export function GameLogScreen() {
     setLoading(true);
     const id = await currentUserId();
     setUserId(id);
+    const history = loadGuestMatches();
+    setGuestMatches(history);
 
-    // "Mine" is meaningless without an account, so fall back to everything.
-    const rows = which === 'mine' && id ? await fetchMatchesForProfile(id, 40) : await fetchRecentMatches(40);
+    // "Mine" is an account's matches — or, for a guest, the matches this
+    // browser remembers playing.
+    const rows =
+      which === 'mine' && id
+        ? await fetchMatchesForProfile(id, 40)
+        : which === 'mine'
+          ? await fetchMatchesByIds(history.map((m) => m.matchId))
+          : await fetchRecentMatches(40);
     setMatches(rows);
     setLoading(false);
   }, []);
+
+  /** Which name this browser played each remembered match under. */
+  const guestNames = useMemo(
+    () => new Map(guestMatches.map((m) => [m.matchId, m.nickname])),
+    [guestMatches],
+  );
+  const canShowMine = Boolean(userId) || guestMatches.length > 0;
 
   useEffect(() => {
     void load(scope);
@@ -68,12 +86,21 @@ export function GameLogScreen() {
           </button>
           <button
             className={scope === 'mine' ? '' : 'ghost'}
-            disabled={!userId}
+            disabled={!canShowMine}
             onClick={() => setScope('mine')}
-            title={userId ? undefined : 'Sign in to filter to your own games'}
+            title={
+              userId
+                ? undefined
+                : canShowMine
+                  ? 'Games you played as a guest in this browser'
+                  : 'Finish a game, or sign in, to see your own'
+            }
           >
             Mine
           </button>
+          {scope === 'mine' && !userId && (
+            <span className="muted">Played as a guest in this browser</span>
+          )}
         </div>
 
         <div className="preset-row">
@@ -105,7 +132,12 @@ export function GameLogScreen() {
       ) : (
         <ul className="match-list">
           {visible.map((match) => (
-            <MatchCard key={match.id} match={match} highlightProfileId={userId} />
+            <MatchCard
+              key={match.id}
+              match={match}
+              highlightProfileId={userId}
+              highlightGuestName={userId ? null : (guestNames.get(match.id) ?? null)}
+            />
           ))}
         </ul>
       )}

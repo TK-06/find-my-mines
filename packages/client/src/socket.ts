@@ -7,6 +7,8 @@ import {
   type ServerToClientEvents,
 } from '@fmm/shared';
 import { io, type Socket } from 'socket.io-client';
+import { currentAccessToken } from './auth/supabase.js';
+import { tokenAuth } from './auth/session.js';
 
 /**
  * The server address comes from the shared source-code constant — the client
@@ -24,21 +26,22 @@ const target = isDev ? SERVER_URL : window.location.origin;
  * "clients online" count. `useGame` connects it, and only the game screen
  * uses `useGame`.
  */
+/**
+ * The handshake carries the Supabase access token, read at the moment the
+ * connection opens, so the server can verify who this connection belongs to.
+ * No token means guest.
+ */
 export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(target, {
   autoConnect: false,
   transports: ['websocket', 'polling'],
+  auth: tokenAuth(currentAccessToken),
 });
 
 /**
- * Attaches the Supabase access token to the handshake so the server can verify
- * who this connection belongs to. Called before connecting, and again after a
- * sign-in or sign-out so the next connection carries the right identity.
+ * The console sends the same token: away from the server machine, only an
+ * account listed as an admin is let in.
  */
-export function setAccessToken(accessToken: string | undefined): void {
-  socket.auth = accessToken ? { accessToken } : {};
-}
-
 export const adminSocket: Socket<ServerToAdminEvents, AdminToServerEvents> = io(
   `${target}${ADMIN_NAMESPACE}`,
-  { autoConnect: false, transports: ['websocket', 'polling'] },
+  { autoConnect: false, transports: ['websocket', 'polling'], auth: tokenAuth(currentAccessToken) },
 );

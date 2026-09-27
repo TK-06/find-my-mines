@@ -147,7 +147,15 @@ export async function fetchMatchesForProfile(userId: string, limit = 20): Promis
     .limit(limit * 2);
 
   const ids = [...new Set((seats ?? []).map((s) => s.match_id as string))].slice(0, limit);
-  if (ids.length === 0) return [];
+  return fetchMatchesByIds(ids);
+}
+
+/**
+ * Specific matches with all their seats, newest first. Used for a guest's own
+ * history, whose ids this browser remembered.
+ */
+export async function fetchMatchesByIds(ids: string[]): Promise<MatchRow[]> {
+  if (!supabase || ids.length === 0) return [];
 
   const { data: matches } = await supabase
     .from('matches')

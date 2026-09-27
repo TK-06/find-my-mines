@@ -566,3 +566,212 @@ button.small { padding: 7px 13px; font-size: 13px; }
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.35; transform: scale(0.75); }
 }
+
+/* ── lobby: games beside who is online ─────────────────── */
+.lobby-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 18px;
+  align-items: start;
+}
+.online-panel { position: sticky; top: 16px; }
+.online-list li { flex-direction: column; align-items: flex-start; gap: 4px; }
+.online-who { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.online-where {
+  font-size: 12px;
+  padding-left: 15px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.online-where button.small { padding: 4px 10px; font-size: 12px; }
+.presence-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.presence-dot.room { background: var(--warn); }
+.presence-dot.playing { background: var(--safe); }
+.presence-dot.watching { background: var(--accent-2); }
+.presence-dot.queue { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+
+@media (max-width: 800px) {
+  .lobby-layout { grid-template-columns: 1fr; }
+  .online-panel { position: static; }
+}
+
+/* ── kick / ban dialog ──────────────────────────────────── */
+.reason-dialog { width: min(440px, 100%); display: grid; gap: 8px; }
+.reason-dialog h2 { margin: 0; font-size: 20px; }
+.reason-dialog .muted { margin: 0 0 6px; }
+.reason-list { border: none; padding: 0; margin: 0 0 8px; display: grid; gap: 2px; }
+.reason-list .checkbox { margin-top: 6px; color: var(--text); font-size: 14px; }
+textarea {
+  width: 100%;
+  padding: 11px 13px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+  resize: vertical;
+}
+textarea:focus { border-color: var(--accent); }
+.remark-count { text-align: right; font-size: 12px; }
+
+/* ── kicked / banned page ───────────────────────────────── */
+.removed-card { width: min(460px, 100%); text-align: center; border-color: var(--warn); }
+.removed-card.banned { border-color: var(--bomb); }
+.removed-card h2 { margin: 0 0 8px; font-size: 24px; }
+.reason-tags {
+  list-style: none; padding: 0; margin: 16px 0 0;
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+}
+.reason-tags .tag { font-size: 12px; padding: 5px 11px; }
+.remark {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--line);
+  background: var(--bg);
+  border-radius: 0 9px 9px 0;
+  text-align: left;
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── host controls in the leaderboard ───────────────────── */
+.leaderboard .leader-row.moderated { grid-template-columns: 30px 1fr auto auto; }
+.row-actions { display: flex; gap: 6px; }
+.row-actions button.small { padding: 5px 10px; font-size: 12px; }
+.spectator-block { margin-top: 14px; }
+.spectator-list li { padding: 7px 12px; }
+
+/* ── server console additions ───────────────────────────── */
+.client-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.client-actions button.small { padding: 5px 10px; font-size: 12px; }
+
+.viewer { display: grid; gap: 16px; border-color: var(--accent); }
+.viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+/* A covered mine, visible only to an admin with the toggle on. */
+.cell.hidden-mine {
+  opacity: 0.55;
+  border-style: dashed;
+  border-color: var(--bomb);
+  font-size: 18px;
+}
+
+.mine-toggle {
+  position: relative;
+  width: 40px; height: 36px;
+  padding: 0;
+  display: grid; place-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-size: 18px;
+}
+.mine-toggle.on { border-color: var(--bomb); box-shadow: 0 0 0 1px var(--bomb); }
+.mine-toggle .mine-icon { position: relative; line-height: 1; }
+.mine-toggle.off .mine-icon { opacity: 0.6; }
+/* The slash: mines are hidden. */
+.mine-toggle.off .mine-icon::after {
+  content: '';
+  position: absolute;
+  left: -4px; right: -4px; top: 50%;
+  height: 2px;
+  background: var(--bomb);
+  transform: rotate(-45deg);
+  border-radius: 2px;
+}
+
+/* ── terminal panel ─────────────────────────────────────── */
+.terminal-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.terminal {
+  margin-top: 14px;
+  height: 300px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: #05070f;
+  border: 1px solid #1c2440;
+  border-radius: 10px;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #b8c4ea;
+}
+.term-line { display: grid; grid-template-columns: 70px 92px 1fr; gap: 10px; }
+.term-time { color: #5f6b93; }
+.term-kind { color: #7c8bc0; }
+.term-text { overflow-wrap: anywhere; }
+.term-line.kind-connection .term-kind { color: #38d39f; }
+.term-line.kind-player .term-kind { color: #6fa8ff; }
+.term-line.kind-room .term-kind { color: #ffb454; }
+.term-line.kind-match .term-kind { color: #c0aeff; }
+.term-line.kind-queue .term-kind { color: #5b8cff; }
+.term-line.kind-moderation .term-kind,
+.term-line.kind-moderation .term-text { color: #ff8aa0; }
+.term-line.kind-admin .term-kind { color: #ffd479; }
+.term-line.kind-traffic { color: #6e7aa3; }
+.term-line.kind-error .term-kind,
+.term-line.kind-error .term-text { color: #ff5c7a; font-weight: 600; }
+
+/* ── join requests ──────────────────────────────────────── */
+.tag.ask { background: #2a4a5e; color: #9fd8ff; }
+
+.request-dialog { position: relative; width: min(440px, 100%); display: grid; gap: 10px; }
+.request-dialog h2 { margin: 0; font-size: 20px; padding-right: 32px; }
+.dialog-close {
+  position: absolute;
+  top: 12px; right: 12px;
+  width: 32px; height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+.dialog-close:hover:not(:disabled) { color: var(--text); background: var(--panel-2); filter: none; }
+:root[data-theme='light'] .dialog-close { color: var(--muted); }
+.request-status { display: flex; align-items: center; gap: 9px; margin: 4px 0; color: var(--accent); font-size: 14px; }
+
+/* The host's popups, stacked in the corner above everything but dialogs. */
+.request-toasts {
+  position: fixed;
+  right: 18px; bottom: 18px;
+  display: grid;
+  gap: 10px;
+  z-index: 45;
+  width: min(340px, calc(100vw - 36px));
+}
+.request-toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-color: var(--accent);
+  box-shadow: 0 12px 34px -14px rgba(0, 0, 0, 0.55);
+  animation: toast-in 0.25s ease;
+}
+.request-who { display: flex; align-items: center; gap: 8px; }
+@keyframes toast-in {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+a.button-link {
+  display: inline-block;
+  font-weight: 600;
+  text-decoration: none;
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--accent), #3f6fe0);
+}

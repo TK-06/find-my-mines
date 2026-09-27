@@ -24,6 +24,30 @@ export const admin: SupabaseClient | null = supabaseEnabled
     })
   : null;
 
+/**
+ * The account behind a token, when that account is listed in `public.admins`.
+ * Returns a label for the console log (email, else id), or null.
+ *
+ * Only the service role can read `admins` — RLS is on with no policies — so a
+ * player can neither see who the admins are nor add themselves.
+ */
+export async function adminAccountFromToken(
+  accessToken: string | undefined,
+): Promise<string | null> {
+  if (!admin || !accessToken) return null;
+
+  const { data, error } = await admin.auth.getUser(accessToken);
+  if (error || !data.user) return null;
+
+  const { data: row } = await admin
+    .from('admins')
+    .select('profile_id')
+    .eq('profile_id', data.user.id)
+    .maybeSingle();
+
+  return row ? (data.user.email ?? data.user.id) : null;
+}
+
 /** A guest identity. No account, no persistence, fixed starting rating. */
 export function guestIdentity(nickname: string): Identity {
   return {

@@ -6,6 +6,7 @@ import {
   type QueueSnapshot,
   type RoomMode,
 } from '@fmm/shared';
+import { contain } from '../safety.js';
 
 const TICK_MS = 1000;
 
@@ -96,7 +97,14 @@ export class MatchmakingQueue {
 
   private ensureTicking(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => this.tick(), TICK_MS);
+    // Runs outside any socket handler, so it contains its own failures.
+    this.timer = setInterval(
+      contain(
+        () => this.tick(),
+        (error) => console.error('[matchmaking] tick failed:', error),
+      ),
+      TICK_MS,
+    );
   }
 
   private stopIfEmpty(): void {

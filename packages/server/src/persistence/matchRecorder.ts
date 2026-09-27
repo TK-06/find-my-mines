@@ -8,10 +8,12 @@ import { admin } from '../supabase.js';
  * match still finished correctly in memory and players already saw their
  * result. A failed write is logged, never thrown — losing a history row must
  * not take the game server down mid-demo.
+ *
+ * Returns the saved match's id, or null when nothing was written.
  */
-export async function recordMatch(match: FinishedMatch): Promise<void> {
+export async function recordMatch(match: FinishedMatch): Promise<string | null> {
   const db = admin;
-  if (!db) return;
+  if (!db) return null;
 
   try {
     const { data: row, error: matchError } = await db
@@ -27,8 +29,9 @@ export async function recordMatch(match: FinishedMatch): Promise<void> {
 
     if (matchError || !row) {
       console.error('[persist] could not write match:', matchError?.message);
-      return;
+      return null;
     }
+    const matchId = row.id as string;
 
     const { error: playersError } = await db.from('match_players').insert(
       match.players.map((player) => ({
@@ -51,7 +54,7 @@ export async function recordMatch(match: FinishedMatch): Promise<void> {
 
     // Guests have no row to update, and casual matches leave ratings alone.
     const rated = match.players.filter((p) => !p.isGuest && p.profileId);
-    if (match.mode !== 'ranked' || rated.length === 0) return;
+    if (match.mode !== 'ranked' || rated.length === 0) return matchId;
 
     await Promise.all(
       rated.map((player) =>
@@ -62,7 +65,9 @@ export async function recordMatch(match: FinishedMatch): Promise<void> {
         }),
       ),
     );
+    return matchId;
   } catch (error) {
     console.error('[persist] unexpected failure:', (error as Error).message);
+    return null;
   }
 }
