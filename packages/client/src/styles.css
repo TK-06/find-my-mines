@@ -608,3 +608,4 @@ input[type='checkbox'] { accent-color: var(--ink); }
   .lobby-grid { grid-template-columns: 1fr; }
   .online-panel { order: -1; }
 }
+.form-notice { margin-top: 12px; }
