@@ -3,8 +3,9 @@
  *
  * Connects clients to a RUNNING server and exercises the full flow: nickname,
  * lobby, the online list, room creation, host start, a complete match,
- * rematch, leaving, host succession, room cleanup, host and admin moderation,
- * and the admin console (viewer, mine toggle, terminal log, access check).
+ * rematch, leaving, forfeits, the reconnect grace period, host succession,
+ * room cleanup, host and admin moderation, and the admin console (viewer,
+ * mine toggle, terminal log, access check).
  *
  * The unit tests cover the engine and room-config rules; this covers the wire
  * protocol and everything stateful the server does.
@@ -105,7 +106,13 @@ section('admin console');
 
 // The server emits admin:state the instant the socket connects, so the listener
 // must be attached before the connection completes.
-const admin = io(URL + ADMIN_NS, { transports: ['websocket'], forceNew: true });
+// From the server machine no token is needed; against a hosted server that
+// sets ADMIN_TOKEN, pass it in the environment.
+const admin = io(URL + ADMIN_NS, {
+  transports: ['websocket'],
+  forceNew: true,
+  auth: { token: process.env.ADMIN_TOKEN ?? '' },
+});
 // The terminal backfill also arrives on connect, so collect it from the start.
 const adminLog = [];
 admin.on('admin:log', (lines) => adminLog.push(...lines));
@@ -543,6 +550,228 @@ check(
   finalAdmin ? `${finalAdmin.rooms.length} room(s) left` : 'no admin:state received',
 );
 
+// ── forfeit and leaving after a match ──────────────────────────────────────
+section('forfeit and leaving');
+
+{
+  const p1 = await connect();
+  const p2 = await connect();
+  let lobby = null;
+  p1.on('lobby:rooms', (payload) => (lobby = payload));
+  await setName(p1, 'Fern');
+  await setName(p2, 'Gus');
+  await sleep(300);
+  const names = (lobby?.online ?? []).map((p) => p.nickname);
+  check('the lobby tells each client who else is online',
+    names.includes('Fern') && names.includes('Gus') && !names.includes('(joining…)'),
+    `${names.length} online`);
+  const p1View = track(p1);
+  const p2View = track(p2);
+  const forfeits = [];
+  const notices = [];
+  p1.on('match:forfeit', (n) => forfeits.push(n));
+  p1.on('room:notice', (n) => notices.push(n.message));
+
+  const room = await emitAck(p1, 'room:create', { name: 'Forfeit', config: CLASSIC });
+  await emitAck(p2, 'room:join', { roomId: room.roomId });
+  p1.emit('game:start');
+  await sleep(400);
+
+  let lateToLeaver = 0;
+  p2.on('state:sync', () => lateToLeaver++);
+  p2.emit('room:leave');
+  await sleep(500);
+
+  const forfeit = forfeits[0];
+  check('leaving mid-match hands the other player a forfeit win',
+    forfeit?.winnerId === p1.id && forfeit?.leaverNickname === 'Gus',
+    forfeit ? `winner ${forfeit.winnerNickname}` : 'no match:forfeit');
+  check('the room goes back to waiting after a forfeit', p1View.state?.status === 'waiting',
+    p1View.state?.status);
+  check('the leaver gets no room updates after leaving', lateToLeaver === 0, `${lateToLeaver} late`);
+
+  // Finish a real match, have one side vote rematch, then the other leaves.
+  await emitAck(p2, 'room:join', { roomId: room.roomId });
+  await sleep(200);
+  p1.emit('game:start');
+  await sleep(300);
+  const done = await playOut(p1View, { [p1.id]: p1, [p2.id]: p2 });
+  check('second match ended', Boolean(done));
+
+  p1.emit('game:rematch');
+  await sleep(200);
+  lateToLeaver = 0;
+  p2.emit('room:leave');
+  await sleep(500);
+
+  check('leaving after a rematch vote sends the leaver nothing further', lateToLeaver === 0,
+    `${lateToLeaver} late`);
+  check('the remaining player is told the other left', notices.some((m) => m.includes('Gus left')),
+    notices.join(' | ') || 'no room:notice');
+  check('the remaining player is back to waiting, not stuck on the result',
+    p1View.state?.status === 'waiting', p1View.state?.status);
+
+  p1.close();
+  p2.close();
+}
+
+// ── reconnect grace period ─────────────────────────────────────────────────
+section('reconnect grace period');
+
+{
+  const withSession = (sessionId) =>
+    new Promise((resolve, reject) => {
+      const socket = io(URL, { transports: ['websocket'], forceNew: true, auth: { sessionId } });
+      socket.once('connect', () => resolve(socket));
+      socket.once('connect_error', reject);
+    });
+  const S1 = 'smoke-session-aaaaaaaaaaaaaaaa';
+  const S2 = 'smoke-session-bbbbbbbbbbbbbbbb';
+
+  const host = await withSession(S1);
+  let guest = await withSession(S2);
+  await setName(host, 'Hana');
+  await setName(guest, 'Ivo');
+  const hostView = track(host);
+  const forfeits = [];
+  host.on('match:forfeit', (n) => forfeits.push(n));
+
+  const room = await emitAck(host, 'room:create', { name: 'Grace', config: CLASSIC });
+  await emitAck(guest, 'room:join', { roomId: room.roomId });
+  host.emit('game:start');
+  await sleep(400);
+
+  guest.close();
+  await sleep(400);
+  const away = hostView.state?.players.find((p) => p.nickname === 'Ivo');
+  check('a dropped player keeps their seat, marked disconnected',
+    away && away.connected === false && hostView.state?.status === 'playing',
+    away ? `connected=${away.connected}, ${hostView.state?.status}` : 'seat gone');
+  check('no forfeit while the seat is held', forfeits.length === 0);
+
+  guest = await withSession(S2);
+  const guestView = track(guest);
+  const rejoin = await setName(guest, 'Ivo');
+  await sleep(400);
+  check('reconnecting with the same session resumes the room', rejoin.roomId === room.roomId,
+    String(rejoin.roomId));
+  const back = hostView.state?.players.find((p) => p.nickname === 'Ivo');
+  check('the resumed seat is live under the new connection',
+    back?.id === guest.id && back?.connected === true && guestView.state?.roomId === room.roomId);
+  check('the match carried on through the reconnect', hostView.state?.status === 'playing',
+    hostView.state?.status);
+
+  guest.close();
+  console.log('  …waiting out the grace period');
+  await sleep(31000);
+  check('not coming back within the grace period forfeits the match',
+    forfeits[0]?.winnerNickname === 'Hana', forfeits[0] ? `winner ${forfeits[0].winnerNickname}` : 'no forfeit');
+
+  host.close();
+}
+
+// ── reconnect grace meets moderation ────────────────────────────────────────
+section('reconnect meets moderation');
+
+{
+  const withSession = (sessionId) =>
+    new Promise((resolve, reject) => {
+      const socket = io(URL, { transports: ['websocket'], forceNew: true, auth: { sessionId } });
+      socket.once('connect', () => resolve(socket));
+      socket.once('connect_error', reject);
+    });
+  // Three seats makes it a Custom casual room, where the host may kick.
+  const CUSTOM = { ...CLASSIC, maxPlayers: 3 };
+
+  // The same tab coming back as someone else must not inherit the seat.
+  {
+    const host = await withSession('smoke-session-cccccccccccccccc');
+    let other = await withSession('smoke-session-dddddddddddddddd');
+    await setName(host, 'Jun');
+    await setName(other, 'Kai');
+    const forfeits = [];
+    host.on('match:forfeit', (n) => forfeits.push(n));
+    const room = await emitAck(host, 'room:create', { name: 'Swap', config: CLASSIC });
+    await emitAck(other, 'room:join', { roomId: room.roomId });
+    host.emit('game:start');
+    await sleep(400);
+
+    other.close();
+    await sleep(300);
+    other = await withSession('smoke-session-dddddddddddddddd');
+    const swapped = await setName(other, 'Lee');
+    await sleep(400);
+    check('a tab that comes back as someone else does not take the held seat',
+      swapped.ok === true && !swapped.roomId, String(swapped.roomId));
+    check('the held seat is given up at once instead — a forfeit mid-match',
+      forfeits[0]?.leaverNickname === 'Kai' && forfeits[0]?.winnerNickname === 'Jun',
+      forfeits[0] ? `${forfeits[0].winnerNickname} won` : 'no forfeit');
+    host.close();
+    other.close();
+  }
+
+  // Kicking a player whose seat is being held gives the seat up.
+  {
+    const host = await withSession('smoke-session-eeeeeeeeeeeeeeee');
+    let victim = await withSession('smoke-session-ffffffffffffffff');
+    await setName(host, 'Mia');
+    const victimJoin = await setName(victim, 'Ned');
+    const hostView = track(host);
+    const forfeits = [];
+    host.on('match:forfeit', (n) => forfeits.push(n));
+    const room = await emitAck(host, 'room:create', { name: 'Held kick', config: CUSTOM });
+    await emitAck(victim, 'room:join', { roomId: room.roomId });
+    host.emit('game:start');
+    await sleep(400);
+
+    victim.close();
+    await sleep(300);
+    const kicked = await emitAck(host, 'room:kick', {
+      targetId: victimJoin.playerId,
+      ban: false,
+      note: REASON,
+    });
+    await sleep(300);
+    check('the host can kick a player whose seat is being held', kicked.ok === true,
+      kicked.error ?? '');
+    check('the kick frees the held seat and counts as a forfeit mid-match',
+      !hostView.state?.players.some((p) => p.id === victimJoin.playerId) &&
+        forfeits[0]?.leaverNickname === 'Ned',
+      forfeits[0] ? `${forfeits[0].winnerNickname} won` : 'no forfeit');
+
+    victim = await withSession('smoke-session-ffffffffffffffff');
+    const back = await setName(victim, 'Ned');
+    check('a kicked player coming back does not get the seat back', !back.roomId,
+      String(back.roomId));
+    host.close();
+    victim.close();
+  }
+
+  // An admin kick mid-match is a forfeit too: the player left behind wins.
+  {
+    const p1 = await connect();
+    const p2 = await connect();
+    await setName(p1, 'Ola');
+    const p2Join = await setName(p2, 'Pim');
+    const forfeits = [];
+    p1.on('match:forfeit', (n) => forfeits.push(n));
+    const room = await emitAck(p1, 'room:create', { name: 'Admin forfeit', config: CLASSIC });
+    await emitAck(p2, 'room:join', { roomId: room.roomId });
+    p1.emit('game:start');
+    await sleep(400);
+
+    const removedNotice = waitFor(p2, 'player:removed', 3000).catch(() => null);
+    const adminKicked = await emitAck(admin, 'admin:kick', { clientId: p2Join.playerId, note: REASON });
+    const notice = await removedNotice;
+    await sleep(300);
+    check('an admin kick mid-match hands the other player a forfeit win',
+      adminKicked.ok === true && notice?.kind === 'kicked' && forfeits[0]?.winnerNickname === 'Ola',
+      forfeits[0] ? `${forfeits[0].winnerNickname} won` : adminKicked.error ?? 'no forfeit');
+    p1.close();
+    p2.close();
+  }
+}
+
 // ── host moderation ─────────────────────────────────────────────────────────
 section('host moderation');
 
@@ -687,6 +916,15 @@ const nonHostAnswer = await emitAck(dave, 'room:answerRequest', {
 });
 check('only the host can answer a request', nonHostAnswer.ok === false, nonHostAnswer.error ?? '');
 
+// The client follows only a room it knows it is in, so "accepted" must arrive
+// before the room's first state:sync — or that snapshot is ignored.
+const bobOrder = [];
+const noteResolved = () => bobOrder.push('resolved');
+const noteSync = (s) => {
+  if (s.roomId === askRoom.roomId) bobOrder.push('sync');
+};
+bob.on('room:requestResolved', noteResolved);
+bob.on('state:sync', noteSync);
 const bobResolved = waitFor(bob, 'room:requestResolved', 3000).catch(() => null);
 const acceptBob = await emitAck(alice, 'room:answerRequest', {
   requesterId: bobJoin.playerId,
@@ -694,9 +932,13 @@ const acceptBob = await emitAck(alice, 'room:answerRequest', {
 });
 const bobOutcome = await bobResolved;
 await sleep(150);
+bob.off('room:requestResolved', noteResolved);
+bob.off('state:sync', noteSync);
 check('the host can accept, and the requester is told',
   acceptBob.ok === true && bobOutcome?.outcome === 'accepted' && bobOutcome.byName === 'Alice',
   JSON.stringify(bobOutcome));
+check('the requester hears "accepted" before the room’s state',
+  bobOrder[0] === 'resolved' && bobOrder.includes('sync'), bobOrder.join(' → '));
 check('an accepted player is seated',
   aliceView.state?.players.some((p) => p.id === bobJoin.playerId));
 check('an answered request leaves the list',
@@ -859,22 +1101,34 @@ section('admin access');
 
 // A tunnel or proxy adds a forwarding header; with no admin account behind it,
 // the console must refuse even though the TCP peer is localhost.
-const remoteAttempt = await new Promise((resolve) => {
-  const socket = io(URL + ADMIN_NS, {
-    transports: ['websocket'],
-    forceNew: true,
-    extraHeaders: { 'x-forwarded-for': '203.0.113.9' },
+const remoteConsole = (auth = {}) =>
+  new Promise((resolve) => {
+    const socket = io(URL + ADMIN_NS, {
+      transports: ['websocket'],
+      forceNew: true,
+      extraHeaders: { 'x-forwarded-for': '203.0.113.9' },
+      auth,
+    });
+    const done = (result) => {
+      socket.close();
+      resolve(result);
+    };
+    socket.once('connect', () => done('connected'));
+    socket.once('connect_error', (err) => done(err.message));
+    setTimeout(() => done('timeout'), 4000);
   });
-  const done = (result) => {
-    socket.close();
-    resolve(result);
-  };
-  socket.once('connect', () => done('connected'));
-  socket.once('connect_error', (err) => done(err.message));
-  setTimeout(() => done('timeout'), 4000);
-});
+const remoteAttempt = await remoteConsole();
 check('a remote console connection without an admin account is refused',
   remoteAttempt === 'ADMIN_ONLY', remoteAttempt);
+
+// With no ADMIN_TOKEN configured the token route is closed — an unset token
+// must never read as "open to everyone", whatever the handshake carries.
+if (!process.env.ADMIN_TOKEN) {
+  const emptyToken = await remoteConsole({ token: '' });
+  const guessedToken = await remoteConsole({ token: 'guess' });
+  check('with no ADMIN_TOKEN set, no token opens the console remotely',
+    emptyToken === 'ADMIN_ONLY' && guessedToken === 'ADMIN_ONLY', `${emptyToken}, ${guessedToken}`);
+}
 
 // ── malformed messages never take the server down ───────────────────────────
 section('malformed messages');

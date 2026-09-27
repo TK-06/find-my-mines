@@ -29,6 +29,8 @@ cp .env.example .env
 | `VITE_SUPABASE_ANON_KEY` | Same page, the **publishable** key | No — safe in the browser |
 | `SUPABASE_SERVICE_ROLE_KEY` | Same page, the **secret** key | **YES** |
 | `VITE_OAUTH_PROVIDERS` | Leave empty unless Google/GitHub OAuth apps exist | No |
+| `ADMIN_TOKEN` | Only on a hosted server — opens `/admin?token=<value>`. Leave empty locally | **YES** |
+| `VITE_SERVER_URL` | Only for the Vercel build — the Render server's address. See `DEPLOY.md` | No |
 
 > **The secret key bypasses all database security.** Never commit it, never paste it in
 > Discord/LINE/chat, never give it a `VITE_` prefix. Ask the project owner for it over a
@@ -166,6 +168,14 @@ Agree on any `protocol.ts` change **before** two people start building against i
   from OneDrive sync.
 - **Grepping the bundle for `service_role` gives false positives** — supabase-js contains that
   string legitimately. Grep for the key's actual value instead.
+- **The client only follows a room it knows it is in.** `useGame` ignores room events for any
+  room other than `activeRoom`, so a late update never pulls a leaver back in. Any new server
+  path that seats a player must tell the client the room id **before** the room's first
+  `state:sync` — an ack with `roomId`, `queue:matched`, or `room:requestResolved` all do.
+  Seating someone silently leaves them on the lobby while the server thinks they are playing.
+- **A dropped seated player keeps their seat for 30 s** (`RECONNECT_GRACE_SECONDS`), keyed by
+  the tab's `sessionId`. Test sockets that send a `sessionId` and then close leave held seats
+  behind for 30 s; sockets without one leave at once, as before.
 
 ---
 

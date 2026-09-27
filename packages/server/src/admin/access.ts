@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 
 /**
@@ -29,9 +30,9 @@ function normalise(address: string): string {
 /**
  * True when a connection comes from the machine running the server, directly.
  *
- * This is one of the two ways into the server console — the other is an admin
- * account. It keeps the graded Reset button reachable on the demo laptop even
- * when the database is not.
+ * One of the ways into the server console, alongside an admin account and
+ * ADMIN_TOKEN. It keeps the graded Reset button reachable on the demo laptop
+ * even when the database is not.
  */
 export function isServerMachine(
   address: string | undefined,
@@ -52,8 +53,20 @@ export interface ConsoleHandshake {
 }
 
 /**
- * Who may open the server console: the server machine, or an admin account.
- * Returns a label for the log, or null to refuse.
+ * True when the handshake carries the server's ADMIN_TOKEN. No token configured
+ * means this route is closed — an unset token never opens the console.
+ * Compared through fixed-length digests, so timing does not leak the token.
+ */
+export function adminTokenMatches(given: unknown, expected: string): boolean {
+  if (!expected || typeof given !== 'string') return false;
+  const digest = (value: string) => createHash('sha256').update(value).digest();
+  return timingSafeEqual(digest(given), digest(expected));
+}
+
+/**
+ * Who may open the server console: the server machine, the ADMIN_TOKEN (when
+ * the server sets one, for a hosted console opened as /admin?token=…), or an
+ * admin account. Returns a label for the log, or null to refuse.
  *
  * Any failure in the account lookup refuses the connection. This runs inside
  * socket.io middleware, where a rejected promise would leave the connection
@@ -63,8 +76,10 @@ export async function adminAccess(
   handshake: ConsoleHandshake,
   own: string[],
   lookupAdmin: (accessToken: string | undefined) => Promise<string | null>,
+  adminToken = '',
 ): Promise<string | null> {
   if (isServerMachine(handshake.address, handshake.headers, own)) return 'server machine';
+  if (adminTokenMatches(handshake.auth?.token, adminToken)) return 'admin token';
 
   const token = handshake.auth?.accessToken;
   try {

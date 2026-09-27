@@ -11,6 +11,7 @@ import {
   rateMatch,
   revealCell,
   type Board,
+  type ForfeitNotice,
   type Identity,
   type MinePosition,
   type PlayerPublic,
@@ -77,6 +78,10 @@ export interface MatchBroadcaster {
   matchEnded(state: PublicMatchState): void;
   matchReset(state: PublicMatchState): void;
   stateSync(state: PublicMatchState): void;
+  /** The last opponent left mid-match. `result` is set when there is a rating to persist. */
+  matchForfeited(notice: ForfeitNotice, result: FinishedMatch | null): void;
+  /** A room-wide toast. */
+  notice(message: string): void;
   error(playerId: string, code: string, message: string): void;
   /** Anything changed — refresh the lobby list and the server console. */
   changed(): void;
@@ -288,9 +293,47 @@ export class MatchManager {
     };
   }
 
+  /**
+   * A seated player's connection dropped. Their seat, score and turn are held;
+   * the turn clock keeps running, so a long absence just costs them turns.
+   */
+  markDisconnected(id: string): void {
+    const player = this.players.find((p) => p.id === id);
+    if (!player) return;
+    player.connected = false;
+    this.out.notice(`${player.nickname} disconnected. Holding their seat…`);
+    this.out.stateSync(this.publicState());
+    this.out.changed();
+  }
+
+  /**
+   * Hands a held seat to the player's new connection. Every reference to the
+   * old socket id moves with it, so turn, votes and history carry over.
+   */
+  rebind(oldId: string, newId: string): boolean {
+    const player = this.players.find((p) => p.id === oldId);
+    if (!player) return false;
+
+    player.id = newId;
+    player.connected = true;
+    if (this.currentPlayerId === oldId) this.currentPlayerId = newId;
+    if (this.winnerId === oldId) this.winnerId = newId;
+    if (this.lastWinnerId === oldId) this.lastWinnerId = newId;
+    if (this.rematchVotes.delete(oldId)) this.rematchVotes.add(newId);
+    for (const cell of this.revealed) {
+      if (cell.byPlayerId === oldId) cell.byPlayerId = newId;
+    }
+
+    this.out.notice(`${player.nickname} is back.`);
+    this.out.stateSync(this.publicState());
+    this.out.changed();
+    return true;
+  }
+
   /** Removes a member. Returns true when the room is now empty and should close. */
   remove(id: string): boolean {
-    const wasSeated = this.isSeated(id);
+    const leaver = this.players.find((p) => p.id === id);
+    const wasSeated = leaver !== undefined;
     const wasCurrent = this.currentPlayerId === id;
 
     this.players = this.players.filter((p) => p.id !== id);
@@ -302,14 +345,21 @@ export class MatchManager {
       return true;
     }
 
-    if (wasSeated && this.status === 'playing') {
-      if (this.seatedPlayers().length < MIN_PLAYERS_TO_START) {
-        // Not enough players left to continue. Abandon the match.
-        this.abandonMatch();
+    const tooFew = this.seatedPlayers().length < MIN_PLAYERS_TO_START;
+
+    if (leaver && this.status === 'playing') {
+      if (tooFew) {
+        // The last opponent walked out: whoever is left wins by forfeit.
+        this.forfeitMatch(leaver);
       } else if (wasCurrent) {
         // The player on turn walked away — hand the turn on rather than stall.
         this.passTurn();
       }
+    } else if (leaver && this.status === 'ended' && tooFew) {
+      // Nobody is left to rematch, so the result screen has nothing to wait
+      // for. Back to waiting, and tell whoever is still here why.
+      this.abandonMatch();
+      this.out.notice(`${leaver.nickname} left the room.`);
     }
 
     if (this.status === 'ended') this.settleRematch();
@@ -328,6 +378,43 @@ export class MatchManager {
     this.winnerId = null;
     this.rematchVotes.clear();
     this.promoteSpectators();
+  }
+
+  /**
+   * Ends the match in favour of the one player still seated. The leaver takes
+   * the loss (and, in ranked, the rating hit), and the winner starts the next
+   * match. The room returns to waiting for a new opponent. Being kicked or
+   * banned mid-match counts the same as leaving.
+   */
+  private forfeitMatch(leaver: Occupant): void {
+    const winner = this.seatedPlayers()[0];
+    if (!winner) {
+      this.abandonMatch();
+      return;
+    }
+
+    this.timer.stop();
+    winner.totalScore += winner.score;
+    this.winnerId = winner.id;
+    this.lastWinnerId = winner.id;
+    this.applyRatings([winner, leaver], winner.id);
+
+    const notice: ForfeitNotice = {
+      roomId: this.roomId,
+      winnerId: winner.id,
+      winnerNickname: winner.nickname,
+      leaverNickname: leaver.nickname,
+      players: [winner, leaver].map((p) => ({
+        id: p.id,
+        nickname: p.nickname,
+        score: p.score,
+        eloDelta: p.eloDelta,
+      })),
+    };
+    const result = this.takeResult();
+
+    this.abandonMatch();
+    this.out.matchForfeited(notice, result);
   }
 
   /** Fills free seats from the spectators who may take one, oldest first. */
@@ -425,7 +512,7 @@ export class MatchManager {
    * immediately; writing them to Supabase is the server's job and may fail
    * without breaking the game.
    */
-  private applyRatings(seated: Occupant[]): void {
+  private applyRatings(seated: Occupant[], forfeitWinnerId?: string): void {
     this.lastResult = null;
     if (seated.length < MIN_PLAYERS_TO_START) return;
 
@@ -435,7 +522,8 @@ export class MatchManager {
         id: p.id,
         rating: p.elo,
         gamesPlayed: p.gamesPlayed,
-        score: p.score,
+        // A forfeit is decided by who stayed, not by mines found so far.
+        score: forfeitWinnerId ? (p.id === forfeitWinnerId ? 1 : 0) : p.score,
         isGuest: p.isGuest,
       })),
       ranked,

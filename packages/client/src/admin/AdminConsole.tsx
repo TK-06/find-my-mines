@@ -19,7 +19,8 @@ type PendingAction =
  *   - "The server has a reset button to reset the game and players' scores."
  *
  * The same information is also printed to the server's stdout. Only the
- * server machine itself, or an admin account, is let in.
+ * server machine itself, an admin account, or the server's ADMIN_TOKEN (when
+ * set) is let in.
  */
 export function AdminConsole() {
   const admin = useAdmin();
@@ -241,7 +242,8 @@ function LockedConsole() {
           <h2>Admin only</h2>
           <p>
             The server console opens on the server machine itself, or for an account listed as an
-            admin. Sign in with an admin account on the game page, then come back.
+            admin. Sign in with an admin account on the game page, then come back — or, if the
+            server sets an admin token, open this page as <code>/admin?token=…</code>.
           </p>
           <a className="button-link" href="/">
             Go to the game

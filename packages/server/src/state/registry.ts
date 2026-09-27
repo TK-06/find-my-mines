@@ -1,5 +1,7 @@
 import type { ClientInfo, Seat } from '@fmm/shared';
 
+const UNNAMED = '(joining…)';
+
 /**
  * Every currently-connected game client.
  *
@@ -14,7 +16,7 @@ export class ClientRegistry {
   add(id: string, address: string): void {
     this.clients.set(id, {
       id,
-      nickname: '(joining…)',
+      nickname: UNNAMED,
       seat: 'spectator',
       connectedAt: Date.now(),
       address,

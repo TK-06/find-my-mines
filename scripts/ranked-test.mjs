@@ -3,6 +3,7 @@
  *
  * Creates two real (confirmed) accounts, signs them in, plays a ranked match
  * over sockets, then checks that the match was written and both ratings moved.
+ * Forfeits (leaving or an admin kick mid-match) must be rated the same way.
  * Also checks the server console's account-based access (migration 0002).
  *
  * Needs Supabase credentials AND a running server. Skips cleanly without them,
@@ -289,6 +290,84 @@ check('a casual match did not count as a game played',
 const { data: casualMatch } = await admin.from('matches').select('id, mode').eq('room_id', casual.roomId);
 check('the casual match was still recorded in history', (casualMatch?.length ?? 0) === 1);
 
+// ── a forfeit in ranked is rated like any other result ──────────────────────
+// Leaving mid-match, and being kicked or banned mid-match, all hand the other
+// player the win — and in ranked, both ratings move.
+const consoleSocket = await new Promise((resolve, reject) => {
+  // From the server machine, with no forwarding header: no account needed.
+  const socket = io(`${URL}/admin`, { transports: ['websocket'], forceNew: true });
+  socket.once('connect', () => resolve(socket));
+  socket.once('connect_error', reject);
+});
+
+const profilesNow = async () => {
+  const { data } = await admin
+    .from('profiles')
+    .select('id, elo, games_played')
+    .in('id', accounts.map((a) => a.id));
+  return Object.fromEntries((data ?? []).map((p) => [p.id, p]));
+};
+
+const forfeitMatchIds = [];
+
+async function rankedForfeit(label, removeB) {
+  sockA.emit('room:leave');
+  sockB.emit('room:leave');
+  await sleep(300);
+  const before = await profilesNow();
+
+  const room = await emitAck(sockA, 'room:create', {
+    name: label,
+    config: { rows: 6, cols: 6, mineCount: 11, maxPlayers: 2, mode: 'ranked' },
+  });
+  await emitAck(sockB, 'room:join', { roomId: room.roomId });
+  const began = waitFor(sockA, 'match:start');
+  sockA.emit('game:start');
+  await began;
+
+  const forfeit = waitFor(sockA, 'match:forfeit', 5000).catch(() => null);
+  const recorded = waitFor(sockA, 'match:recorded', 30000).catch(() => null);
+  await removeB();
+  const notice = await forfeit;
+  const saved = await recorded;
+  await sleep(1500);
+  const after = await profilesNow();
+
+  const [a, b] = accounts.map((acc) => acc.id);
+  const winnerSeat = notice?.players.find((p) => p.id === joinA.playerId);
+  check(`${label}: the player left behind wins by forfeit`,
+    notice?.winnerId === joinA.playerId && (winnerSeat?.eloDelta ?? 0) > 0,
+    notice ? `${notice.winnerNickname}, ${winnerSeat?.eloDelta}` : 'no match:forfeit');
+  check(`${label}: ratings move in the database — winner up, the one removed down`,
+    after[a]?.elo > before[a]?.elo && after[b]?.elo < before[b]?.elo,
+    `${before[a]?.elo}→${after[a]?.elo}, ${before[b]?.elo}→${after[b]?.elo}`);
+  check(`${label}: it counts as a ranked game for both`,
+    after[a]?.games_played === before[a]?.games_played + 1 &&
+      after[b]?.games_played === before[b]?.games_played + 1);
+
+  const { data: rows } = await admin
+    .from('matches')
+    .select('id, mode, winner_profile_id')
+    .eq('room_id', room.roomId);
+  forfeitMatchIds.push(...(rows ?? []).map((r) => r.id));
+  check(`${label}: saved as a ranked match with the winner, and its id reported`,
+    rows?.length === 1 && rows[0].mode === 'ranked' && rows[0].winner_profile_id === a &&
+      saved?.matchId === rows[0].id,
+    JSON.stringify(rows));
+}
+
+await rankedForfeit('leaving mid-match', async () => {
+  sockB.emit('room:leave');
+});
+await rankedForfeit('an admin kick mid-match', async () => {
+  const kicked = await emitAck(consoleSocket, 'admin:kick', {
+    clientId: joinB.playerId,
+    note: { reasons: ['afk'], remark: 'ranked test' },
+  });
+  if (!kicked?.ok) check('admin kick accepted', false, kicked?.error ?? 'no ack');
+});
+consoleSocket.close();
+
 // ── server console access by account ────────────────────────────────────────
 // A forwarding header makes the connection look remote, so the server-machine
 // exception does not apply: only the admins table can let it in.
@@ -338,7 +417,7 @@ if (addAdminError) {
 
 // ── cleanup ─────────────────────────────────────────────────────────────────
 for (const socket of [sockA, sockB]) socket.close();
-for (const id of [matchId, casualMatch?.[0]?.id].filter(Boolean)) {
+for (const id of [matchId, casualMatch?.[0]?.id, ...forfeitMatchIds].filter(Boolean)) {
   await admin.from('matches').delete().eq('id', id);
 }
 for (const account of accounts) {

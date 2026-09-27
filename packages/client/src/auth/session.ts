@@ -23,12 +23,15 @@ export function identityChanged(known: string | null | undefined, next: string |
  * socket.io calls this when the connection opens (and on every reconnect), so
  * the handshake always carries the current token — no race with the session
  * being restored from storage, and refreshed tokens are picked up for free.
+ *
+ * `extra` rides along in every handshake, token or not — the tab's session id
+ * for reconnecting to a held seat, or the console's ADMIN_TOKEN.
  */
-export function tokenAuth(getToken: () => Promise<string | undefined>) {
+export function tokenAuth(getToken: () => Promise<string | undefined>, extra: object = {}) {
   return (send: (data: object) => void): void => {
     getToken().then(
-      (token) => send(token ? { accessToken: token } : {}),
-      () => send({}),
+      (token) => send(token ? { ...extra, accessToken: token } : { ...extra }),
+      () => send({ ...extra }),
     );
   };
 }

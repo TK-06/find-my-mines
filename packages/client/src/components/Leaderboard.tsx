@@ -52,6 +52,8 @@ export function Leaderboard({ state, myId, moderation }: Props) {
 
   return (
     <div className="stack">
+      {/* Only meaningful while a turn is running; hidden in the waiting room. */}
+      {state.status === 'playing' && (
       <div className={`timer wide-timer ${urgent ? 'urgent' : ''}`}>
         <div className="label">
           {state.status === 'playing' ? 'TIME LEFT THIS TURN' : 'TURN TIMER'}
@@ -67,6 +69,7 @@ export function Leaderboard({ state, myId, moderation }: Props) {
           />
         </div>
       </div>
+      )}
 
       <div className="card">
         <div className="lobby-head" style={{ marginBottom: 12 }}>
@@ -98,6 +101,7 @@ export function Leaderboard({ state, myId, moderation }: Props) {
                   {player.nickname}
                   {isMe && <span className="tag me">you</span>}
                   {isHost && <span className="tag host">host</span>}
+                  {!player.connected && <span className="tag away">reconnecting</span>}
                   {onTurn && state.status === 'playing' && (
                     <span className="tag turn">on turn</span>
                   )}

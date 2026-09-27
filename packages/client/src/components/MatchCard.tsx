@@ -39,7 +39,7 @@ export function MatchCard({ match, highlightProfileId, highlightGuestName }: Pro
                 <span className="seat-place">{seat.placement}</span>
                 <span className="seat-name">
                   {seat.display_name}
-                  {won && ' 👑'}
+                  {won && <span className="tag winner">winner</span>}
                   {seat.is_guest && <span className="tag spectator">guest</span>}
                   {isMe && <span className="tag me">you</span>}
                 </span>

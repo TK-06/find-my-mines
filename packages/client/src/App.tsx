@@ -10,7 +10,7 @@ import { Leaderboard } from './components/Leaderboard.js';
 import { OnlinePanel } from './components/OnlinePanel.js';
 import { QueuePanel } from './components/QueuePanel.js';
 import { ReasonDialog } from './components/ReasonDialog.js';
-import { ResultOverlay } from './components/ResultOverlay.js';
+import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
 import { NavBar, useRoute, type Route } from './router.js';
 import { AuthScreen } from './screens/AuthScreen.js';
 import { GameLogScreen } from './screens/GameLogScreen.js';
@@ -19,7 +19,7 @@ import { LobbyScreen } from './screens/LobbyScreen.js';
 import { ProfileScreen } from './screens/ProfileScreen.js';
 import { RemovedScreen } from './screens/RemovedScreen.js';
 import { useTheme } from './theme.js';
-import { useGame } from './useGame.js';
+import { forgetStoredGuest, storedGuestName, useGame } from './useGame.js';
 
 export function App() {
   const {
@@ -41,8 +41,10 @@ export function App() {
     isGuest,
     elo,
     queue,
+    forfeit,
     error,
     join,
+    forgetGuest,
     createRoom,
     joinRoom,
     spectateRoom,
@@ -52,6 +54,7 @@ export function App() {
     startMatch,
     reveal,
     rematch,
+    dismissForfeit,
   } = useGame();
 
   const [signedIn, setSignedIn] = useState(false);
@@ -72,6 +75,12 @@ export function App() {
     if (inRoom) setJoinTarget(null);
   }, [inRoom]);
 
+  // A dropped connection loses any pending request on the server, so the
+  // dialog would wait forever. Close it; the player can ask again.
+  useEffect(() => {
+    if (!connected) setJoinTarget(null);
+  }, [connected]);
+
   /** Join from the game list or the online list: ask first where the room requires it. */
   const handleJoin = (roomId: string) => {
     const room = rooms.find((r) => r.id === roomId);
@@ -89,8 +98,11 @@ export function App() {
   useEffect(() => {
     if (removed?.kind !== 'banned' || bannedRef.current) return;
     bannedRef.current = true;
-    // "Log in again" means it: a banned account is signed out in this browser.
+    // "Log in again" means it: a banned account is signed out in this browser,
+    // and a banned guest's remembered name is forgotten, so neither is let
+    // straight back in by a reload.
     if (signOutAfterRemoval(removed, isGuest)) void supabase?.auth.signOut();
+    if (isGuest) forgetStoredGuest();
   }, [removed, isGuest]);
 
   /**
@@ -134,6 +146,12 @@ export function App() {
   useEffect(() => {
     if (ready && signedIn && !named && connected) join('');
   }, [ready, signedIn, named, connected, join]);
+
+  // A guest who already picked a name is let straight back in after a refresh.
+  const guestName = storedGuestName();
+  useEffect(() => {
+    if (ready && !signedIn && !named && connected && guestName) join(guestName);
+  }, [ready, signedIn, named, connected, guestName, join]);
 
   // Profile, rankings and the game log read public data, so they work before a
   // nickname is chosen. Only the game itself needs an identity.
@@ -180,11 +198,11 @@ export function App() {
   if (!named) {
     return (
       <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
-        {ready ? (
+        {ready && !(guestName && !signedIn) ? (
           <AuthScreen connected={connected} onGuest={join} />
         ) : (
           <div className="center-screen">
-            <p className="muted">Checking your session…</p>
+            <p className="muted">{connected ? 'Signing you back in…' : 'Connecting to the server…'}</p>
           </div>
         )}
       </Shell>
@@ -194,18 +212,21 @@ export function App() {
   if (!state) {
     return (
       <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
-        <div className="lobby-layout">
-          <div className="stack">
-            <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
-            <LobbyScreen
-              rooms={rooms}
-              clientCount={clientCount}
-              onCreate={createRoom}
-              onJoin={handleJoin}
-              onSpectate={spectateRoom}
-            />
+        <div className="stack">
+          <IdentityBar isGuest={isGuest} elo={elo} onForgetGuest={forgetGuest} />
+          <div className="lobby-layout">
+            <div className="stack">
+              <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
+              <LobbyScreen
+                rooms={rooms}
+                clientCount={clientCount}
+                onCreate={createRoom}
+                onJoin={handleJoin}
+                onSpectate={spectateRoom}
+              />
+            </div>
+            <OnlinePanel online={online} myId={playerId} rooms={rooms} onJoin={handleJoin} />
           </div>
-          <OnlinePanel online={online} myId={playerId} rooms={rooms} onJoin={handleJoin} />
         </div>
 
         {joinTarget && (
@@ -240,9 +261,9 @@ export function App() {
     : undefined;
 
   return (
-    <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+    <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
       <div className="stack">
-        <IdentityBar isGuest={isGuest} elo={elo} />
+        <IdentityBar isGuest={isGuest} elo={elo} onForgetGuest={forgetGuest} />
         <div className="room-bar card">
           <div>
             <span className="room-code">{state.roomId}</span>
@@ -275,15 +296,16 @@ export function App() {
 
         {state.status === 'playing' && !isSpectator && (
           <div className={`banner ${myTurn ? 'you-turn' : 'wait'}`}>
-            {myTurn ? 'Your turn — find a mine!' : 'Waiting for the other player…'}
+            {myTurn ? 'Your turn. Pick a slot.' : `${state.players.find((p) => p.id === state.currentPlayerId)?.nickname ?? 'Another player'} is picking…`}
           </div>
         )}
 
-        <Leaderboard state={state} myId={playerId} moderation={moderation} />
-
-        {state.status !== 'waiting' && (
-          <Board state={state} myTurn={myTurn && !isSpectator} onReveal={reveal} />
-        )}
+        <div className={`play-area ${state.status === 'waiting' ? 'no-board' : ''}`}>
+          {state.status !== 'waiting' && (
+            <Board state={state} myTurn={myTurn && !isSpectator} onReveal={reveal} />
+          )}
+          <Leaderboard state={state} myId={playerId} moderation={moderation} />
+        </div>
       </div>
 
       {isHost && <JoinRequestToasts requests={state.joinRequests} onAnswer={answerJoinRequest} />}
@@ -302,7 +324,11 @@ export function App() {
         />
       )}
 
-      {state.status === 'ended' && (
+      {forfeit && (
+        <ForfeitOverlay notice={forfeit} myId={playerId} onStay={dismissForfeit} onLeave={leaveRoom} />
+      )}
+
+      {state.status === 'ended' && !forfeit && (
         <ResultOverlay
           state={state}
           myId={playerId}
@@ -315,16 +341,28 @@ export function App() {
   );
 }
 
-function IdentityBar({ isGuest, elo }: { isGuest: boolean; elo: number }) {
+function IdentityBar({
+  isGuest,
+  elo,
+  onForgetGuest,
+}: {
+  isGuest: boolean;
+  elo: number;
+  onForgetGuest: () => void;
+}) {
   const client = supabase;
   return (
     <div className="identity-bar">
-      <span className={`tag ${isGuest ? 'spectator' : 'player'}`}>
-        {isGuest ? 'guest' : 'signed in'}
+      <span className="elo-badge">
+        <strong>{elo}</strong> Elo
       </span>
-      <span className="muted">
-        {elo} Elo{isGuest && ' · not saved between visits'}
-      </span>
+      <span className="tag">{isGuest ? 'guest' : 'signed in'}</span>
+      {isGuest && <span className="muted">Guest ratings aren’t saved</span>}
+      {isGuest && (
+        <button className="ghost small" onClick={onForgetGuest}>
+          Change name
+        </button>
+      )}
       {!isGuest && client && (
         <button
           className="ghost small"
@@ -359,10 +397,7 @@ function Shell({
   return (
     <div className="app">
       <header className="header">
-        <div>
-          <h1 className="title">Find My Mines</h1>
-          <p className="subtitle">Net-Centric · client–server over Socket.IO</p>
-        </div>
+        <h1 className="title">Find My Mines</h1>
         <div className="header-right">
           <NavBar route={route} onNavigate={onNavigate} />
           <button
@@ -370,16 +405,16 @@ function Shell({
             onClick={onToggleTheme}
             title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
           >
-            {theme === 'dark' ? '☀ Light' : '☾ Dark'}
+            {theme === 'dark' ? 'Light' : 'Dark'}
           </button>
           <span className={`conn ${connected ? 'online' : 'offline'}`}>
-            {connected ? '● connected' : '● disconnected'}
+            {connected ? 'Online' : 'Offline'}
           </span>
         </div>
       </header>
 
       {/* Spec: "a welcome message with their nickname will appear" */}
-      {welcome && <div className="banner">{welcome}</div>}
+      {welcome && <p className="welcome">{welcome}</p>}
 
       {children}
 

@@ -6,8 +6,10 @@ Update this file whenever a feature lands.
 New to the project? Read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, the rules, and
 how work is split.
 
-**Last updated:** 2026-09-28 — join requests, guest game log, Classic kept to the original rules,
-and a fix for signed-in tabs reloading each other forever. AI bot still on hold.
+**Last updated:** 2026-09-28 — merged Chain's fork (Vercel + Render hosting, flat redesign,
+forfeit wins, 30 s reconnect grace, guests surviving a refresh, sign-up help, `ADMIN_TOKEN`)
+with the join requests, guest game log and console work, and fixed ratings drifting after a
+player's first ranked room. AI bot still on hold.
 
 ---
 
@@ -45,8 +47,10 @@ it is visible in the terminal without a browser.
 
 Since 2026-09-27 the console also has a **terminal panel** (raw connect / disconnect / room
 events, optional game traffic), a **game viewer** with a mine toggle, and **kick / ban / end
-game** with reasons. It opens on the server machine with no login, or for an account listed in
-`public.admins` from anywhere else. Design: `docs/specs/2026-09-27-admin-and-online-list.md`.
+game** with reasons. It opens on the server machine with no login, for an account listed in
+`public.admins` from anywhere else, or — when the server sets `ADMIN_TOKEN` — as
+`/admin?token=<value>`. An unset token never opens it. Design:
+`docs/specs/2026-09-27-admin-and-online-list.md`; hosting table in `DEPLOY.md`.
 
 ### (a) Demo and creativity — 5 points
 
@@ -79,7 +83,7 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | 13 | Leaderboard | **Done** | Live in-match ranking **and** the persistent `/ranks` page |
 | 14 | Leave button | **Done** | Plus host succession and room cleanup |
 | 15 | Private room, invite | **Partly done** | **Ask to join** is built (Custom rooms; the host accepts or declines from a popup). Invite cards in world chat and share links come with chat; link testing waits for hosting (§4) |
-| 16 | Online, friends | **Online list done** | Lobby shows everyone connected and where they are. Friends not started |
+| 16 | Online, friends | **Online list done** | Lobby shows everyone connected and where they are. Friends not started. (Chain built the same list independently; the merge kept this one, which adds guest tags and Join / Ask buttons) |
 
 ### Also built (not in the original 14)
 
@@ -94,6 +98,13 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | Ask to join | **Done 2026-09-28** | Custom rooms can require the host's approval: request dialog (Cancel / Request / ×), host popup with Accept / Decline, also reachable from the Online now list. Spec: `docs/specs/2026-09-28-join-requests-and-guest-log.md` |
 | Guest game log | **Done 2026-09-28** | "Mine" works for guests: the server sends each seat the saved match id and the browser remembers it |
 | Classic stays original | **Done 2026-09-28** | A 6×6 / 11-mine / 2-player room always lets anyone join and has no host kick or ban — exactly the assignment |
+| Hosted build | **Done — Chain** | Client on Vercel, game server on Render (`vercel.json`, `render.yaml`, `DEPLOY.md`). `PUBLIC_SERVER_URL` / `VITE_SERVER_URL` point the client at it; the LAN setup is unchanged |
+| Flat redesign | **Done — Chain** | Grey and ink palette, light and dark, one orange accent for "your turn"; survey-grid board with a draining clock line; self-hosted fonts so the LAN demo works offline. The console, dialogs and online list were restyled to match in the merge |
+| Forfeit wins | **Done — Chain** | Leaving mid-match hands the other player the win, **rated in Ranked**. Merge decision: being kicked or banned mid-match counts the same as leaving. An admin *ending* a game still records nothing |
+| Reconnect grace | **Done — Chain** | A seated player who drops keeps their seat, score and turn for 30 s and takes it back from the same tab. Merge rules: only the same player gets it back (a tab returning as someone else gives it up at once), and kicking a player whose seat is held frees it |
+| Guest survives refresh | **Done — Chain** | The guest name is remembered per tab. A banned guest's name is forgotten, as a banned account is signed out |
+| Sign-up help | **Done — Chain** | Explains Supabase's silent "already registered" sign-up, rewrites rate-limit errors, adds "Resend confirmation email" |
+| Admin token | **Done — Chain** | `ADMIN_TOKEN` as a third way into `/admin`, compared in constant time. Unset closes that route only |
 | Casual vs Ranked modes | **Done** | Elo only moves in Ranked |
 | Matchmaking pool on the console | **Done** | `/admin` shows who is queued, their rating, wait and current window |
 | Contributor guide | **Done** | `CONTRIBUTING.md` — setup, rules, work split, gotchas |
@@ -132,6 +143,13 @@ timer and matchmaking tick are contained too, database lookups time out after 5 
 continues as a guest), and a last-resort process guard logs instead of exiting. A port conflict
 still exits with a clear message. The e2e suite sends garbage to every event and checks the
 server keeps answering.
+
+**Fixed 2026-09-28 — ratings drifting after a player's first ranked room.** The server read a
+player's rating once, at sign-in, and never updated it. A second ranked match in a new room
+(or a matchmaking pairing) started from the sign-in rating and saved a result computed from it
+over the real one — two wins in a row could leave the database showing one. Found while testing
+the forfeit merge; each rated result now carries into the player's session (`carryRatings`), and
+`test:ranked` plays three ranked matches in different rooms to hold it.
 
 **Fixed 2026-09-28 — signed-in tabs reloading each other forever.** supabase-js broadcasts
 `SIGNED_IN` to every other tab whenever a tab loads with a stored session; the client reloaded
@@ -246,8 +264,9 @@ Ordered by marks per hour of work.
    Google is the only feature currently parked. See "When you deploy" under Social sign-in.
    Vercel was considered and ruled out for the game server: its WebSockets close at the
    function's max duration and new connections can land on a different instance, while this
-   server keeps every room in one process's memory. For temporary public access before AWS,
-   run a Cloudflare quick tunnel from the server laptop.
+   server keeps every room in one process's memory. **Interim hosting exists (Chain):** client
+   on Vercel, server on Render — see `DEPLOY.md`. For temporary public access from the server
+   laptop, a Cloudflare quick tunnel also works.
 10. **Resume Google OAuth** — after the domain exists: add the three consent-screen links,
     set the authorized domain, publish, then set `VITE_OAUTH_PROVIDERS=google,github`.
 
@@ -259,7 +278,7 @@ Decided 2026-09-27. Each of these needs a public server, so revisit them once ho
 |---|---|
 | **AWS stats on the server console** — CPU, memory and network from CloudWatch, shown alongside the socket stats | Needs the EC2 instance to exist |
 | **Test invite links end to end** — copy link, LINE share, phone share sheet | A link only works when the server has a public address |
-| **Admin password** (`ADMIN_PASSWORD`) as a second way into `/admin` | Admin access is account-based for now; a password comes later |
+| ~~**Admin password** as another way into `/admin`~~ | **Done** — Chain's `ADMIN_TOKEN` (see "Admin token" above) |
 
 ### v1.0.0 MVP
 
@@ -291,22 +310,28 @@ Every claim of "done" above is backed by a command that can be re-run.
 
 ```
 npm run typecheck   # clean across all three packages
-npm test            # 223 unit tests: engine, room config, Elo, matchmaking, moderation,
-                    #   join requests, presence, admin access check, activity log,
-                    #   handler safety, session handling, guest history, formatting
-npm run test:e2e    # 130 socket assertions — needs a running server
-npm run test:ranked # 32 assertions against the real database — needs a server + credentials
+npm test            # 239 unit tests: engine, room config, Elo, matchmaking, moderation,
+                    #   join requests, presence, admin access check (incl. ADMIN_TOKEN),
+                    #   activity log, handler safety, seat-hold identity, session
+                    #   handling, guest history, formatting
+npm run test:e2e    # 152 socket assertions — needs a running server; ~30 s of it is the
+                    #   reconnect grace period running out
+npm run test:ranked # 40 assertions against the real database — needs a server + credentials
                     #   and migration 0002 (applied)
 ```
 
 The e2e suite covers the online list, host and admin moderation, join requests (ask, cancel,
-accept, decline, room closing, no approval bypass through spectating), Classic staying open with
-no host kick, the admin game viewer and mine toggle (mines reach the admin socket only), the
-terminal log, a remote-looking console connection being refused with `ADMIN_ONLY`, and garbage
-payloads on every game and console event leaving the server running.
+accept, decline, room closing, no approval bypass through spectating, "accepted" arriving before
+the room's state), Classic staying open with no host kick, forfeits and leaving after a match,
+the reconnect grace period (held seat, resume, expiry), a tab returning as someone else, kicking
+a player whose seat is held, the admin game viewer and mine toggle (mines reach the admin socket
+only), the terminal log, remote console connections being refused with `ADMIN_ONLY` (with or
+without a guessed token when none is set), and garbage payloads on every game and console event
+leaving the server running.
 
-`test:ranked` creates two confirmed accounts, plays a ranked match and a casual one, checks
-that the rows landed and the ratings moved, then deletes everything it made.
+`test:ranked` creates two confirmed accounts, plays a ranked match and a casual one, then two
+ranked forfeits (leaving, and an admin kick) in new rooms, checks that the rows landed and the
+ratings moved correctly each time, then deletes everything it made.
 
 Two regression gates:
 

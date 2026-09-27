@@ -11,6 +11,7 @@ import {
 import type { Namespace, Socket } from 'socket.io';
 import type { RoomManager } from '../rooms/roomManager.js';
 import { contain, respond, settleWithin } from '../safety.js';
+import { ADMIN_TOKEN } from '../config.js';
 import { adminAccountFromToken } from '../supabase.js';
 import { adminAccess, ownAddresses } from './access.js';
 import type { ActivityLog } from './activityLog.js';
@@ -99,14 +100,14 @@ export function attachAdminNamespace(deps: AdminDeps): AdminConsole {
     setImmediate(flush);
   }
 
-  // ── access: the server machine, or an admin account ────────────────────
+  // ── access: the server machine, ADMIN_TOKEN, or an admin account ──────
   // An unreachable database must not leave the console hanging: after a few
   // seconds the account lookup counts as "not an admin".
   const lookupAdmin = (token: string | undefined) =>
     settleWithin(adminAccountFromToken(token), ADMIN_LOOKUP_TIMEOUT_MS, null);
 
   adminIo.use((socket, next) => {
-    void adminAccess(socket.handshake, ownAddresses(), lookupAdmin)
+    void adminAccess(socket.handshake, ownAddresses(), lookupAdmin, ADMIN_TOKEN)
       .then((access) => {
         if (access) {
           socket.data.access = access;

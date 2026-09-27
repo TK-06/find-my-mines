@@ -4,6 +4,9 @@ import { AdminConsole } from './admin/AdminConsole.js';
 import { App } from './App.js';
 import { routeFromPath } from './router.js';
 import { applyTheme, initialTheme } from './theme.js';
+// Self-hosted so the LAN demo renders the same with no internet access.
+import '@fontsource-variable/archivo/wdth.css';
+import '@fontsource-variable/jetbrains-mono/wght.css';
 import './styles.css';
 
 // Applied before the first paint so the page never flashes the wrong theme.

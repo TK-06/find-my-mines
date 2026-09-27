@@ -84,4 +84,40 @@ describe('adminAccess', () => {
     await adminAccess({ ...remote, auth: { accessToken: 42 } }, OWN, lookup);
     expect(received).toBeUndefined();
   });
+
+  describe('with ADMIN_TOKEN', () => {
+    const SECRET = 'correct-horse-battery-staple';
+    const noAccount = async () => null;
+
+    it('lets a remote connection in when its handshake carries the token', async () => {
+      const withToken = { ...remote, auth: { token: SECRET } };
+      expect(await adminAccess(withToken, OWN, noAccount, SECRET)).toBe('admin token');
+    });
+
+    it('refuses a wrong token', async () => {
+      const wrong = { ...remote, auth: { token: 'guess' } };
+      expect(await adminAccess(wrong, OWN, noAccount, SECRET)).toBeNull();
+    });
+
+    it('refuses a token that is not a string', async () => {
+      const odd = { ...remote, auth: { token: { toString: () => SECRET } } };
+      expect(await adminAccess(odd, OWN, noAccount, SECRET)).toBeNull();
+    });
+
+    it('never opens the console when no token is configured — an empty token is not a password', async () => {
+      const empty = { ...remote, auth: { token: '' } };
+      expect(await adminAccess(empty, OWN, noAccount, '')).toBeNull();
+      expect(await adminAccess(remote, OWN, noAccount)).toBeNull();
+    });
+
+    it('still lets an admin account in without the token', async () => {
+      const lookup = async (token: string | undefined) => (token === 'tok' ? 'owner@example.com' : null);
+      expect(await adminAccess(remote, OWN, lookup, SECRET)).toBe('owner@example.com');
+    });
+
+    it('still lets the server machine in without the token', async () => {
+      const local = { address: '127.0.0.1', headers: {}, auth: {} };
+      expect(await adminAccess(local, OWN, noAccount, SECRET)).toBe('server machine');
+    });
+  });
 });

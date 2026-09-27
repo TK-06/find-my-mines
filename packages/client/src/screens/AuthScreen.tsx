@@ -24,6 +24,8 @@ export function AuthScreen({ onGuest, connected }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /** An address waiting on its confirmation email, so it can be re-sent. */
+  const [unconfirmed, setUnconfirmed] = useState<string | null>(null);
 
   async function withSupabase(action: () => Promise<{ error: { message: string } | null }>) {
     if (!supabase) return;
@@ -36,18 +38,59 @@ export function AuthScreen({ onGuest, connected }: Props) {
   }
 
   const signIn = () =>
-    withSupabase(() => supabase!.auth.signInWithPassword({ email, password }));
+    withSupabase(async () => {
+      const result = await supabase!.auth.signInWithPassword({ email, password });
+      if (result.error?.message.toLowerCase().includes('not confirmed')) {
+        setUnconfirmed(email);
+        return { error: { message: 'Confirm your email first. Use the link we sent, or resend it below.' } };
+      }
+      return result;
+    });
 
   const signUp = () =>
     withSupabase(async () => {
       const result = await supabase!.auth.signUp({
         email,
         password,
-        options: { data: { username: nickname.trim() || undefined } },
+        options: {
+          data: { username: nickname.trim() || undefined },
+          // Without this the confirmation link uses Supabase's Site URL, which
+          // defaults to localhost. The origin must also be in Supabase's
+          // Redirect URLs allow-list, or Supabase falls back to the Site URL.
+          emailRedirectTo: window.location.origin,
+        },
       });
-      if (!result.error && !result.data.session) {
-        setNotice('Check your email to confirm the account, then sign in.');
+      if (result.error) return { error: { message: explainAuthError(result.error.message) } };
+
+      // Supabase answers an already-registered address with a fake success
+      // and sends nothing (so strangers cannot probe which emails exist). The
+      // tell is a user with no identities.
+      if (result.data.user && result.data.user.identities?.length === 0) {
+        setUnconfirmed(email);
+        return {
+          error: {
+            message:
+              'That email already has an account. Sign in instead. If it was never confirmed, resend the email below.',
+          },
+        };
       }
+
+      if (!result.data.session) {
+        setUnconfirmed(email);
+        setNotice(`Confirmation email sent to ${email}. Check your inbox and spam folder.`);
+      }
+      return result;
+    });
+
+  const resend = () =>
+    withSupabase(async () => {
+      const result = await supabase!.auth.resend({
+        type: 'signup',
+        email: unconfirmed ?? email,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      if (result.error) return { error: { message: explainAuthError(result.error.message) } };
+      setNotice(`Sent again to ${unconfirmed ?? email}. Check your inbox and spam folder.`);
       return result;
     });
 
@@ -159,7 +202,12 @@ export function AuthScreen({ onGuest, connected }: Props) {
         )}
 
         {error && <p className="form-error">{error}</p>}
-        {notice && <p className="muted">{notice}</p>}
+        {notice && <p className="muted form-notice">{notice}</p>}
+        {unconfirmed && tab !== 'guest' && (
+          <button type="button" className="ghost wide" disabled={busy} onClick={() => void resend()}>
+            Resend confirmation email
+          </button>
+        )}
         {!authEnabled && (
           <p className="muted" style={{ marginBottom: 0 }}>
             Accounts are off — no Supabase configuration found.
@@ -168,4 +216,16 @@ export function AuthScreen({ onGuest, connected }: Props) {
       </div>
     </div>
   );
+}
+
+/** Supabase's auth errors, rewritten to say what to do next. */
+function explainAuthError(message: string): string {
+  const m = message.toLowerCase();
+  if (m.includes('rate limit')) {
+    return 'Too many emails sent in the last hour. Wait a while and try again, or play as a guest for now.';
+  }
+  if (m.includes('not authorized')) {
+    return 'This address can’t receive sign-up emails yet. The project’s email sender only reaches team members until a custom email service is set up.';
+  }
+  return message;
 }

@@ -47,4 +47,26 @@ describe('tokenAuth', () => {
       }),
     ).toEqual({});
   });
+
+  describe('with extra handshake fields', () => {
+    const extra = { sessionId: 'tab-1234567890abcdef' };
+    const withExtra = (getToken: () => Promise<string | undefined>) =>
+      new Promise<object>((resolve) => tokenAuth(getToken, extra)(resolve));
+
+    it('sends them alongside the access token', async () => {
+      expect(await withExtra(async () => 'tok')).toEqual({ ...extra, accessToken: 'tok' });
+    });
+
+    it('still sends them for a guest — a guest can hold a seat through a reconnect too', async () => {
+      expect(await withExtra(async () => undefined)).toEqual(extra);
+    });
+
+    it('still sends them when the session lookup fails', async () => {
+      expect(
+        await withExtra(async () => {
+          throw new Error('storage unavailable');
+        }),
+      ).toEqual(extra);
+    });
+  });
 });

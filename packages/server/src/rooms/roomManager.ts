@@ -86,6 +86,14 @@ export class RoomManager {
     this.memberRoom.set(clientId, roomId);
   }
 
+  /** Moves a held seat's membership from a dropped socket to its replacement. */
+  retrack(oldId: string, newId: string): void {
+    const roomId = this.memberRoom.get(oldId);
+    if (!roomId) return;
+    this.memberRoom.delete(oldId);
+    this.memberRoom.set(newId, roomId);
+  }
+
   /**
    * Removes a client from whatever room they are in, closing the room if that
    * left it empty. Returns the room they left, so the caller can leave the

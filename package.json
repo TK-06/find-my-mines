@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Find My Mines - a two-player online minesweeper-style game over Socket.IO (Net-Centric course assignment)",
+  "engines": {
+    "node": ">=22.9"
+  },
   "workspaces": [
     "packages/*"
   ],
@@ -23,8 +26,5 @@
     "concurrently": "^9.1.2",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
-  },
-  "engines": {
-    "node": ">=20"
   }
 }

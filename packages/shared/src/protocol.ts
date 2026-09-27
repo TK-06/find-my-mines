@@ -1,6 +1,7 @@
 import type {
   AdminRoomView,
   AdminState,
+  ForfeitNotice,
   JoinRequestOutcome,
   LogLine,
   ModerationResult,
@@ -36,6 +37,8 @@ export interface JoinResult {
   isGuest: boolean;
   /** Current rating; guests always get the starting value. */
   elo: number;
+  /** Set when this join resumed a seat held after a dropped connection. */
+  roomId?: string;
 }
 
 export interface RoomActionResult {
@@ -113,6 +116,10 @@ export interface ServerToClientEvents {
   'turn:tick': (payload: { secondsLeft: number }) => void;
   'match:ended': (state: PublicMatchState) => void;
   'match:reset': (state: PublicMatchState) => void;
+  /** The opponent left mid-match; the remaining player wins by forfeit. */
+  'match:forfeit': (notice: ForfeitNotice) => void;
+  /** Something happened in the room worth a toast, e.g. "Bob left the room." */
+  'room:notice': (payload: { message: string }) => void;
 
   /** Queue progress while waiting. null means no longer queued. */
   'queue:status': (payload: QueueSnapshot | null) => void;
@@ -126,8 +133,9 @@ export interface ServerToClientEvents {
   'player:removed': (notice: RemovalNotice) => void;
 
   /**
-   * Your join request was answered (or the room closed). On 'accepted' you are
-   * already seated; a state:sync for the room arrives alongside this.
+   * Your join request was answered (or the room closed). On 'accepted' the
+   * room's state:sync follows right after this, on the same connection — the
+   * client adopts the room here, so it knows that snapshot is meant for it.
    */
   'room:requestResolved': (payload: {
     roomId: string;
@@ -147,9 +155,9 @@ export interface ServerToClientEvents {
 }
 
 /**
- * The server console's contract. Only the server machine itself, or a verified
- * admin account, may connect — anyone else gets a connect_error with
- * ADMIN_ONLY_ERROR.
+ * The server console's contract. Only the server machine itself, a verified
+ * admin account, or a handshake carrying the server's ADMIN_TOKEN (when one is
+ * set) may connect — anyone else gets a connect_error with ADMIN_ONLY_ERROR.
  */
 export interface AdminToServerEvents {
   /** Spec: "The server has a reset button to reset the game and players' scores." */

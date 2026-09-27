@@ -6,6 +6,7 @@ import { Server, type Namespace, type Socket } from 'socket.io';
 import {
   ADMIN_NAMESPACE,
   CLASSIC_PRESET,
+  RECONNECT_GRACE_SECONDS,
   describeReasons,
   parseRemovalNote,
   presenceOf,
@@ -32,9 +33,10 @@ import { ADVERTISED_HOST, CORS_ORIGIN, HOST, PORT } from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
 import { guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
-import type { MatchBroadcaster, MatchManager } from './match/matchManager.js';
+import type { FinishedMatch, MatchBroadcaster, MatchManager } from './match/matchManager.js';
 import { RoomManager } from './rooms/roomManager.js';
 import { ClientRegistry } from './state/registry.js';
+import { isSamePlayer } from './state/seatHold.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_STARTED_AT = Date.now();
@@ -105,20 +107,10 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
       const winner = state.players.find((p) => p.id === state.winnerId);
       const scores = state.players.map((p) => `${p.nickname} ${p.score}`).join(', ');
       log.add('match', `${roomId} ended — ${winner ? `${winner.nickname} won` : 'a draw'} (${scores})`);
-      // Ratings are already applied in memory; persisting is best-effort and
-      // must never block or break the match that just finished.
       const result = rooms.get(roomId)?.takeResult();
       if (result) {
-        void recordMatch(result)
-          .then((matchId) => {
-            if (!matchId) return;
-            // Each seat learns the saved id, so a guest's browser can list its
-            // own games on the game log.
-            for (const player of result.players) {
-              io.to(player.clientId).emit('match:recorded', { matchId });
-            }
-          })
-          .catch((error: unknown) => console.error('[persist] could not report the saved match:', error));
+        carryRatings(result);
+        persistResult(result);
       }
       watched();
     },
@@ -130,10 +122,60 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
       to().emit('state:sync', state);
       watched();
     },
+    matchForfeited: (notice, result) => {
+      to().emit('match:forfeit', notice);
+      log.add(
+        'match',
+        `${roomId} forfeited — ${notice.winnerNickname} won, ${notice.leaverNickname} left mid-match`,
+      );
+      if (result) {
+        carryRatings(result);
+        persistResult(result);
+      }
+      watched();
+    },
+    notice: (message) => to().emit('room:notice', { message }),
     error: (playerId, code, message) => io.to(playerId).emit('error:msg', { code, message }),
     changed: () => pushUpdates(),
   };
 });
+
+/**
+ * A rated result changes a player's standing for the rest of their session.
+ * The next room they sit in and the matchmaking pool read the rating from
+ * their identity, which was loaded once at sign-in — without this, a second
+ * ranked match started from the connection-time rating and saved a result
+ * computed from it over the real one.
+ */
+function carryRatings(result: FinishedMatch): void {
+  for (const player of result.players) {
+    const identity = identities.get(player.clientId);
+    // Guests keep the fixed starting rating; a dropped seat has no identity left.
+    if (!identity || identity.isGuest) continue;
+    identities.set(player.clientId, {
+      ...identity,
+      elo: player.eloAfter,
+      gamesPlayed: identity.gamesPlayed + (result.mode === 'ranked' ? 1 : 0),
+    });
+  }
+}
+
+/**
+ * Saves a finished or forfeited match. Ratings are already applied in memory;
+ * persisting is best-effort and must never block or break the room. Each seat
+ * learns the saved id, so a guest's browser can list its own games on the game
+ * log.
+ */
+function persistResult(result: FinishedMatch): void {
+  void recordMatch(result)
+    .then((matchId) => {
+      if (!matchId) return;
+      for (const player of result.players) {
+        io.to(player.clientId).emit('match:recorded', { matchId });
+      }
+    })
+    .catch((error: unknown) => console.error('[persist] could not report the saved match:', error));
+}
 
 /**
  * Matchmaking pool.
@@ -281,11 +323,17 @@ function printConsole(): void {
 
 /** Moves a socket out of its current room, closing that room if it emptied. */
 function leaveCurrentRoom(socket: { id: string; leave: (room: string) => void }): void {
-  const roomName = rooms.roomOf(socket.id)?.roomName ?? '';
+  const current = rooms.roomOf(socket.id);
+  if (!current) return;
+  const roomName = current.roomName;
+
+  // Leave the socket.io room BEFORE the match reacts to the departure. The
+  // room's final state:sync would otherwise still reach the leaver and pull
+  // their client back onto a room they already left.
+  socket.leave(current.roomId);
   const { roomId, closed } = rooms.leave(socket.id);
   if (!roomId) return;
 
-  socket.leave(roomId);
   registry.setRoom(socket.id, null);
   registry.setSeat(socket.id, 'spectator');
   log.add('room', `${nameOf(socket.id)} left ${roomId}${closed ? ' — room closed, nobody left' : ''}`);
@@ -352,13 +400,133 @@ function closeRequestsFor(roomId: string, roomName: string): void {
   }
 }
 
+// ── held seats (reconnect grace period) ─────────────────────────────────────
+
+interface HeldSeat {
+  /** The dropped connection's id — still the seat's id inside the room. */
+  socketId: string;
+  roomId: string;
+  /** Whose seat it is, so only the same player can take it back. */
+  profileId: string | null;
+  nickname: string;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Seats held for players whose connection dropped, keyed by the per-tab
+ * session id the client sends in its handshake. A reconnect with the same id
+ * inside the grace window takes the seat back; otherwise the timer runs the
+ * normal leave (a forfeit, mid-match).
+ */
+const heldSeats = new Map<string, HeldSeat>();
+
+function sessionIdOf(socket: { handshake: { auth?: Record<string, unknown> } }): string | null {
+  const id = socket.handshake.auth?.sessionId;
+  return typeof id === 'string' && id.length >= 16 && id.length <= 64 ? id : null;
+}
+
+/** The session holding a seat for this dropped connection, if any. */
+function heldSessionOf(socketId: string): string | undefined {
+  for (const [sessionId, held] of heldSeats) {
+    if (held.socketId === socketId) return sessionId;
+  }
+  return undefined;
+}
+
+/** A seated player's connection dropped: keep their seat for the grace period. */
+function holdSeat(sessionId: string, socketId: string, room: MatchManager): void {
+  // One held seat per tab. An older one is given up rather than left stranded.
+  releaseHeldSeat(sessionId, 'the same tab dropped again');
+
+  const identity = identityOf(socketId);
+  heldSeats.set(sessionId, {
+    socketId,
+    roomId: room.roomId,
+    profileId: identity.profileId,
+    nickname: identity.nickname,
+    // Runs outside any socket handler, so it contains its own failures.
+    timer: setTimeout(
+      contain(
+        () => releaseHeldSeat(sessionId, `did not come back within ${RECONNECT_GRACE_SECONDS}s`),
+        (error) => console.error('[reconnect] could not release a held seat:', error),
+      ),
+      RECONNECT_GRACE_SECONDS * 1000,
+    ),
+  });
+  room.markDisconnected(socketId);
+  log.add('room', `${identity.nickname} dropped from ${room.roomId} — seat held ${RECONNECT_GRACE_SECONDS}s`);
+}
+
+/**
+ * Gives up a held seat now: the normal leave runs for the dropped connection,
+ * which mid-match is a forfeit.
+ */
+function releaseHeldSeat(sessionId: string, why: string): void {
+  const held = heldSeats.get(sessionId);
+  if (!held) return;
+
+  clearTimeout(held.timer);
+  heldSeats.delete(sessionId);
+  log.add('room', `${held.nickname}'s seat in ${held.roomId} released — ${why}`);
+  // The dropped socket is gone, so there is no socket.io room left to leave.
+  leaveCurrentRoom({ id: held.socketId, leave: () => undefined });
+  pushUpdates();
+}
+
+/** A room is gone: nothing in it is worth holding a seat for. */
+function forgetHeldSeatsIn(roomId: string): void {
+  for (const [sessionId, held] of heldSeats) {
+    if (held.roomId !== roomId) continue;
+    clearTimeout(held.timer);
+    heldSeats.delete(sessionId);
+  }
+}
+
+/**
+ * Takes back the seat held for this tab — but only for the same player. A tab
+ * that comes back as someone else (a guest who signed in, say) gives the seat
+ * up instead of inheriting another player's score and rating.
+ */
+function resumeHeldSeat(
+  socket: GameSocket,
+  sessionId: string | null,
+  identity: Identity,
+): MatchManager | null {
+  const held = sessionId ? heldSeats.get(sessionId) : undefined;
+  if (!held || !sessionId) return null;
+
+  if (!isSamePlayer(held, identity)) {
+    releaseHeldSeat(sessionId, `the tab came back as ${identity.nickname}`);
+    return null;
+  }
+
+  clearTimeout(held.timer);
+  heldSeats.delete(sessionId);
+
+  const room = rooms.get(held.roomId);
+  if (!room || !room.rebind(held.socketId, socket.id)) return null;
+
+  rooms.retrack(held.socketId, socket.id);
+  socket.join(room.roomId);
+  registry.setRoom(socket.id, room.roomId);
+  registry.setSeat(socket.id, 'player');
+  log.add('room', `${identity.nickname} took back their seat in ${room.roomId}`);
+  return room;
+}
+
 /**
  * Takes a game client out of its room and the matchmaking queue, then tells it
  * why. It stays connected; the caller decides whether to disconnect it.
  */
 function removeClient(clientId: string, notice: RemovalNotice): GameSocket | undefined {
   const socket = io.sockets.sockets.get(clientId);
-  if (!socket) return undefined;
+  if (!socket) {
+    // Their connection already dropped and the seat is being held: give it up
+    // now. There is nobody to tell — if they come back, they land in the lobby.
+    const held = heldSessionOf(clientId);
+    if (held) releaseHeldSeat(held, `${notice.kind} by the ${notice.by} while away`);
+    return undefined;
+  }
 
   withdrawRequest(clientId);
   queue.leave(clientId);
@@ -383,7 +551,9 @@ const adminConsole = attachAdminNamespace({
   rooms,
   log,
   state: adminState,
-  isConnected: (clientId) => io.sockets.sockets.has(clientId),
+  // A player whose seat is being held still counts: kicking them gives it up.
+  isConnected: (clientId) =>
+    io.sockets.sockets.has(clientId) || heldSessionOf(clientId) !== undefined,
 
   kick: (clientId: string, note: RemovalNote) => {
     const roomId = rooms.roomIdOf(clientId);
@@ -448,6 +618,7 @@ const adminConsole = attachAdminNamespace({
     }
 
     closeRequestsFor(roomId, roomName);
+    forgetHeldSeatsIn(roomId);
     adminConsole.roomChanged(roomId);
     pushUpdates();
     return true;
@@ -520,6 +691,8 @@ io.on('connection', contain((socket: GameSocket) => {
 
   socket.emit('lobby:rooms', lobbyPayload());
 
+  const sessionId = sessionIdOf(socket);
+
   listen(socket, 'player:join', async (payload, ack) => {
     const clean = text(payload, 'nickname').trim().slice(0, 20) || 'Player';
 
@@ -544,6 +717,8 @@ io.on('connection', contain((socket: GameSocket) => {
       `${socket.id} is "${identity.nickname}" (${identity.isGuest ? 'guest' : 'account'})`,
     );
 
+    const resumed = resumeHeldSeat(socket, sessionId, identity);
+
     const result: JoinResult = {
       ok: true,
       playerId: socket.id,
@@ -551,8 +726,11 @@ io.on('connection', contain((socket: GameSocket) => {
       welcome: `Welcome, ${identity.nickname}.`,
       isGuest: identity.isGuest,
       elo: identity.elo,
+      roomId: resumed?.roomId,
     };
     respond(ack, result);
+    // After the ack, so the client already knows which room this is for.
+    if (resumed) socket.emit('state:sync', resumed.publicState());
     pushUpdates();
   });
 
@@ -671,13 +849,15 @@ io.on('connection', contain((socket: GameSocket) => {
 
     const requester = io.sockets.sockets.get(requesterId);
     if (requester) {
-      if (accept) seatInRoom(requester, room, false);
+      // The answer goes first: the client only follows a room it knows it is
+      // in, so it must adopt this one before seatInRoom's state:sync arrives.
       requester.emit('room:requestResolved', {
         roomId: room.roomId,
         roomName: room.roomName,
         outcome: accept ? 'accepted' : 'declined',
         byName: hostName,
       });
+      if (accept) seatInRoom(requester, room, false);
     }
     respond(ack, { ok: true });
   });
@@ -759,7 +939,13 @@ io.on('connection', contain((socket: GameSocket) => {
         log.add('connection', `disconnect ${socket.id} "${nameOf(socket.id)}" — ${reason}`);
         withdrawRequest(socket.id);
         queue.leave(socket.id);
-        leaveCurrentRoom(socket);
+
+        // A seated player gets a grace period to come back; anyone else (lobby,
+        // spectators, no session id) leaves at once.
+        const room = rooms.roomOf(socket.id);
+        if (sessionId && room?.isSeated(socket.id)) holdSeat(sessionId, socket.id, room);
+        else leaveCurrentRoom(socket);
+
         registry.remove(socket.id);
         identities.delete(socket.id);
         pushUpdates();
