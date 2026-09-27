@@ -43,8 +43,8 @@ export function ResultOverlay({ state, myId, isSpectator, onRematch, onLeave }: 
             <div className="line" key={player.id}>
               <span>
                 {player.nickname}
-                {player.id === myId ? ' (you)' : ''}
-                {player.id === state.winnerId ? ' 👑' : ''}
+                {player.id === myId && <span className="tag me">you</span>}
+                {player.id === state.winnerId && <span className="tag winner">winner</span>}
                 {state.rematchVotes.includes(player.id) && (
                   <span className="tag ready" style={{ marginLeft: 8 }}>
                     ready

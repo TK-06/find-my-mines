@@ -140,7 +140,7 @@ export function App() {
   const canStart = isHost && state.status !== 'playing' && state.players.length >= 2;
 
   return (
-    <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+    <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
       <div className="stack">
         <IdentityBar isGuest={isGuest} elo={elo} />
         <div className="room-bar card">
@@ -175,15 +175,16 @@ export function App() {
 
         {state.status === 'playing' && !isSpectator && (
           <div className={`banner ${myTurn ? 'you-turn' : 'wait'}`}>
-            {myTurn ? 'Your turn — find a mine!' : 'Waiting for the other player…'}
+            {myTurn ? 'Your turn. Pick a slot.' : `${state.players.find((p) => p.id === state.currentPlayerId)?.nickname ?? 'Another player'} is picking…`}
           </div>
         )}
 
-        <Leaderboard state={state} myId={playerId} />
-
-        {state.status !== 'waiting' && (
-          <Board state={state} myTurn={myTurn && !isSpectator} onReveal={reveal} />
-        )}
+        <div className={`play-area ${state.status === 'waiting' ? 'no-board' : ''}`}>
+          {state.status !== 'waiting' && (
+            <Board state={state} myTurn={myTurn && !isSpectator} onReveal={reveal} />
+          )}
+          <Leaderboard state={state} myId={playerId} />
+        </div>
       </div>
 
       {state.status === 'ended' && (
@@ -248,10 +249,7 @@ function Shell({
   return (
     <div className="app">
       <header className="header">
-        <div>
-          <h1 className="title">Find My Mines</h1>
-          <p className="subtitle">Net-Centric · client–server over Socket.IO</p>
-        </div>
+        <h1 className="title">Find My Mines</h1>
         <div className="header-right">
           <NavBar route={route} onNavigate={onNavigate} />
           <button
@@ -259,16 +257,16 @@ function Shell({
             onClick={onToggleTheme}
             title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
           >
-            {theme === 'dark' ? '☀ Light' : '☾ Dark'}
+            {theme === 'dark' ? 'Light' : 'Dark'}
           </button>
           <span className={`conn ${connected ? 'online' : 'offline'}`}>
-            {connected ? '● connected' : '● disconnected'}
+            {connected ? 'Online' : 'Offline'}
           </span>
         </div>
       </header>
 
       {/* Spec: "a welcome message with their nickname will appear" */}
-      {welcome && <div className="banner">{welcome}</div>}
+      {welcome && <p className="welcome">{welcome}</p>}
 
       {children}
 

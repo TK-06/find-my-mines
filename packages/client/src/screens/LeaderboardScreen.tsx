@@ -70,12 +70,11 @@ export function LeaderboardScreen() {
           <ul className="list rank-list">
             {rows.map((row) => {
               const isMe = row.id === userId;
-              const medal = row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : row.rank === 3 ? '🥉' : null;
 
               return (
                 <li key={row.id} className={isMe ? 'is-me' : undefined}>
                   <span className="rank-cell">
-                    <span className="rank-number">{medal ?? row.rank}</span>
+                    <span className="rank-number">{row.rank}</span>
                     <span className="who">
                       {row.username}
                       {isMe && <span className="tag me">you</span>}
