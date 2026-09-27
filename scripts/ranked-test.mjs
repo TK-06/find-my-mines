@@ -3,6 +3,8 @@
  *
  * Creates two real (confirmed) accounts, signs them in, plays a ranked match
  * over sockets, then checks that the match was written and both ratings moved.
+ * Forfeits (leaving or an admin kick mid-match) must be rated the same way.
+ * Also checks the server console's account-based access (migration 0002).
  *
  * Needs Supabase credentials AND a running server. Skips cleanly without them,
  * so it never breaks a run on a machine with no secrets.
@@ -156,6 +158,11 @@ const started = waitFor(sockA, 'match:start');
 sockA.emit('game:start');
 await started;
 
+// After the write, the server tells every seat the saved match's id — that is
+// how a guest's browser builds its own game log.
+const recordedA = waitFor(sockA, 'match:recorded', 60000).catch(() => null);
+const recordedB = waitFor(sockB, 'match:recorded', 60000).catch(() => null);
+
 const byId = { [joinA.playerId]: sockA, [joinB.playerId]: sockB };
 const attempted = new Set();
 const deadline = Date.now() + 45000;
@@ -213,6 +220,11 @@ check('it is recorded as ranked', matchRows?.[0]?.mode === 'ranked');
 check('the winner was recorded', Boolean(matchRows?.[0]?.winner_profile_id));
 
 const matchId = matchRows?.[0]?.id;
+
+const [recordedForA, recordedForB] = await Promise.all([recordedA, recordedB]);
+check('both players are told the saved match id',
+  Boolean(matchId) && recordedForA?.matchId === matchId && recordedForB?.matchId === matchId,
+  `${recordedForA?.matchId} / ${recordedForB?.matchId} vs ${matchId}`);
 const { data: seatRows } = await admin
   .from('match_players')
   .select('profile_id, display_name, is_guest, score, placement, elo_before, elo_after, elo_delta, outcome')
@@ -278,9 +290,134 @@ check('a casual match did not count as a game played',
 const { data: casualMatch } = await admin.from('matches').select('id, mode').eq('room_id', casual.roomId);
 check('the casual match was still recorded in history', (casualMatch?.length ?? 0) === 1);
 
+// ── a forfeit in ranked is rated like any other result ──────────────────────
+// Leaving mid-match, and being kicked or banned mid-match, all hand the other
+// player the win — and in ranked, both ratings move.
+const consoleSocket = await new Promise((resolve, reject) => {
+  // From the server machine, with no forwarding header: no account needed.
+  const socket = io(`${URL}/admin`, { transports: ['websocket'], forceNew: true });
+  socket.once('connect', () => resolve(socket));
+  socket.once('connect_error', reject);
+});
+
+const profilesNow = async () => {
+  const { data } = await admin
+    .from('profiles')
+    .select('id, elo, games_played')
+    .in('id', accounts.map((a) => a.id));
+  return Object.fromEntries((data ?? []).map((p) => [p.id, p]));
+};
+
+const forfeitMatchIds = [];
+
+async function rankedForfeit(label, removeB) {
+  sockA.emit('room:leave');
+  sockB.emit('room:leave');
+  await sleep(300);
+  const before = await profilesNow();
+
+  const room = await emitAck(sockA, 'room:create', {
+    name: label,
+    config: { rows: 6, cols: 6, mineCount: 11, maxPlayers: 2, mode: 'ranked' },
+  });
+  await emitAck(sockB, 'room:join', { roomId: room.roomId });
+  const began = waitFor(sockA, 'match:start');
+  sockA.emit('game:start');
+  await began;
+
+  const forfeit = waitFor(sockA, 'match:forfeit', 5000).catch(() => null);
+  const recorded = waitFor(sockA, 'match:recorded', 30000).catch(() => null);
+  await removeB();
+  const notice = await forfeit;
+  const saved = await recorded;
+  await sleep(1500);
+  const after = await profilesNow();
+
+  const [a, b] = accounts.map((acc) => acc.id);
+  const winnerSeat = notice?.players.find((p) => p.id === joinA.playerId);
+  check(`${label}: the player left behind wins by forfeit`,
+    notice?.winnerId === joinA.playerId && (winnerSeat?.eloDelta ?? 0) > 0,
+    notice ? `${notice.winnerNickname}, ${winnerSeat?.eloDelta}` : 'no match:forfeit');
+  check(`${label}: ratings move in the database — winner up, the one removed down`,
+    after[a]?.elo > before[a]?.elo && after[b]?.elo < before[b]?.elo,
+    `${before[a]?.elo}→${after[a]?.elo}, ${before[b]?.elo}→${after[b]?.elo}`);
+  check(`${label}: it counts as a ranked game for both`,
+    after[a]?.games_played === before[a]?.games_played + 1 &&
+      after[b]?.games_played === before[b]?.games_played + 1);
+
+  const { data: rows } = await admin
+    .from('matches')
+    .select('id, mode, winner_profile_id')
+    .eq('room_id', room.roomId);
+  forfeitMatchIds.push(...(rows ?? []).map((r) => r.id));
+  check(`${label}: saved as a ranked match with the winner, and its id reported`,
+    rows?.length === 1 && rows[0].mode === 'ranked' && rows[0].winner_profile_id === a &&
+      saved?.matchId === rows[0].id,
+    JSON.stringify(rows));
+}
+
+await rankedForfeit('leaving mid-match', async () => {
+  sockB.emit('room:leave');
+});
+await rankedForfeit('an admin kick mid-match', async () => {
+  const kicked = await emitAck(consoleSocket, 'admin:kick', {
+    clientId: joinB.playerId,
+    note: { reasons: ['afk'], remark: 'ranked test' },
+  });
+  if (!kicked?.ok) check('admin kick accepted', false, kicked?.error ?? 'no ack');
+});
+consoleSocket.close();
+
+// ── server console access by account ────────────────────────────────────────
+// A forwarding header makes the connection look remote, so the server-machine
+// exception does not apply: only the admins table can let it in.
+function connectConsole(accessToken) {
+  return new Promise((resolve) => {
+    const socket = io(`${URL}/admin`, {
+      transports: ['websocket'],
+      forceNew: true,
+      auth: accessToken ? { accessToken } : {},
+      extraHeaders: { 'x-forwarded-for': '203.0.113.9' },
+    });
+    const done = (result) => {
+      socket.close();
+      resolve(result);
+    };
+    socket.once('connect', () => done('connected'));
+    socket.once('connect_error', (err) => done(err.message));
+    setTimeout(() => done('timeout'), 6000);
+  });
+}
+
+const notYetAdmin = await connectConsole(accounts[0].token);
+check('a remote console connection from a non-admin account is refused',
+  notYetAdmin === 'ADMIN_ONLY', notYetAdmin);
+
+const { error: addAdminError } = await admin
+  .from('admins')
+  .insert({ profile_id: accounts[0].id, note: 'ranked-test' });
+
+if (addAdminError) {
+  check('test account added to the admins table', false,
+    `${addAdminError.message} — apply supabase/migrations/0002_admins.sql`);
+} else {
+  const nowAdmin = await connectConsole(accounts[0].token);
+  check('the same account, once listed in admins, is let in', nowAdmin === 'connected', nowAdmin);
+
+  const publicClient = createClient(SUPABASE_URL, ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: leaked, error: leakError } = await publicClient.from('admins').select('profile_id');
+  check('the admin list cannot be read with the public key',
+    Boolean(leakError) || (leaked?.length ?? 0) === 0,
+    leakError?.message ?? `${leaked?.length ?? 0} rows visible`);
+
+  await admin.from('admins').delete().eq('profile_id', accounts[0].id);
+}
+
 // ── cleanup ─────────────────────────────────────────────────────────────────
 for (const socket of [sockA, sockB]) socket.close();
-for (const id of [matchId, casualMatch?.[0]?.id].filter(Boolean)) {
+for (const id of [matchId, casualMatch?.[0]?.id, ...forfeitMatchIds].filter(Boolean)) {
   await admin.from('matches').delete().eq('id', id);
 }
 for (const account of accounts) {

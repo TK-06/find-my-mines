@@ -1,4 +1,4 @@
-import type { ClientInfo, OnlinePlayer, Seat } from '@fmm/shared';
+import type { ClientInfo, Seat } from '@fmm/shared';
 
 const UNNAMED = '(joining…)';
 
@@ -21,6 +21,7 @@ export class ClientRegistry {
       connectedAt: Date.now(),
       address,
       roomId: null,
+      isGuest: true,
     });
   }
 
@@ -28,9 +29,12 @@ export class ClientRegistry {
     this.clients.delete(id);
   }
 
-  setNickname(id: string, nickname: string): void {
+  /** Set once the server has resolved who the client is. */
+  setIdentity(id: string, nickname: string, isGuest: boolean): void {
     const client = this.clients.get(id);
-    if (client) client.nickname = nickname;
+    if (!client) return;
+    client.nickname = nickname;
+    client.isGuest = isGuest;
   }
 
   setSeat(id: string, seat: Seat): void {
@@ -54,16 +58,5 @@ export class ClientRegistry {
 
   list(): ClientInfo[] {
     return [...this.clients.values()].sort((a, b) => a.connectedAt - b.connectedAt);
-  }
-
-  /**
-   * Who is online, as sent to game clients: named players only (a socket that
-   * has not picked a nickname yet is not someone you can play), and no
-   * addresses — those are admin-only.
-   */
-  roster(): OnlinePlayer[] {
-    return this.list()
-      .filter((client) => client.nickname !== UNNAMED)
-      .map(({ id, nickname, roomId, seat }) => ({ id, nickname, roomId, seat }));
   }
 }

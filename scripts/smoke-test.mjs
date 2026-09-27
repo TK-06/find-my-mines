@@ -2,8 +2,10 @@
  * End-to-end smoke test over real sockets.
  *
  * Connects clients to a RUNNING server and exercises the full flow: nickname,
- * lobby, room creation, host start, a complete match, rematch, leaving, host
- * succession, room cleanup, and the admin console.
+ * lobby, the online list, room creation, host start, a complete match,
+ * rematch, leaving, forfeits, the reconnect grace period, host succession,
+ * room cleanup, host and admin moderation, and the admin console (viewer,
+ * mine toggle, terminal log, access check).
  *
  * The unit tests cover the engine and room-config rules; this covers the wire
  * protocol and everything stateful the server does.
@@ -36,8 +38,14 @@ function connect(namespace = '') {
   });
 }
 
+// A missing server handler never acks; time out so it fails the check instead
+// of hanging the whole run.
 const emitAck = (socket, event, payload) =>
-  new Promise((resolve) => socket.emit(event, payload, resolve));
+  new Promise((resolve) =>
+    socket.timeout(5000).emit(event, payload, (err, result) =>
+      resolve(err ? { ok: false, error: `no ack for ${event}` } : result),
+    ),
+  );
 
 const setName = (socket, nickname) => emitAck(socket, 'player:join', { nickname });
 
@@ -79,7 +87,17 @@ function track(socket) {
   return view;
 }
 
+/** The newest lobby broadcast a socket has seen, including the online list. */
+function trackLobby(socket) {
+  const view = { latest: null };
+  socket.on('lobby:rooms', (payload) => {
+    view.latest = payload;
+  });
+  return view;
+}
+
 const CLASSIC = { rows: 6, cols: 6, mineCount: 11, maxPlayers: 2 };
+const REASON = { reasons: ['afk'], remark: 'smoke test' };
 
 console.log(`\nFind My Mines — smoke test against ${URL}`);
 
@@ -88,11 +106,16 @@ section('admin console');
 
 // The server emits admin:state the instant the socket connects, so the listener
 // must be attached before the connection completes.
+// From the server machine no token is needed; against a hosted server that
+// sets ADMIN_TOKEN, pass it in the environment.
 const admin = io(URL + ADMIN_NS, {
   transports: ['websocket'],
   forceNew: true,
   auth: { token: process.env.ADMIN_TOKEN ?? '' },
 });
+// The terminal backfill also arrives on connect, so collect it from the start.
+const adminLog = [];
+admin.on('admin:log', (lines) => adminLog.push(...lines));
 const firstAdminState = await new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error('timeout waiting for admin:state')), 6000);
   admin.once('admin:state', (state) => {
@@ -119,6 +142,7 @@ section('nickname and lobby');
 
 const alice = await connect();
 const aliceView = track(alice);
+const aliceLobbyView = trackLobby(alice);
 const aliceLobby = waitFor(alice, 'lobby:rooms');
 const aliceJoin = await setName(alice, 'Alice');
 
@@ -187,6 +211,40 @@ const daveEnter = await emitAck(dave, 'room:spectate', { roomId });
 check('explicit spectate works', daveEnter.seat === 'spectator');
 await sleep(150);
 check('spectator count is reported', aliceView.state?.spectatorCount === 2, String(aliceView.state?.spectatorCount));
+check(
+  'spectators are listed by name',
+  ['Carol', 'Dave'].every((n) => aliceView.state?.spectators?.some((s) => s.nickname === n)),
+  JSON.stringify(aliceView.state?.spectators),
+);
+
+// ── online list (graded: clients learn about other connected clients) ───────
+section('online list');
+
+await sleep(200);
+const online = aliceLobbyView.latest?.online ?? [];
+const onlineNamed = (n) => online.find((p) => p.nickname === n);
+check('players receive the online list', online.length >= 4, `${online.length} online`);
+check(
+  'the online list names the other players',
+  ['Bob', 'Carol', 'Dave'].every((n) => onlineNamed(n)),
+  online.map((p) => p.nickname).join(', '),
+);
+check(
+  'a player in a live match shows as playing in that room',
+  onlineNamed('Bob')?.status === 'playing' && onlineNamed('Bob')?.roomId === roomId,
+  `${onlineNamed('Bob')?.status} ${onlineNamed('Bob')?.roomId}`,
+);
+check('a spectator shows as watching', onlineNamed('Carol')?.status === 'watching', onlineNamed('Carol')?.status);
+check('guests are marked as guests', onlineNamed('Bob')?.isGuest === true);
+check('the online list never carries a network address', online.every((p) => !('address' in p)));
+
+const nameless = await connect();
+await sleep(250);
+check(
+  'a socket without a nickname is not listed',
+  !(aliceLobbyView.latest?.online ?? []).some((p) => p.id === nameless.id),
+);
+nameless.close();
 
 // ── turn enforcement ────────────────────────────────────────────────────────
 section('turn enforcement');
@@ -612,7 +670,506 @@ section('reconnect grace period');
   host.close();
 }
 
-for (const socket of [alice, bob, carol, dave, admin]) socket.close();
+// ── reconnect grace meets moderation ────────────────────────────────────────
+section('reconnect meets moderation');
+
+{
+  const withSession = (sessionId) =>
+    new Promise((resolve, reject) => {
+      const socket = io(URL, { transports: ['websocket'], forceNew: true, auth: { sessionId } });
+      socket.once('connect', () => resolve(socket));
+      socket.once('connect_error', reject);
+    });
+  // Three seats makes it a Custom casual room, where the host may kick.
+  const CUSTOM = { ...CLASSIC, maxPlayers: 3 };
+
+  // The same tab coming back as someone else must not inherit the seat.
+  {
+    const host = await withSession('smoke-session-cccccccccccccccc');
+    let other = await withSession('smoke-session-dddddddddddddddd');
+    await setName(host, 'Jun');
+    await setName(other, 'Kai');
+    const forfeits = [];
+    host.on('match:forfeit', (n) => forfeits.push(n));
+    const room = await emitAck(host, 'room:create', { name: 'Swap', config: CLASSIC });
+    await emitAck(other, 'room:join', { roomId: room.roomId });
+    host.emit('game:start');
+    await sleep(400);
+
+    other.close();
+    await sleep(300);
+    other = await withSession('smoke-session-dddddddddddddddd');
+    const swapped = await setName(other, 'Lee');
+    await sleep(400);
+    check('a tab that comes back as someone else does not take the held seat',
+      swapped.ok === true && !swapped.roomId, String(swapped.roomId));
+    check('the held seat is given up at once instead — a forfeit mid-match',
+      forfeits[0]?.leaverNickname === 'Kai' && forfeits[0]?.winnerNickname === 'Jun',
+      forfeits[0] ? `${forfeits[0].winnerNickname} won` : 'no forfeit');
+    host.close();
+    other.close();
+  }
+
+  // Kicking a player whose seat is being held gives the seat up.
+  {
+    const host = await withSession('smoke-session-eeeeeeeeeeeeeeee');
+    let victim = await withSession('smoke-session-ffffffffffffffff');
+    await setName(host, 'Mia');
+    const victimJoin = await setName(victim, 'Ned');
+    const hostView = track(host);
+    const forfeits = [];
+    host.on('match:forfeit', (n) => forfeits.push(n));
+    const room = await emitAck(host, 'room:create', { name: 'Held kick', config: CUSTOM });
+    await emitAck(victim, 'room:join', { roomId: room.roomId });
+    host.emit('game:start');
+    await sleep(400);
+
+    victim.close();
+    await sleep(300);
+    const kicked = await emitAck(host, 'room:kick', {
+      targetId: victimJoin.playerId,
+      ban: false,
+      note: REASON,
+    });
+    await sleep(300);
+    check('the host can kick a player whose seat is being held', kicked.ok === true,
+      kicked.error ?? '');
+    check('the kick frees the held seat and counts as a forfeit mid-match',
+      !hostView.state?.players.some((p) => p.id === victimJoin.playerId) &&
+        forfeits[0]?.leaverNickname === 'Ned',
+      forfeits[0] ? `${forfeits[0].winnerNickname} won` : 'no forfeit');
+
+    victim = await withSession('smoke-session-ffffffffffffffff');
+    const back = await setName(victim, 'Ned');
+    check('a kicked player coming back does not get the seat back', !back.roomId,
+      String(back.roomId));
+    host.close();
+    victim.close();
+  }
+
+  // An admin kick mid-match is a forfeit too: the player left behind wins.
+  {
+    const p1 = await connect();
+    const p2 = await connect();
+    await setName(p1, 'Ola');
+    const p2Join = await setName(p2, 'Pim');
+    const forfeits = [];
+    p1.on('match:forfeit', (n) => forfeits.push(n));
+    const room = await emitAck(p1, 'room:create', { name: 'Admin forfeit', config: CLASSIC });
+    await emitAck(p2, 'room:join', { roomId: room.roomId });
+    p1.emit('game:start');
+    await sleep(400);
+
+    const removedNotice = waitFor(p2, 'player:removed', 3000).catch(() => null);
+    const adminKicked = await emitAck(admin, 'admin:kick', { clientId: p2Join.playerId, note: REASON });
+    const notice = await removedNotice;
+    await sleep(300);
+    check('an admin kick mid-match hands the other player a forfeit win',
+      adminKicked.ok === true && notice?.kind === 'kicked' && forfeits[0]?.winnerNickname === 'Ola',
+      forfeits[0] ? `${forfeits[0].winnerNickname} won` : adminKicked.error ?? 'no forfeit');
+    p1.close();
+    p2.close();
+  }
+}
+
+// ── host moderation ─────────────────────────────────────────────────────────
+section('host moderation');
+
+const modRoom = await emitAck(alice, 'room:create', {
+  name: 'Moderated',
+  config: { ...CLASSIC, maxPlayers: 3 },
+});
+await emitAck(bob, 'room:join', { roomId: modRoom.roomId });
+await emitAck(carol, 'room:join', { roomId: modRoom.roomId });
+await emitAck(dave, 'room:spectate', { roomId: modRoom.roomId });
+await sleep(150);
+
+const kick = (by, targetId, ban = false, note = REASON) =>
+  emitAck(by, 'room:kick', { targetId, ban, note });
+
+const byNonHost = await kick(carol, bobJoin.playerId);
+check('a non-host cannot kick', byNonHost.ok === false, byNonHost.error ?? '');
+
+const noReason = await kick(alice, bobJoin.playerId, false, { reasons: [], remark: '' });
+check('a kick without a reason is refused', noReason.ok === false, noReason.error ?? '');
+
+const kickSelf = await kick(alice, aliceJoin.playerId);
+check('the host cannot kick themselves', kickSelf.ok === false, kickSelf.error ?? '');
+
+const bobKicked = waitFor(bob, 'player:removed', 3000).catch(() => null);
+const hostKick = await kick(alice, bobJoin.playerId);
+const bobNotice = await bobKicked;
+check('the host can kick in a casual room', hostKick.ok === true, hostKick.error ?? '');
+check(
+  'the kicked player is told who and why',
+  bobNotice?.kind === 'kicked' &&
+    bobNotice.by === 'host' &&
+    bobNotice.byName === 'Alice' &&
+    bobNotice.note.reasons[0] === 'afk' &&
+    bobNotice.note.remark === 'smoke test',
+  JSON.stringify(bobNotice),
+);
+await sleep(150);
+check(
+  'the kicked player is out of the room',
+  !aliceView.state?.players.some((p) => p.id === bobJoin.playerId),
+);
+const bobBack = await emitAck(bob, 'room:join', { roomId: modRoom.roomId });
+check('a kicked player may rejoin', bobBack.ok === true, bobBack.errors?.[0] ?? '');
+
+const carolKicked = waitFor(carol, 'player:removed', 3000).catch(() => null);
+const hostBan = await kick(alice, carolJoin.playerId, true, { reasons: ['cheating'], remark: '' });
+const carolNotice = await carolKicked;
+check('the host can ban from the room', hostBan.ok === true && carolNotice?.roomBan === true,
+  JSON.stringify(carolNotice));
+const carolRejoin = await emitAck(carol, 'room:join', { roomId: modRoom.roomId });
+check('a room-banned player cannot rejoin', carolRejoin.ok === false, carolRejoin.errors?.[0] ?? '');
+const carolSpectate = await emitAck(carol, 'room:spectate', { roomId: modRoom.roomId });
+check('a room-banned player cannot spectate either', carolSpectate.ok === false);
+
+const daveKicked = waitFor(dave, 'player:removed', 3000).catch(() => null);
+const specKick = await kick(alice, daveJoin.playerId);
+check('the host can kick a spectator', specKick.ok === true && Boolean(await daveKicked));
+
+const modStarted = waitFor(alice, 'match:start', 4000).catch(() => null);
+alice.emit('game:start');
+await modStarted;
+const bobMidMatch = waitFor(bob, 'player:removed', 3000).catch(() => null);
+const midKick = await kick(alice, bobJoin.playerId);
+await bobMidMatch;
+await sleep(200);
+check(
+  'kicking the only opponent mid-match abandons it, as if they had left',
+  midKick.ok === true && aliceView.state?.status === 'waiting',
+  aliceView.state?.status,
+);
+alice.emit('room:leave');
+await sleep(200);
+
+const rankedRoom = await emitAck(alice, 'room:create', {
+  name: 'Ranked',
+  config: { ...CLASSIC, mode: 'ranked' },
+});
+await emitAck(bob, 'room:join', { roomId: rankedRoom.roomId });
+const rankedKick = await kick(alice, bobJoin.playerId);
+check('the host cannot kick in a ranked room', rankedKick.ok === false, rankedKick.error ?? '');
+for (const socket of [alice, bob]) socket.emit('room:leave');
+await sleep(200);
+
+const aliceRematched = waitFor(alice, 'queue:matched', 8000).catch(() => null);
+const bobRematched = waitFor(bob, 'queue:matched', 8000).catch(() => null);
+alice.emit('queue:join', { mode: 'casual' });
+bob.emit('queue:join', { mode: 'casual' });
+await Promise.all([aliceRematched, bobRematched]);
+await sleep(300);
+const matchedHost = aliceView.state?.hostId;
+const matchedHostSocket = matchedHost === aliceJoin.playerId ? alice : bob;
+const matchedOther = matchedHost === aliceJoin.playerId ? bobJoin.playerId : aliceJoin.playerId;
+const matchmadeKick = await kick(matchedHostSocket, matchedOther);
+check('the host cannot kick in a matchmade room', matchmadeKick.ok === false, matchmadeKick.error ?? '');
+for (const socket of [alice, bob]) socket.emit('room:leave');
+await sleep(300);
+
+// ── join requests ───────────────────────────────────────────────────────────
+section('join requests');
+
+// A malformed request must be refused, not take the server down.
+const noPayload = await emitAck(bob, 'room:requestJoin', undefined);
+check('a request without a payload is refused cleanly',
+  noPayload.ok === false && !String(noPayload.error).startsWith('no ack'), noPayload.error ?? '');
+
+const askRoom = await emitAck(alice, 'room:create', {
+  name: 'Ask first',
+  config: { rows: 6, cols: 6, mineCount: 10, maxPlayers: 3, joinByRequest: true },
+});
+await sleep(150);
+check('an ask-to-join room can be created',
+  askRoom.ok === true && aliceView.state?.config.joinByRequest === true,
+  JSON.stringify(aliceView.state?.config));
+
+const directJoin = await emitAck(bob, 'room:join', { roomId: askRoom.roomId });
+check('joining an ask-to-join room directly is refused', directJoin.ok === false,
+  directJoin.errors?.[0] ?? '');
+
+const bobAsks = await emitAck(bob, 'room:requestJoin', { roomId: askRoom.roomId });
+await sleep(150);
+check('a player can ask to join', bobAsks.ok === true, bobAsks.error ?? '');
+check('the host sees who is asking',
+  aliceView.state?.joinRequests?.some((r) => r.id === bobJoin.playerId && r.nickname === 'Bob'),
+  JSON.stringify(aliceView.state?.joinRequests));
+
+const bobAsksAgain = await emitAck(bob, 'room:requestJoin', { roomId: askRoom.roomId });
+check('a duplicate request is refused', bobAsksAgain.ok === false, bobAsksAgain.error ?? '');
+
+bob.emit('room:cancelRequest');
+await sleep(150);
+check('cancelling withdraws the request',
+  !aliceView.state?.joinRequests?.some((r) => r.id === bobJoin.playerId));
+
+await emitAck(bob, 'room:requestJoin', { roomId: askRoom.roomId });
+await emitAck(dave, 'room:requestJoin', { roomId: askRoom.roomId });
+await sleep(150);
+
+const nonHostAnswer = await emitAck(dave, 'room:answerRequest', {
+  requesterId: bobJoin.playerId,
+  accept: true,
+});
+check('only the host can answer a request', nonHostAnswer.ok === false, nonHostAnswer.error ?? '');
+
+// The client follows only a room it knows it is in, so "accepted" must arrive
+// before the room's first state:sync — or that snapshot is ignored.
+const bobOrder = [];
+const noteResolved = () => bobOrder.push('resolved');
+const noteSync = (s) => {
+  if (s.roomId === askRoom.roomId) bobOrder.push('sync');
+};
+bob.on('room:requestResolved', noteResolved);
+bob.on('state:sync', noteSync);
+const bobResolved = waitFor(bob, 'room:requestResolved', 3000).catch(() => null);
+const acceptBob = await emitAck(alice, 'room:answerRequest', {
+  requesterId: bobJoin.playerId,
+  accept: true,
+});
+const bobOutcome = await bobResolved;
+await sleep(150);
+bob.off('room:requestResolved', noteResolved);
+bob.off('state:sync', noteSync);
+check('the host can accept, and the requester is told',
+  acceptBob.ok === true && bobOutcome?.outcome === 'accepted' && bobOutcome.byName === 'Alice',
+  JSON.stringify(bobOutcome));
+check('the requester hears "accepted" before the room’s state',
+  bobOrder[0] === 'resolved' && bobOrder.includes('sync'), bobOrder.join(' → '));
+check('an accepted player is seated',
+  aliceView.state?.players.some((p) => p.id === bobJoin.playerId));
+check('an answered request leaves the list',
+  !aliceView.state?.joinRequests?.some((r) => r.id === bobJoin.playerId));
+
+const daveResolved = waitFor(dave, 'room:requestResolved', 3000).catch(() => null);
+const declineDave = await emitAck(alice, 'room:answerRequest', {
+  requesterId: daveJoin.playerId,
+  accept: false,
+});
+const daveOutcome = await daveResolved;
+await sleep(150);
+check('the host can decline, and the requester is told',
+  declineDave.ok === true && daveOutcome?.outcome === 'declined', JSON.stringify(daveOutcome));
+check('a declined player is not seated',
+  !aliceView.state?.players.some((p) => p.id === daveJoin.playerId));
+
+const daveWatches = await emitAck(dave, 'room:spectate', { roomId: askRoom.roomId });
+check('spectating an ask-to-join room needs no request',
+  daveWatches.ok === true && daveWatches.seat === 'spectator', daveWatches.errors?.[0] ?? '');
+
+const askStarted = waitFor(alice, 'match:start', 4000).catch(() => null);
+alice.emit('game:start');
+const askStart = await askStarted;
+check('a spectator is not moved into a free seat without the host’s approval',
+  Boolean(askStart) && !askStart.players.some((p) => p.id === daveJoin.playerId),
+  askStart ? askStart.players.map((p) => p.nickname).join(', ') : 'match did not start');
+dave.emit('room:leave');
+await sleep(150);
+
+await emitAck(carol, 'room:requestJoin', { roomId: askRoom.roomId });
+const carolResolved = waitFor(carol, 'room:requestResolved', 3000).catch(() => null);
+for (const socket of [alice, bob]) socket.emit('room:leave');
+const carolOutcome = await carolResolved;
+check('a pending request is told when the room closes', carolOutcome?.outcome === 'closed',
+  JSON.stringify(carolOutcome));
+await sleep(200);
+
+// ── Classic keeps the original assignment rules ─────────────────────────────
+section('Classic stays original');
+
+const classicRoom = await emitAck(alice, 'room:create', {
+  name: 'Classic',
+  config: { ...CLASSIC, joinByRequest: true },
+});
+await sleep(150);
+check('a Classic room is always open to join, whatever the client asked',
+  aliceView.state?.config.joinByRequest === false);
+const classicJoin = await emitAck(bob, 'room:join', { roomId: classicRoom.roomId });
+check('players join a Classic room directly', classicJoin.ok === true && classicJoin.seat === 'player');
+const classicKick = await kick(alice, bobJoin.playerId);
+check('the host cannot kick in a Classic room', classicKick.ok === false, classicKick.error ?? '');
+for (const socket of [alice, bob]) socket.emit('room:leave');
+await sleep(200);
+
+// ── admin: viewer, mine toggle, kick, ban, end game ─────────────────────────
+section('admin moderation');
+
+let adminView = 'unset';
+admin.on('admin:room', (view) => {
+  adminView = view;
+});
+
+const watched = await emitAck(alice, 'room:create', { name: 'Watched', config: CLASSIC });
+await emitAck(bob, 'room:join', { roomId: watched.roomId });
+admin.emit('admin:watch', { roomId: watched.roomId });
+await sleep(300);
+check('the admin viewer receives the watched room', adminView?.state?.roomId === watched.roomId);
+check('mines stay hidden until the toggle is on', adminView?.mines === null);
+
+admin.emit('admin:mines', { show: true });
+await sleep(200);
+check('before a match there are no mines to show', adminView?.mines?.length === 0,
+  JSON.stringify(adminView?.mines));
+
+const watchedStarted = waitFor(alice, 'match:start', 4000).catch(() => null);
+alice.emit('game:start');
+await watchedStarted;
+await sleep(300);
+check('with the toggle on the admin sees all 11 mines', adminView?.mines?.length === 11,
+  String(adminView?.mines?.length));
+check('players still never receive mine positions', !JSON.stringify(aliceView.state).includes('"mines"'));
+
+const onTurn = aliceView.state?.currentPlayerId === aliceJoin.playerId ? alice : bob;
+const mineRevealed = waitFor(alice, 'cell:revealed', 3000).catch(() => null);
+onTurn.emit('game:reveal', adminView?.mines?.[0] ?? { row: 0, col: 0 });
+const revealedMine = await mineRevealed;
+check('the mine positions the admin sees are real', revealedMine?.cell.kind === 'bomb',
+  revealedMine?.cell.kind ?? 'no reveal');
+
+admin.emit('admin:mines', { show: false });
+await sleep(200);
+check('turning the toggle off hides the mines again', adminView?.mines === null);
+
+const adminNoNote = await emitAck(admin, 'admin:kick', {
+  clientId: bobJoin.playerId,
+  note: { reasons: [], remark: '' },
+});
+check('an admin kick needs a reason too', adminNoNote.ok === false);
+
+const ghostKick = await emitAck(admin, 'admin:kick', { clientId: 'no-such-client', note: REASON });
+check('kicking a client that is gone fails cleanly', ghostKick.ok === false, ghostKick.error ?? '');
+
+const bobAdminKicked = waitFor(bob, 'player:removed', 3000).catch(() => null);
+const adminKick = await emitAck(admin, 'admin:kick', { clientId: bobJoin.playerId, note: REASON });
+const bobAdminNotice = await bobAdminKicked;
+check('the admin can kick a player out of a live match',
+  adminKick.ok === true && bobAdminNotice?.kind === 'kicked' && bobAdminNotice.by === 'admin',
+  JSON.stringify(bobAdminNotice));
+await sleep(200);
+check('a kicked player stays connected', bob.connected === true);
+check('the viewer reflects the kick',
+  !adminView?.state?.players.some((p) => p.id === bobJoin.playerId));
+
+const carolBanned = waitFor(carol, 'player:removed', 3000).catch(() => null);
+const carolDropped = waitFor(carol, 'disconnect', 3000).catch(() => null);
+const adminBan = await emitAck(admin, 'admin:ban', {
+  clientId: carolJoin.playerId,
+  note: { reasons: ['harassment'], remark: 'smoke test ban' },
+});
+const carolBanNotice = await carolBanned;
+const carolReason = await carolDropped;
+check('the admin can ban', adminBan.ok === true && carolBanNotice?.kind === 'banned',
+  JSON.stringify(carolBanNotice));
+check('a banned client is disconnected by the server', carolReason === 'io server disconnect',
+  String(carolReason));
+
+const aliceEnded = waitFor(alice, 'player:removed', 3000).catch(() => null);
+const closeRoom = await emitAck(admin, 'admin:closeRoom', {
+  roomId: watched.roomId,
+  note: { reasons: ['other'], remark: 'closing time' },
+});
+const aliceEndedNotice = await aliceEnded;
+await sleep(300);
+check('the admin can end a game', closeRoom.ok === true && aliceEndedNotice?.kind === 'room-closed',
+  JSON.stringify(aliceEndedNotice));
+check('an ended game leaves the room list', !latestAdmin?.rooms.some((r) => r.id === watched.roomId));
+check('the viewer is told the watched room is gone', adminView === null, JSON.stringify(adminView));
+
+const emptied = await emitAck(bob, 'room:create', { name: 'Empties', config: CLASSIC });
+admin.emit('admin:watch', { roomId: emptied.roomId });
+await sleep(200);
+bob.emit('room:leave');
+await sleep(300);
+check('the viewer is told when a watched room empties out', adminView === null,
+  JSON.stringify(adminView));
+
+// ── the console's terminal feed ─────────────────────────────────────────────
+section('terminal log');
+
+check('the log records connections', adminLog.some((l) => l.kind === 'connection' && /connect/.test(l.text)));
+check('the log records disconnects with their reason',
+  adminLog.some((l) => l.kind === 'connection' && l.text.includes('Carol') && /disconnect/.test(l.text)));
+check('the log records moderation with its reason',
+  adminLog.some((l) => l.kind === 'moderation' && l.text.includes('smoke test')));
+check('the log carries game traffic', adminLog.some((l) => l.kind === 'traffic' && l.text.includes('game:reveal')));
+
+// ── admin access ────────────────────────────────────────────────────────────
+section('admin access');
+
+// A tunnel or proxy adds a forwarding header; with no admin account behind it,
+// the console must refuse even though the TCP peer is localhost.
+const remoteConsole = (auth = {}) =>
+  new Promise((resolve) => {
+    const socket = io(URL + ADMIN_NS, {
+      transports: ['websocket'],
+      forceNew: true,
+      extraHeaders: { 'x-forwarded-for': '203.0.113.9' },
+      auth,
+    });
+    const done = (result) => {
+      socket.close();
+      resolve(result);
+    };
+    socket.once('connect', () => done('connected'));
+    socket.once('connect_error', (err) => done(err.message));
+    setTimeout(() => done('timeout'), 4000);
+  });
+const remoteAttempt = await remoteConsole();
+check('a remote console connection without an admin account is refused',
+  remoteAttempt === 'ADMIN_ONLY', remoteAttempt);
+
+// With no ADMIN_TOKEN configured the token route is closed — an unset token
+// must never read as "open to everyone", whatever the handshake carries.
+if (!process.env.ADMIN_TOKEN) {
+  const emptyToken = await remoteConsole({ token: '' });
+  const guessedToken = await remoteConsole({ token: 'guess' });
+  check('with no ADMIN_TOKEN set, no token opens the console remotely',
+    emptyToken === 'ADMIN_ONLY' && guessedToken === 'ADMIN_ONLY', `${emptyToken}, ${guessedToken}`);
+}
+
+// ── malformed messages never take the server down ───────────────────────────
+section('malformed messages');
+
+// Anyone on the network can send anything. Each event gets missing, wrong-type
+// and hostile payloads, plus a non-function where an acknowledgement goes.
+const CLIENT_EVENTS = [
+  'player:join', 'room:create', 'room:join', 'room:spectate', 'room:leave',
+  'room:requestJoin', 'room:cancelRequest', 'room:answerRequest', 'room:kick',
+  'queue:join', 'queue:leave', 'game:start', 'game:reveal', 'game:rematch',
+];
+const ADMIN_EVENTS = ['admin:kick', 'admin:ban', 'admin:closeRoom', 'admin:watch', 'admin:mines'];
+const BAD_ARGS = [
+  [], [undefined], [null], [42], ['text'], [[]], [{}],
+  [{ roomId: {}, nickname: {}, name: [], config: 'x', mode: 7, row: 'a', col: null, targetId: [], note: 'x' }],
+  [{}, 5], [null, 'not a function'],
+];
+
+const fuzzer = await connect();
+const fuzz = (socket, events) => {
+  for (const event of events) for (const args of BAD_ARGS) socket.emit(event, ...args);
+};
+fuzz(fuzzer, CLIENT_EVENTS);
+// A named player in a room reaches deeper code than an anonymous one.
+fuzzer.emit('player:join', { nickname: 'Fuzz' });
+fuzzer.emit('room:create', { name: 'Fuzz room', config: { rows: 4, cols: 4, mineCount: 2, maxPlayers: 3 } });
+await sleep(300);
+fuzz(fuzzer, CLIENT_EVENTS);
+fuzz(admin, ADMIN_EVENTS);
+await sleep(1000);
+
+const survivor = await connect().catch(() => null);
+const survivorJoin = survivor ? await setName(survivor, 'Survivor') : null;
+check('the server survives malformed messages on every event',
+  survivorJoin?.welcome === 'Welcome, Survivor.', survivorJoin?.welcome ?? 'could not connect');
+const badJoin = survivor ? await emitAck(survivor, 'room:join', null) : { ok: false, error: 'no ack' };
+check('a malformed request still gets a real answer',
+  badJoin.ok === false && !String(badJoin.error ?? '').startsWith('no ack'), JSON.stringify(badJoin));
+check('the server console survives malformed messages too', admin.connected === true);
+
+for (const socket of [alice, bob, carol, dave, admin, fuzzer, survivor]) socket?.close();
 
 console.log(`\n${passed.length} passed, ${failed.length} failed\n`);
 if (failed.length > 0) {

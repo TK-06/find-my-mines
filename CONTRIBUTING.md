@@ -29,6 +29,8 @@ cp .env.example .env
 | `VITE_SUPABASE_ANON_KEY` | Same page, the **publishable** key | No — safe in the browser |
 | `SUPABASE_SERVICE_ROLE_KEY` | Same page, the **secret** key | **YES** |
 | `VITE_OAUTH_PROVIDERS` | Leave empty unless Google/GitHub OAuth apps exist | No |
+| `ADMIN_TOKEN` | Only on a hosted server — opens `/admin?token=<value>`. Leave empty locally | **YES** |
+| `VITE_SERVER_URL` | Only for the Vercel build — the Render server's address. See `DEPLOY.md` | No |
 
 > **The secret key bypasses all database security.** Never commit it, never paste it in
 > Discord/LINE/chat, never give it a `VITE_` prefix. Ask the project owner for it over a
@@ -88,8 +90,10 @@ These are not style preferences — breaking them causes real bugs.
 
 1. **The server decides everything.** The client draws what `state:sync` last told it and
    forwards clicks. If client code decides a game outcome, that is a bug.
-2. **Mine positions never leave the server.** `Board.bombs` is not serialised. Do not add
-   board data to `publicState()`.
+2. **Mine positions never reach a player's or spectator's client.** `Board.bombs` is not
+   serialised. Do not add board data to `publicState()`. The one exception: a verified admin
+   watching a room with the mine toggle on gets them through `MatchManager.minePositions()`,
+   on the `/admin` namespace only.
 3. **Game rules go in `shared/` with a unit test**, never inline in a socket handler. Pure
    functions there test with no mocks, no sockets, no database.
 4. **Anything crossing the wire gets an assertion in `scripts/smoke-test.mjs`.** Unit tests
@@ -98,7 +102,11 @@ These are not style preferences — breaking them causes real bugs.
    everyone at once — TypeScript will tell you immediately, which is the point. **Discuss
    before changing it.**
 6. **Validate untrusted input on the server.** The client form may run the same validator for
-   a faster message, but the server's check is the one that counts.
+   a faster message, but the server's check is the one that counts. Register socket handlers
+   with `listen(...)`, never bare `socket.on(...)`; read payload fields defensively
+   (`text(payload, 'roomId')`, `payload?.x`), never by destructuring; reply with
+   `respond(ack, …)`, never `ack(…)`. Anyone can send anything, and one throw in a bare
+   handler used to crash the whole server.
 7. **Never trust what a client says about who it is.** Identity comes from the verified
    Supabase token; no token means guest.
 8. **Ratings are written by the server only.** A database trigger blocks everything else.
@@ -160,6 +168,14 @@ Agree on any `protocol.ts` change **before** two people start building against i
   from OneDrive sync.
 - **Grepping the bundle for `service_role` gives false positives** — supabase-js contains that
   string legitimately. Grep for the key's actual value instead.
+- **The client only follows a room it knows it is in.** `useGame` ignores room events for any
+  room other than `activeRoom`, so a late update never pulls a leaver back in. Any new server
+  path that seats a player must tell the client the room id **before** the room's first
+  `state:sync` — an ack with `roomId`, `queue:matched`, or `room:requestResolved` all do.
+  Seating someone silently leaves them on the lobby while the server thinks they are playing.
+- **A dropped seated player keeps their seat for 30 s** (`RECONNECT_GRACE_SECONDS`), keyed by
+  the tab's `sessionId`. Test sockets that send a `sessionId` and then close leave held seats
+  behind for 30 s; sockets without one leave at once, as before.
 
 ---
 
@@ -168,7 +184,9 @@ Agree on any `protocol.ts` change **before** two people start building against i
 This is graded coursework (25 points). Two things must not regress:
 
 - **Classic stays the create-game default** — 6×6, 11 mines, 2 players, Casual. A grader
-  should see the specified behaviour without touching a setting.
+  should see the specified behaviour without touching a setting. A Classic room also keeps the
+  original rules: anyone joins directly, and the host cannot kick or ban (`isClassicConfig` in
+  `shared/src/rooms.ts`). Extras like ask-to-join live in Custom rooms.
 - **"Play as guest" stays one click.** A grader must never need an account.
 
 The fundamentals are worth 10 points and extras score **zero** if the fundamentals are

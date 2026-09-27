@@ -5,10 +5,12 @@ interface Props {
   match: MatchRow;
   /** When set, that seat is highlighted as "you". */
   highlightProfileId?: string | null;
+  /** For a guest's own match: the guest seat with this name is "you". */
+  highlightGuestName?: string | null;
 }
 
 /** One finished match: board, mode, and every seat with its result. */
-export function MatchCard({ match, highlightProfileId }: Props) {
+export function MatchCard({ match, highlightProfileId, highlightGuestName }: Props) {
   const seats = orderSeats(match.players);
 
   return (
@@ -27,7 +29,9 @@ export function MatchCard({ match, highlightProfileId }: Props) {
       ) : (
         <ul className="seat-list">
           {seats.map((seat) => {
-            const isMe = highlightProfileId != null && seat.profile_id === highlightProfileId;
+            const isMe =
+              (highlightProfileId != null && seat.profile_id === highlightProfileId) ||
+              (highlightGuestName != null && seat.is_guest && seat.display_name === highlightGuestName);
             const won = seat.outcome === 'win';
 
             return (

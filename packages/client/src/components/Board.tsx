@@ -1,4 +1,4 @@
-import { TURN_SECONDS, type PublicMatchState, type RevealedCell } from '@fmm/shared';
+import { TURN_SECONDS, type MinePosition, type PublicMatchState, type RevealedCell } from '@fmm/shared';
 import type { CSSProperties } from 'react';
 
 interface Props {
@@ -6,6 +6,11 @@ interface Props {
   /** True when this browser owns the current turn. */
   myTurn: boolean;
   onReveal: (row: number, col: number) => void;
+  /**
+   * Server console only: where the hidden mines are. A game client never has
+   * this — the server sends mine positions solely on the /admin namespace.
+   */
+  mines?: MinePosition[] | null;
 }
 
 /** Index the reveal history by cell for O(1) lookup while rendering. */
@@ -20,8 +25,9 @@ const colName = (col: number) => String.fromCharCode(65 + col);
  * The board as a survey grid: lettered columns, numbered rows, and the turn
  * clock as a line along the top edge that drains while the turn runs.
  */
-export function Board({ state, myTurn, onReveal }: Props) {
+export function Board({ state, myTurn, onReveal, mines }: Props) {
   const revealed = revealMap(state.revealed);
+  const hiddenMines = new Set((mines ?? []).map((m) => `${m.row}:${m.col}`));
   const interactive = myTurn && state.status === 'playing';
   const playing = state.status === 'playing';
   const remaining = playing ? Math.max(0, state.secondsLeft) / TURN_SECONDS : 0;
@@ -52,6 +58,17 @@ export function Board({ state, myTurn, onReveal }: Props) {
           ...Array.from({ length: state.cols }, (__, col) => {
             const cell = revealed.get(`${row}:${col}`);
             const where = `${colName(col)}${row + 1}`;
+
+            if (!cell && hiddenMines.has(`${row}:${col}`)) {
+              return (
+                <button
+                  key={`${row}:${col}`}
+                  className="cell hidden-mine"
+                  disabled
+                  aria-label={`${where}, covered, mine`}
+                />
+              );
+            }
 
             if (!cell) {
               return (

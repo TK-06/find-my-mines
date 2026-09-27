@@ -1,9 +1,50 @@
+import type { LogLine, OnlinePlayer, RemovalNotice } from '@fmm/shared';
+
 /**
- * Pure presentation helpers for the profile and game-log pages.
+ * Pure presentation helpers for the lobby, profile and game-log pages.
  *
  * Kept separate from the components so they can be unit-tested without a
  * browser, a database, or a clock.
  */
+
+/** Where someone is, as the lobby's online list says it. */
+export function presenceLabel(player: Pick<OnlinePlayer, 'status' | 'roomId'>): string {
+  switch (player.status) {
+    case 'queue':
+      return 'Looking for a match';
+    case 'room':
+      return `In room ${player.roomId}`;
+    case 'playing':
+      return `Playing in ${player.roomId}`;
+    case 'watching':
+      return `Watching ${player.roomId}`;
+    default:
+      return 'In menu';
+  }
+}
+
+/**
+ * Whether this browser should sign out after being removed.
+ *
+ * Only a banned *account*: "log in again" should mean it. A guest has no
+ * session, and calling signOut anyway still broadcasts SIGNED_OUT to every tab
+ * of this site — which reloads the other players' tabs on a shared machine.
+ */
+export function signOutAfterRemoval(notice: RemovalNotice | null, isGuest: boolean): boolean {
+  return notice?.kind === 'banned' && !isGuest;
+}
+
+/**
+ * Adds terminal lines to what the console already shows. The server backfills
+ * on every (re)connect, so lines already present are skipped by id.
+ */
+export function mergeLogLines(current: LogLine[], incoming: LogLine[], limit = 400): LogLine[] {
+  const seen = new Set(current.map((line) => line.id));
+  const merged = [...current, ...incoming.filter((line) => !seen.has(line.id))].sort(
+    (a, b) => a.id - b.id,
+  );
+  return merged.slice(-limit);
+}
 
 /** Win rate as a whole percentage. Zero games is 0%, never NaN. */
 export function winRate(wins: number, gamesPlayed: number): number {

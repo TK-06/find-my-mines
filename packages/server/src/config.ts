@@ -25,8 +25,10 @@ export const CORS_ORIGIN: string | string[] =
   corsList.length === 1 ? corsList[0]! : corsList;
 
 /**
- * Optional password for the /admin console. Unset (LAN demo) means open, as
- * before. Set it on a public host so a stranger cannot hit Reset: the console
- * is then opened as /admin?token=<value>.
+ * Optional password for the /admin console: a third way in, beside the server
+ * machine and an admin account. Set it on a public host (behind a proxy the
+ * server-machine route never applies) and open the console as
+ * /admin?token=<value>. Unset means this route is closed — never that the
+ * console is open to everyone.
  */
 export const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? '';

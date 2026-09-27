@@ -3,6 +3,7 @@ import {
   generateRoomId,
   validateRoomConfig,
   type RoomConfig,
+  type RoomOrigin,
   type RoomSummary,
 } from '@fmm/shared';
 import { MatchManager, type MatchBroadcaster } from '../match/matchManager.js';
@@ -46,7 +47,11 @@ export class RoomManager {
   }
 
   /** Validates untrusted input, then creates the room with its creator seated. */
-  create(name: string, rawConfig: Partial<RoomConfig> | undefined): CreateResult {
+  create(
+    name: string,
+    rawConfig: Partial<RoomConfig> | undefined,
+    origin: RoomOrigin = 'created',
+  ): CreateResult {
     const config = coerceRoomConfig(rawConfig);
     const errors = validateRoomConfig(config);
     if (errors.length > 0) return { ok: false, errors };
@@ -56,9 +61,24 @@ export class RoomManager {
 
     this.rooms.set(
       roomId,
-      new MatchManager(roomId, cleanName, config, this.broadcasterFor(roomId)),
+      new MatchManager(roomId, cleanName, config, origin, this.broadcasterFor(roomId)),
     );
     return { ok: true, roomId };
+  }
+
+  /**
+   * An admin's "end game": destroys the room outright, whatever is happening in
+   * it. Returns everyone who was inside so the caller can tell them.
+   */
+  close(roomId: string): string[] {
+    const room = this.rooms.get(roomId);
+    if (!room) return [];
+
+    const members = room.memberIds();
+    for (const id of members) this.memberRoom.delete(id);
+    room.shutdown();
+    this.rooms.delete(roomId);
+    return members;
   }
 
   /** Records membership. The caller seats them via the room itself. */

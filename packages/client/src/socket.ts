@@ -8,6 +8,8 @@ import {
   type ServerToClientEvents,
 } from '@fmm/shared';
 import { io, type Socket } from 'socket.io-client';
+import { currentAccessToken } from './auth/supabase.js';
+import { tokenAuth } from './auth/session.js';
 
 /**
  * The server address comes from the shared source-code constant — the client
@@ -56,28 +58,30 @@ const sessionId = tabSessionId();
  * socket opened there would show up as a phantom client in the server's own
  * "clients online" count. `useGame` connects it, and only the game screen
  * uses `useGame`.
+ *
+ * The handshake carries the Supabase access token, read at the moment the
+ * connection opens, so the server can verify who this connection belongs to —
+ * no token means guest — and the tab's session id, so a dropped connection can
+ * take its held seat back.
  */
 export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(target, {
   autoConnect: false,
   transports: ['websocket', 'polling'],
-  auth: { sessionId },
+  auth: tokenAuth(currentAccessToken, { sessionId }),
 });
 
 /**
- * Attaches the Supabase access token to the handshake so the server can verify
- * who this connection belongs to. Called before connecting, and again after a
- * sign-in or sign-out so the next connection carries the right identity.
+ * The console sends the same token: away from the server machine, an account
+ * listed as an admin is let in. When the server sets ADMIN_TOKEN, opening
+ * /admin?token=<value> is a third way in.
  */
-export function setAccessToken(accessToken: string | undefined): void {
-  socket.auth = accessToken ? { accessToken, sessionId } : { sessionId };
-}
-
 export const adminSocket: Socket<ServerToAdminEvents, AdminToServerEvents> = io(
   `${target}${ADMIN_NAMESPACE}`,
   {
     autoConnect: false,
     transports: ['websocket', 'polling'],
-    // Only checked when the server sets ADMIN_TOKEN: open /admin?token=<value>.
-    auth: { token: new URLSearchParams(window.location.search).get('token') ?? '' },
+    auth: tokenAuth(currentAccessToken, {
+      token: new URLSearchParams(window.location.search).get('token') ?? '',
+    }),
   },
 );

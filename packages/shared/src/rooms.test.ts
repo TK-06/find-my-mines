@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { CLASSIC_PRESET, MAX_GRID, MAX_PLAYERS_LIMIT, MIN_GRID } from './config.js';
 import { createBoard } from './engine/board.js';
 import { createRng } from './engine/rng.js';
-import { coerceRoomConfig, isRoomFull, validateRoomConfig } from './rooms.js';
+import {
+  coerceRoomConfig,
+  isClassicConfig,
+  isRoomFull,
+  joinRequestError,
+  validateRoomConfig,
+} from './rooms.js';
 import type { RoomConfig } from './types.js';
 
 const classic = (): RoomConfig => ({ ...CLASSIC_PRESET });
@@ -135,5 +141,73 @@ describe('room mode', () => {
   it('accepts both valid modes', () => {
     expect(validateRoomConfig({ ...classic(), mode: 'casual' })).toEqual([]);
     expect(validateRoomConfig({ ...classic(), mode: 'ranked' })).toEqual([]);
+  });
+});
+
+describe('isClassicConfig', () => {
+  it('recognises the graded 6×6, 11-mine, two-player board', () => {
+    expect(isClassicConfig(classic())).toBe(true);
+  });
+
+  it('is Classic in either mode — the board is what the professor grades', () => {
+    expect(isClassicConfig({ ...classic(), mode: 'ranked' })).toBe(true);
+  });
+
+  it('is not Classic with a different seat limit', () => {
+    expect(isClassicConfig({ ...classic(), maxPlayers: 3 })).toBe(false);
+    expect(isClassicConfig({ ...classic(), maxPlayers: null })).toBe(false);
+  });
+
+  it('is not Classic with a different board or mine count', () => {
+    expect(isClassicConfig({ ...classic(), rows: 8 })).toBe(false);
+    expect(isClassicConfig({ ...classic(), mineCount: 10 })).toBe(false);
+  });
+});
+
+describe('join by request', () => {
+  it('defaults to open, so existing callers keep joining directly', () => {
+    expect(coerceRoomConfig({ rows: 8, cols: 8, mineCount: 10 }).joinByRequest).toBe(false);
+  });
+
+  it('keeps ask-to-join on a Custom board', () => {
+    expect(coerceRoomConfig({ rows: 8, cols: 8, mineCount: 10, joinByRequest: true }).joinByRequest).toBe(true);
+  });
+
+  it('forces Classic open, whatever the client sent — Classic is the original rules', () => {
+    expect(coerceRoomConfig({ ...classic(), joinByRequest: true }).joinByRequest).toBe(false);
+  });
+});
+
+describe('joinRequestError', () => {
+  const ok = {
+    joinByRequest: true,
+    alreadyMember: false,
+    alreadyRequested: false,
+    banned: false,
+    full: false,
+  };
+
+  it('accepts a request to an ask-to-join room with a free seat', () => {
+    expect(joinRequestError(ok)).toBeNull();
+  });
+
+  it('refuses a request to an open room — just join it', () => {
+    expect(joinRequestError({ ...ok, joinByRequest: false })).toMatch(/open/i);
+  });
+
+  it('refuses someone already in the room', () => {
+    expect(joinRequestError({ ...ok, alreadyMember: true })).toMatch(/already in/i);
+  });
+
+  it('refuses someone the host banned from the room', () => {
+    expect(joinRequestError({ ...ok, banned: true })).toMatch(/banned/i);
+  });
+
+  it('refuses when every seat is taken', () => {
+    expect(joinRequestError({ ...ok, full: true })).toMatch(/full/i);
+  });
+
+  it('refuses a duplicate request', () => {
+    expect(joinRequestError({ ...ok, alreadyRequested: true })).toMatch(/already asked/i);
   });
 });

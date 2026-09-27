@@ -4,20 +4,25 @@ import {
   TURN_SECONDS,
   createBoard,
   createRng,
+  hostModerationError,
   isRoomFull,
+  joinRequestError,
   pickOne,
   rateMatch,
   revealCell,
   type Board,
   type ForfeitNotice,
   type Identity,
+  type MinePosition,
   type PlayerPublic,
   type PublicMatchState,
   type RevealedCell,
   type RoomConfig,
+  type RoomOrigin,
   type RoomSummary,
   type Seat,
 } from '@fmm/shared';
+import { contain } from '../safety.js';
 import { TurnTimer } from './turnTimer.js';
 
 interface Occupant {
@@ -35,6 +40,12 @@ interface Occupant {
   gamesPlayed: number;
   /** Set on the seats of the match that just ended, for the result screen. */
   eloDelta?: number;
+  /**
+   * A spectator who may be moved into a free seat when the next match starts.
+   * In an ask-to-join room only people the host let in qualify — otherwise
+   * spectating and waiting would skip the host's approval.
+   */
+  promotable: boolean;
 }
 
 /** What the server needs in order to persist a finished match. */
@@ -44,6 +55,8 @@ export interface FinishedMatch {
   config: RoomConfig;
   winnerProfileId: string | null;
   players: {
+    /** The socket that played this seat — to tell them the saved match id. Not persisted. */
+    clientId: string;
     profileId: string | null;
     displayName: string;
     isGuest: boolean;
@@ -75,6 +88,15 @@ export interface MatchBroadcaster {
 }
 
 /**
+ * A room ban follows an account wherever it connects from. A guest has no
+ * account, so the ban holds only for that connection — logging in again as a
+ * new guest gets round it, which is accepted: nothing about bans is stored.
+ */
+function banKey(socketId: string, profileId: string | null): string {
+  return profileId ?? `socket:${socketId}`;
+}
+
+/**
  * One room: its seating, its match, its rules.
  *
  * The host is not stored. It is always the earliest-joined seated player, so
@@ -97,6 +119,15 @@ export class MatchManager {
 
   private lastResult: FinishedMatch | null = null;
 
+  /**
+   * Who the host has banned from this room. Keyed by account id, or by
+   * connection for a guest. Belongs to the room, so a new host inherits it.
+   */
+  private readonly roomBans = new Set<string>();
+
+  /** Pending asks to join, oldest first. The room owns them, so a new host inherits them. */
+  private joinRequests: { id: string; identity: Identity }[] = [];
+
   readonly createdAt = Date.now();
   private readonly timer: TurnTimer;
 
@@ -104,11 +135,16 @@ export class MatchManager {
     readonly roomId: string,
     readonly roomName: string,
     readonly config: RoomConfig,
+    readonly origin: RoomOrigin,
     private readonly out: MatchBroadcaster,
   ) {
+    // Timer callbacks run outside any socket handler, so they contain their
+    // own failures: a bug in one room's turn must not stop the server.
+    const report = (error: unknown) =>
+      console.error(`[room ${roomId}] turn timer callback failed:`, error);
     this.timer = new TurnTimer(
-      (secondsLeft) => this.out.turnTick(secondsLeft),
-      () => this.handleTimeout(),
+      contain((secondsLeft: number) => this.out.turnTick(secondsLeft), report),
+      contain(() => this.handleTimeout(), report),
     );
   }
 
@@ -134,6 +170,81 @@ export class MatchManager {
     return this.isSeated(id) || this.spectators.some((s) => s.id === id);
   }
 
+  /** Every member, players then spectators. */
+  memberIds(): string[] {
+    return [...this.players, ...this.spectators].map((o) => o.id);
+  }
+
+  // ── host moderation ──────────────────────────────────────────────────────
+
+  /** Why this host kick or ban is refused, or null when it is allowed. */
+  moderationError(actorId: string, targetId: string): string | null {
+    return hostModerationError({
+      origin: this.origin,
+      config: this.config,
+      actorId,
+      hostId: this.hostId,
+      targetId,
+      targetInRoom: this.has(targetId),
+    });
+  }
+
+  /** Stops a member rejoining. The caller removes them from the room. */
+  banFromRoom(id: string): void {
+    const member = [...this.players, ...this.spectators].find((o) => o.id === id);
+    if (member) this.roomBans.add(banKey(member.id, member.profileId));
+  }
+
+  isBannedFromRoom(id: string, identity: Identity): boolean {
+    return this.roomBans.has(banKey(id, identity.profileId));
+  }
+
+  // ── join requests ────────────────────────────────────────────────────────
+
+  /** Asks the host for a seat. Returns why it is refused, or null once it is pending. */
+  requestJoin(id: string, identity: Identity): string | null {
+    const refusal = joinRequestError({
+      joinByRequest: this.config.joinByRequest === true,
+      alreadyMember: this.has(id),
+      alreadyRequested: this.joinRequests.some((r) => r.id === id),
+      banned: this.isBannedFromRoom(id, identity),
+      full: isRoomFull(this.config, this.players.length),
+    });
+    if (refusal) return refusal;
+
+    this.joinRequests.push({ id, identity });
+    this.out.stateSync(this.publicState());
+    this.out.changed();
+    return null;
+  }
+
+  /** Drops a pending request. True when there was one. */
+  withdrawRequest(id: string): boolean {
+    const before = this.joinRequests.length;
+    this.joinRequests = this.joinRequests.filter((r) => r.id !== id);
+    if (this.joinRequests.length === before) return false;
+
+    this.out.stateSync(this.publicState());
+    this.out.changed();
+    return true;
+  }
+
+  /**
+   * Host only. Removes a pending request and hands back who asked, so the
+   * caller can seat them or turn them away.
+   */
+  takeRequest(actorId: string, requesterId: string): { identity: Identity } | { error: string } {
+    if (actorId !== this.hostId) return { error: 'Only the host can answer join requests.' };
+
+    const request = this.joinRequests.find((r) => r.id === requesterId);
+    if (!request) return { error: 'That request is no longer pending.' };
+
+    this.joinRequests = this.joinRequests.filter((r) => r.id !== requesterId);
+    this.out.stateSync(this.publicState());
+    this.out.changed();
+    return { identity: request.identity };
+  }
+
   /**
    * Seats a client if there is room and no match is running.
    *
@@ -142,7 +253,8 @@ export class MatchManager {
    * promoted automatically when the match ends.
    */
   addPlayer(id: string, identity: Identity): Seat {
-    const occupant = this.newOccupant(id, identity);
+    // They asked for a seat, so they are first in line for one.
+    const occupant = this.newOccupant(id, identity, true);
 
     if (isRoomFull(this.config, this.players.length) || this.status === 'playing') {
       this.spectators.push(occupant);
@@ -156,12 +268,16 @@ export class MatchManager {
   }
 
   addSpectator(id: string, identity: Identity): Seat {
-    this.spectators.push(this.newOccupant(id, identity));
+    // In an open room anyone watching may take a free seat later. In an
+    // ask-to-join room that would skip the host, so only players they let in
+    // (via addPlayer) are promoted.
+    const promotable = this.config.joinByRequest !== true;
+    this.spectators.push(this.newOccupant(id, identity, promotable));
     this.out.changed();
     return 'spectator';
   }
 
-  private newOccupant(id: string, identity: Identity): Occupant {
+  private newOccupant(id: string, identity: Identity, promotable: boolean): Occupant {
     return {
       id,
       nickname: identity.nickname,
@@ -173,6 +289,7 @@ export class MatchManager {
       isGuest: identity.isGuest,
       elo: identity.elo,
       gamesPlayed: identity.gamesPlayed,
+      promotable,
     };
   }
 
@@ -266,7 +383,8 @@ export class MatchManager {
   /**
    * Ends the match in favour of the one player still seated. The leaver takes
    * the loss (and, in ranked, the rating hit), and the winner starts the next
-   * match. The room returns to waiting for a new opponent.
+   * match. The room returns to waiting for a new opponent. Being kicked or
+   * banned mid-match counts the same as leaving.
    */
   private forfeitMatch(leaver: Occupant): void {
     const winner = this.seatedPlayers()[0];
@@ -299,14 +417,13 @@ export class MatchManager {
     this.out.matchForfeited(notice, result);
   }
 
-  /** Fills free seats from the spectator queue, oldest first. */
+  /** Fills free seats from the spectators who may take one, oldest first. */
   private promoteSpectators(): void {
-    while (
-      this.spectators.length > 0 &&
-      !isRoomFull(this.config, this.players.length)
-    ) {
-      const next = this.spectators.shift()!;
-      this.players.push(next);
+    while (!isRoomFull(this.config, this.players.length)) {
+      const index = this.spectators.findIndex((s) => s.promotable);
+      if (index < 0) break;
+      const [next] = this.spectators.splice(index, 1);
+      this.players.push(next!);
     }
   }
 
@@ -429,6 +546,7 @@ export class MatchManager {
       players: seated.map((player) => {
         const result = byId.get(player.id)!;
         return {
+          clientId: player.id,
           profileId: player.profileId,
           displayName: player.nickname,
           isGuest: player.isGuest,
@@ -547,6 +665,29 @@ export class MatchManager {
     this.startMatch(this.lastWinnerId ?? undefined);
   }
 
+  /** Stops the turn timer for good. Used when an admin ends the room. */
+  shutdown(): void {
+    this.timer.stop();
+  }
+
+  /**
+   * Where the mines are, or null before a board exists.
+   *
+   * The ONLY way mine positions leave this class. Called solely by the admin
+   * namespace, for a verified admin who turned the mine toggle on — never by
+   * anything that talks to game clients.
+   */
+  minePositions(): MinePosition[] | null {
+    if (!this.board) return null;
+    const mines: MinePosition[] = [];
+    for (let row = 0; row < this.board.rows; row++) {
+      for (let col = 0; col < this.board.cols; col++) {
+        if (this.board.bombs[row]![col]) mines.push({ row, col });
+      }
+    }
+    return mines;
+  }
+
   /** The server console's Reset button: clears the board AND every score. */
   resetAll(): void {
     this.timer.stop();
@@ -615,6 +756,7 @@ export class MatchManager {
       roomName: this.roomName,
       hostId: this.hostId,
       config: this.config,
+      origin: this.origin,
       status: this.status,
       rows: this.config.rows,
       cols: this.config.cols,
@@ -622,6 +764,12 @@ export class MatchManager {
       bombsFound: this.revealed.filter((c) => c.kind === 'bomb').length,
       players: this.orderedPlayers().map((p) => this.toPublic(p)),
       spectatorCount: this.spectators.length,
+      spectators: this.spectators.map(({ id, nickname }) => ({ id, nickname })),
+      joinRequests: this.joinRequests.map(({ id, identity }) => ({
+        id,
+        nickname: identity.nickname,
+        isGuest: identity.isGuest,
+      })),
       currentPlayerId: this.currentPlayerId,
       secondsLeft: this.timer.secondsLeft,
       revealed: [...this.revealed],

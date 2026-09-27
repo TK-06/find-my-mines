@@ -1,0 +1,45 @@
+feat: server console v2, online list, host moderation, ask-to-join
+
+The assignment grades a connected-player list on the client, and only
+the server console had one. The lobby gains an "Online now" panel
+showing where each player is.
+
+Server console (/admin):
+- live terminal of connect/leave events, game traffic behind a toggle
+- watch any game, with an optional mine overlay (admin namespace only)
+- end games, kick or ban any player; a reason is required and shown
+  to the removed player
+- access: the server machine with no login, or an account in
+  public.admins; a request carrying any forwarding header (tunnels,
+  proxies, VS Code port forward) never counts as the server machine
+
+Players:
+- host kick/ban in Custom casual rooms only; bans are kept in memory,
+  never stored
+- ask-to-join for Custom rooms: request dialog, host Accept/Decline
+  popups, also reachable from the Online now list
+- guests see their own games in the game log (match ids kept in the
+  browser, sent by the server as match:recorded)
+- Classic keeps the original rules: open join, no ask-to-join, no
+  host kick
+
+Fixes:
+- two signed-in tabs reloaded each other forever: supabase-js
+  broadcasts SIGNED_IN on every tab load; reload only when the
+  identity changes, and read the token at each socket handshake
+- a malformed payload (room:join with no body) threw in a bare
+  handler and crashed the server; every handler goes through
+  listen()/respond() with defensive reads, timers and the matchmaking
+  tick are contained, identity lookups time out after 5 s, and the
+  e2e suite fuzzes every event
+
+Specs in docs/specs/; ROADMAP and CONTRIBUTING updated.
+
+Migration: apply supabase/migrations/0002_admins.sql. Without it the
+admin-account path stays closed; the server-machine path still works.
+
+Verified: typecheck clean, 223 unit, 130 e2e (with and without DB),
+32 ranked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011PWKfge6zuoU9D5TqXnsJs

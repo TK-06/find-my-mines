@@ -3,10 +3,82 @@ import {
   deltaTone,
   describeBoard,
   formatDelta,
+  mergeLogLines,
   orderSeats,
+  presenceLabel,
   relativeTime,
+  signOutAfterRemoval,
   winRate,
 } from './format.js';
+import type { LogLine, RemovalNotice } from '@fmm/shared';
+
+describe('signOutAfterRemoval', () => {
+  const notice = (kind: RemovalNotice['kind']): RemovalNotice => ({
+    kind,
+    by: 'admin',
+    byName: null,
+    roomId: null,
+    roomName: null,
+    roomBan: false,
+    note: { reasons: ['other'], remark: '' },
+  });
+
+  it('signs out a banned account, so logging in again is required', () => {
+    expect(signOutAfterRemoval(notice('banned'), false)).toBe(true);
+  });
+
+  it('never signs out a banned guest — a sign-out broadcast reloads every other tab', () => {
+    expect(signOutAfterRemoval(notice('banned'), true)).toBe(false);
+  });
+
+  it('does not sign anyone out for a kick or an ended room', () => {
+    expect(signOutAfterRemoval(notice('kicked'), false)).toBe(false);
+    expect(signOutAfterRemoval(notice('room-closed'), false)).toBe(false);
+  });
+
+  it('does nothing without a notice', () => {
+    expect(signOutAfterRemoval(null, false)).toBe(false);
+  });
+});
+
+describe('mergeLogLines', () => {
+  const line = (id: number): LogLine => ({ id, at: id, kind: 'room', text: `#${id}` });
+  const ids = (lines: LogLine[]) => lines.map((l) => l.id);
+
+  it('appends new lines in the order they happened', () => {
+    expect(ids(mergeLogLines([line(1), line(2)], [line(3)]))).toEqual([1, 2, 3]);
+  });
+
+  it('ignores lines it already has, so a backfill after a reconnect does not duplicate', () => {
+    expect(ids(mergeLogLines([line(1), line(2)], [line(1), line(2), line(3)]))).toEqual([1, 2, 3]);
+  });
+
+  it('keeps only the newest lines once past the limit', () => {
+    expect(ids(mergeLogLines([line(1), line(2), line(3)], [line(4)], 3))).toEqual([2, 3, 4]);
+  });
+});
+
+describe('presenceLabel', () => {
+  it('describes a player on the landing page', () => {
+    expect(presenceLabel({ status: 'lobby', roomId: null })).toBe('In menu');
+  });
+
+  it('describes a player in matchmaking', () => {
+    expect(presenceLabel({ status: 'queue', roomId: null })).toBe('Looking for a match');
+  });
+
+  it('names the room a seated player is waiting in', () => {
+    expect(presenceLabel({ status: 'room', roomId: 'ABCD' })).toBe('In room ABCD');
+  });
+
+  it('names the room of a live match', () => {
+    expect(presenceLabel({ status: 'playing', roomId: 'ABCD' })).toBe('Playing in ABCD');
+  });
+
+  it('names the room a spectator is watching', () => {
+    expect(presenceLabel({ status: 'watching', roomId: 'WXYZ' })).toBe('Watching WXYZ');
+  });
+});
 
 describe('winRate', () => {
   it('is 0 with no games rather than NaN', () => {

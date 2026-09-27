@@ -10,6 +10,12 @@ export type MatchStatus = 'waiting' | 'playing' | 'ended';
 export type RoomMode = 'casual' | 'ranked';
 
 /**
+ * How a room came to exist. A matchmade room has no host anyone chose, so the
+ * host's moderation powers do not apply there.
+ */
+export type RoomOrigin = 'created' | 'matchmaking';
+
+/**
  * Per-room settings, chosen when the room is created.
  * `maxPlayers: null` means unlimited seats.
  */
@@ -19,6 +25,11 @@ export interface RoomConfig {
   mineCount: number;
   maxPlayers: number | null;
   mode: RoomMode;
+  /**
+   * Players ask the host to take a seat instead of joining directly. Custom
+   * rooms only — a Classic room is always open. Absent means open.
+   */
+  joinByRequest?: boolean;
 }
 
 export interface PlayerPublic {
@@ -59,7 +70,43 @@ export interface ClientInfo {
   address: string;
   /** Which room they are in, or null while they are on the landing page. */
   roomId: string | null;
+  /** True until a verified account says otherwise. */
+  isGuest: boolean;
 }
+
+/** Where a connected player is right now, for the lobby's online list. */
+export type PresenceStatus = 'lobby' | 'queue' | 'room' | 'playing' | 'watching';
+
+/**
+ * One row of the players' online list.
+ *
+ * Spec: "the server will provide information about the other connected
+ * client." Deliberately carries no network address — that is admin-only.
+ */
+export interface OnlinePlayer {
+  id: string;
+  nickname: string;
+  isGuest: boolean;
+  status: PresenceStatus;
+  /** Set for room, playing and watching. */
+  roomId: string | null;
+}
+
+/** A spectator, as listed to everyone in the room. */
+export interface SpectatorPublic {
+  id: string;
+  nickname: string;
+}
+
+/** Someone waiting for the host to let them into an ask-to-join room. */
+export interface JoinRequestPublic {
+  id: string;
+  nickname: string;
+  isGuest: boolean;
+}
+
+/** How a join request ended, as told to the person who asked. */
+export type JoinRequestOutcome = 'accepted' | 'declined' | 'closed';
 
 /** One revealed cell, as broadcast to a room. Bomb positions are never sent. */
 export interface RevealedCell {
@@ -78,6 +125,8 @@ export interface PublicMatchState {
   /** Whoever may press Start. Reassigned to the earliest joiner if the host leaves. */
   hostId: string | null;
   config: RoomConfig;
+  /** Whether a player created the room or matchmaking did. */
+  origin: RoomOrigin;
   status: MatchStatus;
   rows: number;
   cols: number;
@@ -85,6 +134,10 @@ export interface PublicMatchState {
   bombsFound: number;
   players: PlayerPublic[];
   spectatorCount: number;
+  /** Who is watching, oldest first. */
+  spectators: SpectatorPublic[];
+  /** Pending asks to join, oldest first. Only the host can answer them. */
+  joinRequests: JoinRequestPublic[];
   currentPlayerId: string | null;
   secondsLeft: number;
   revealed: RevealedCell[];
@@ -104,18 +157,6 @@ export interface ForfeitNotice {
   winnerNickname: string;
   leaverNickname: string;
   players: { id: string; nickname: string; score: number; eloDelta?: number }[];
-}
-
-/**
- * Someone connected to the server, as other players see them. No address —
- * that stays on the server console.
- */
-export interface OnlinePlayer {
-  id: string;
-  nickname: string;
-  /** Room they are in, or null while on the landing page. */
-  roomId: string | null;
-  seat: Seat;
 }
 
 /** One row of the landing page's game list. */
@@ -150,6 +191,74 @@ export interface QueuePoolRow {
   mode: RoomMode;
   waitedMs: number;
   eloWindow: number;
+}
+
+// ── moderation ──────────────────────────────────────────────────────────────
+
+/** Preset reasons offered by the kick/ban dialog. Labels live in moderation.ts. */
+export type RemovalReason = 'afk' | 'offensive-name' | 'harassment' | 'cheating' | 'other';
+
+/** Why someone was removed: at least one reason or a remark, validated server-side. */
+export interface RemovalNote {
+  reasons: RemovalReason[];
+  remark: string;
+}
+
+export type RemovalKind = 'kicked' | 'banned' | 'room-closed';
+
+/** Sent to a player who was removed, so their screen can say what happened. */
+export interface RemovalNotice {
+  kind: RemovalKind;
+  by: 'host' | 'admin';
+  /** The host's nickname when a host did it; null for an admin. */
+  byName: string | null;
+  roomId: string | null;
+  roomName: string | null;
+  /** Host ban: this player may not rejoin the room. */
+  roomBan: boolean;
+  note: RemovalNote;
+}
+
+export interface ModerationResult {
+  ok: boolean;
+  error?: string;
+}
+
+// ── server console ──────────────────────────────────────────────────────────
+
+export type LogKind =
+  | 'connection'
+  | 'player'
+  | 'room'
+  | 'queue'
+  | 'match'
+  | 'moderation'
+  | 'admin'
+  | 'traffic'
+  /** A handler failed and was contained; the server kept running. */
+  | 'error';
+
+/** One line of the console's terminal panel. */
+export interface LogLine {
+  /** Increasing; doubles as a React key. */
+  id: number;
+  at: number;
+  kind: LogKind;
+  text: string;
+}
+
+export interface MinePosition {
+  row: number;
+  col: number;
+}
+
+/**
+ * The room an admin is watching. `mines` is null unless that admin turned the
+ * mine toggle on — and it only ever travels on the /admin namespace.
+ */
+export interface AdminRoomView {
+  state: PublicMatchState;
+  mines: MinePosition[] | null;
 }
 
 export interface AdminState {

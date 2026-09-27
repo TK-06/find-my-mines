@@ -5,7 +5,6 @@ import {
   MIN_GRID,
   MIN_PLAYERS_TO_START,
   validateRoomConfig,
-  type OnlinePlayer,
   type RoomConfig,
   type RoomMode,
   type RoomSummary,
@@ -15,8 +14,6 @@ import { useMemo, useState } from 'react';
 interface Props {
   rooms: RoomSummary[];
   clientCount: number;
-  online: OnlinePlayer[];
-  myId: string | null;
   onCreate: (name: string, config: RoomConfig) => void;
   onJoin: (roomId: string) => void;
   onSpectate: (roomId: string) => void;
@@ -24,23 +21,17 @@ interface Props {
 
 const CLASSIC: RoomConfig = { ...CLASSIC_PRESET };
 
-export function LobbyScreen({
-  rooms,
-  online,
-  myId,
-  onCreate,
-  onJoin,
-  onSpectate,
-}: Props) {
+export function LobbyScreen({ rooms, clientCount, onCreate, onJoin, onSpectate }: Props) {
   const [showCreate, setShowCreate] = useState(false);
 
   return (
-    <div className="lobby-grid">
     <div className="stack">
       <div className="lobby-head">
         <div>
           <h2 className="section-title">Games</h2>
-          <p className="muted">{rooms.length} open</p>
+          <p className="muted">
+            {rooms.length} open · {clientCount} player{clientCount === 1 ? '' : 's'} online
+          </p>
         </div>
         <button onClick={() => setShowCreate((v) => !v)}>
           {showCreate ? 'Cancel' : '+ Create game'}
@@ -71,59 +62,6 @@ export function LobbyScreen({
         </ul>
       )}
     </div>
-
-    <OnlinePanel online={online} rooms={rooms} myId={myId} />
-    </div>
-  );
-}
-
-/**
- * Everyone connected right now and where they are.
- *
- * Spec: "the server will provide information about the other connected
- * client. This allows each client to know which users are currently
- * connected to the same network."
- */
-function OnlinePanel({
-  online,
-  rooms,
-  myId,
-}: {
-  online: OnlinePlayer[];
-  rooms: RoomSummary[];
-  myId: string | null;
-}) {
-  const statusOf = (player: OnlinePlayer) => {
-    if (!player.roomId) return 'in lobby';
-    if (player.seat === 'spectator') return `watching ${player.roomId}`;
-    const room = rooms.find((r) => r.id === player.roomId);
-    return room?.status === 'playing' ? `playing ${player.roomId}` : `in room ${player.roomId}`;
-  };
-
-  return (
-    <aside className="card online-panel" aria-label="Players online">
-      <div className="online-head">
-        <span className="online-count">{online.length}</span>
-        <span className="muted">online now</span>
-      </div>
-
-      {online.length === 0 ? (
-        <p className="muted">Nobody else yet.</p>
-      ) : (
-        <ul className="list online-list">
-          {online.map((player) => (
-            <li key={player.id}>
-              <span className="who">
-                <span className="online-dot" aria-hidden="true" />
-                {player.nickname}
-                {player.id === myId && <span className="tag me">you</span>}
-              </span>
-              <span className="muted">{statusOf(player)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </aside>
   );
 }
 
@@ -138,6 +76,7 @@ function RoomRow({
 }) {
   const limit = room.config.maxPlayers ?? '∞';
   const playing = room.status === 'playing';
+  const ask = room.config.joinByRequest === true;
 
   return (
     <li className="room-row card">
@@ -147,6 +86,7 @@ function RoomRow({
           <strong>{room.name}</strong>
           <span className={`tag mode-${room.config.mode}`}>{room.config.mode}</span>
           <span className={`tag status-${room.status}`}>{room.status}</span>
+          {ask && <span className="tag ask">ask to join</span>}
         </div>
         <div className="muted room-meta">
           Host {room.hostNickname} · {room.config.rows}×{room.config.cols} ·{' '}
@@ -157,7 +97,7 @@ function RoomRow({
 
       <div className="room-actions">
         <button onClick={() => onJoin(room.id)} disabled={!room.joinable}>
-          {!room.joinable ? 'Full' : playing ? 'Join next' : 'Join'}
+          {!room.joinable ? 'Full' : ask ? 'Ask to join' : playing ? 'Join next' : 'Join'}
         </button>
         <button className="ghost" onClick={() => onSpectate(room.id)}>
           Spectate
@@ -176,6 +116,8 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
   const [unlimited, setUnlimited] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState(CLASSIC.maxPlayers ?? 2);
   const [mode, setMode] = useState<RoomMode>('casual');
+  // Custom rooms showcase the host approving players; Classic stays open.
+  const [askToJoin, setAskToJoin] = useState(true);
 
   const board =
     preset === 'classic'
@@ -183,7 +125,7 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
       : { rows, cols, mineCount, maxPlayers: unlimited ? null : maxPlayers };
 
   // Mode is independent of the board preset — you can play Classic ranked.
-  const config: RoomConfig = { ...board, mode };
+  const config: RoomConfig = { ...board, mode, joinByRequest: preset === 'custom' && askToJoin };
 
   // Same validator the server runs, so the message matches what it would say.
   const errors = useMemo(() => validateRoomConfig(config), [config]);
@@ -227,10 +169,21 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
         </button>
         <span className="muted">
           {preset === 'classic'
-            ? `${CLASSIC.rows}×${CLASSIC.cols}, ${CLASSIC.mineCount} mines, ${CLASSIC.maxPlayers} players — the assignment spec`
+            ? `${CLASSIC.rows}×${CLASSIC.cols}, ${CLASSIC.mineCount} mines, ${CLASSIC.maxPlayers} players — the original assignment rules: anyone can join`
             : 'Pick your own board and player limit'}
         </span>
       </div>
+
+      {preset === 'custom' && (
+        <label className="checkbox" style={{ marginTop: 0 }}>
+          <input
+            type="checkbox"
+            checked={askToJoin}
+            onChange={(e) => setAskToJoin(e.target.checked)}
+          />
+          Players ask to join — you approve each one
+        </label>
+      )}
 
       {preset === 'custom' && (
         <div className="field-grid">

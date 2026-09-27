@@ -581,31 +581,224 @@ input[type='checkbox'] { accent-color: var(--ink); }
 .elo-badge strong { font-family: var(--mono); font-size: 18px; color: var(--ink); margin-right: 2px; }
 .tag.away { border-color: var(--signal); color: var(--signal); }
 
-/* ── lobby: games left, who's online right ──────────────── */
-.lobby-grid {
+.form-notice { margin-top: 12px; }
+
+/* ── lobby: games beside who is online ─────────────────── */
+.lobby-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 24px;
   align-items: start;
 }
-.online-panel { padding: 16px 18px; }
-.online-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-.online-count {
-  font-family: var(--display);
-  font-stretch: 125%;
-  font-weight: 800;
-  font-size: 40px;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
+.online-panel { position: sticky; top: 16px; }
+.online-list li { flex-direction: column; align-items: flex-start; gap: 4px; }
+.online-who { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.online-where {
+  font-size: 12px;
+  padding-left: 15px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
-.online-list { max-height: 360px; overflow-y: auto; }
-.online-list li { font-size: 14px; }
-.online-list .who { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; }
-.online-list .muted { white-space: nowrap; font-family: var(--mono); font-size: 11px; }
-.online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
+.online-where button.small { padding: 4px 10px; font-size: 12px; }
+/* Where someone is: grey in the lobby (pulsing while queued), ink in a room,
+   green playing, a ring watching. */
+.presence-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--slate);
+  flex: none;
+}
+.presence-dot.room { background: var(--ink); }
+.presence-dot.playing { background: var(--good); }
+.presence-dot.watching { background: transparent; border: 1.5px solid var(--slate); }
+.presence-dot.queue { background: var(--slate); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
 
 @media (max-width: 820px) {
-  .lobby-grid { grid-template-columns: 1fr; }
-  .online-panel { order: -1; }
+  .lobby-layout { grid-template-columns: 1fr; }
+  .online-panel { position: static; order: -1; }
 }
-.form-notice { margin-top: 12px; }
+
+/* ── kick / ban dialog ──────────────────────────────────── */
+.reason-dialog { width: min(440px, 100%); display: grid; gap: 8px; }
+.reason-dialog h2 { margin: 0; font-size: 20px; }
+.reason-dialog .muted { margin: 0 0 6px; }
+.reason-list { border: none; padding: 0; margin: 0 0 8px; display: grid; gap: 2px; }
+.reason-list .checkbox { margin-top: 6px; color: var(--ink); font-size: 14px; }
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  outline: none;
+  resize: vertical;
+}
+textarea:focus { border-color: var(--ink); }
+.remark-count { text-align: right; font-size: 12px; font-family: var(--mono); }
+
+/* ── kicked / banned page ───────────────────────────────── */
+.removed-card { width: min(460px, 100%); text-align: center; border-color: var(--ink); }
+.removed-card.banned { border-color: var(--bad); }
+.removed-card h2 { margin: 0 0 8px; font-size: 24px; }
+.reason-tags {
+  list-style: none; padding: 0; margin: 16px 0 0;
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+}
+.reason-tags .tag { font-size: 12px; padding: 5px 8px; }
+.remark {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--rule);
+  background: var(--sunken);
+  border-radius: 0 var(--r) var(--r) 0;
+  text-align: left;
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── host controls in the leaderboard ───────────────────── */
+.leaderboard .leader-row.moderated { grid-template-columns: 20px 1fr auto auto; }
+.row-actions { display: flex; gap: 6px; }
+.row-actions button.small { padding: 5px 10px; font-size: 12px; }
+.spectator-block { margin-top: 14px; }
+.spectator-list li { padding: 7px 0; }
+
+/* ── server console additions ───────────────────────────── */
+.client-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.client-actions button.small { padding: 5px 10px; font-size: 12px; }
+
+.viewer { display: grid; gap: 16px; border-color: var(--ink); }
+.viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+/* A covered mine, visible only to an admin with the toggle on: a hollow ring,
+   so it never reads as a mine someone has found (those are solid). */
+.cell.hidden-mine { border-style: dashed; border-color: var(--bad); }
+.cell.hidden-mine::before {
+  content: '';
+  width: 32%;
+  height: 32%;
+  border-radius: 50%;
+  border: 2px solid var(--bad);
+}
+
+.mine-toggle {
+  position: relative;
+  width: 40px; height: 36px;
+  padding: 0;
+  display: grid; place-items: center;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  font-size: 18px;
+}
+.mine-toggle:hover:not(:disabled) { background: var(--sunken); border-color: var(--slate); }
+.mine-toggle.on { border-color: var(--bad); box-shadow: inset 0 0 0 1px var(--bad); }
+.mine-toggle .mine-icon { position: relative; line-height: 1; }
+.mine-toggle.off .mine-icon { opacity: 0.6; }
+/* The slash: mines are hidden. */
+.mine-toggle.off .mine-icon::after {
+  content: '';
+  position: absolute;
+  left: -4px; right: -4px; top: 50%;
+  height: 2px;
+  background: var(--bad);
+  transform: rotate(-45deg);
+  border-radius: 2px;
+}
+
+/* ── terminal panel ─────────────────────────────────────── */
+/* A real terminal is dark in both themes, so its colours are fixed. */
+.terminal-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.terminal {
+  margin-top: 14px;
+  height: 300px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: #0c0d0f;
+  border: 1px solid #2a2e33;
+  border-radius: var(--r);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #c9ced6;
+}
+.term-line { display: grid; grid-template-columns: 70px 92px 1fr; gap: 10px; }
+.term-time { color: #6b727c; }
+.term-kind { color: #8c939d; }
+.term-text { overflow-wrap: anywhere; }
+.term-line.kind-connection .term-kind { color: #4cc38a; }
+.term-line.kind-player .term-kind { color: #7ea2ff; }
+.term-line.kind-room .term-kind { color: #ffb454; }
+.term-line.kind-match .term-kind { color: #b3a4ff; }
+.term-line.kind-queue .term-kind { color: #5fd0d0; }
+.term-line.kind-moderation .term-kind,
+.term-line.kind-moderation .term-text { color: #ff9f8f; }
+.term-line.kind-admin .term-kind { color: #ffd479; }
+.term-line.kind-traffic { color: #6b727c; }
+.term-line.kind-error .term-kind,
+.term-line.kind-error .term-text { color: #ff6b6b; font-weight: 600; }
+
+/* ── join requests ──────────────────────────────────────── */
+.tag.ask { border-color: var(--ink); color: var(--ink); }
+
+.request-dialog { position: relative; width: min(440px, 100%); display: grid; gap: 10px; }
+.request-dialog h2 { margin: 0; font-size: 20px; padding-right: 32px; }
+.dialog-close {
+  position: absolute;
+  top: 12px; right: 12px;
+  width: 32px; height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--slate);
+  font-size: 20px;
+  line-height: 1;
+}
+.dialog-close:hover:not(:disabled) { color: var(--ink); background: var(--sunken); border-color: var(--slate); }
+.request-status { display: flex; align-items: center; gap: 9px; margin: 4px 0; color: var(--ink); font-size: 14px; }
+
+/* The host's popups, stacked in the corner above everything but dialogs. */
+.request-toasts {
+  position: fixed;
+  right: 18px; bottom: 18px;
+  display: grid;
+  gap: 10px;
+  z-index: 45;
+  width: min(340px, calc(100vw - 36px));
+}
+.request-toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-color: var(--ink);
+  animation: toast-in 0.25s ease;
+}
+.request-who { display: flex; align-items: center; gap: 8px; }
+@keyframes toast-in {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+a.button-link {
+  display: inline-block;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--paper);
+  padding: 10px 16px;
+  border: 1px solid var(--ink);
+  border-radius: var(--r);
+  background: var(--ink);
+}
+a.button-link:hover { background: var(--slate); border-color: var(--slate); }

@@ -27,7 +27,8 @@ Do the steps in this order — each one needs a URL from the one before.
 
 4. Deploy, then open `https://<render-name>.onrender.com/health`. It should
    return `{"ok":true,...}`.
-5. Note the generated `ADMIN_TOKEN` (Render → Environment).
+5. Note the generated `ADMIN_TOKEN` (Render → Environment). It is one of three
+   ways into `/admin` — see "Who can open the server console" below.
 
 ## 2. Client on Vercel
 
@@ -73,7 +74,21 @@ domain. See the Social sign-in section of `ROADMAP.md`.
 
 - `https://<vercel>/`: the header shows **● connected**. Play in two browsers.
 - `https://<vercel>/admin?token=<ADMIN_TOKEN>`: the server console. Without the
-  token it stays "disconnected", so strangers cannot press Reset.
+  token (or an admin account) it shows "Admin only", so strangers cannot press
+  Reset.
+
+## Who can open the server console
+
+`/admin` lets a connection in if **any** of these holds:
+
+| Way in | Works on | Set up |
+|---|---|---|
+| The server machine itself | LAN demo laptop | Nothing — open `http://localhost:3000/admin`. Never applies behind Render, a tunnel or any proxy: a forwarding header always refuses it. |
+| An admin account | Anywhere | Sign in on the game page with an account listed in `public.admins` (migration `0002_admins.sql`). |
+| `ADMIN_TOKEN` | Anywhere | Set it on the server, open `/admin?token=<value>`. |
+
+Leaving `ADMIN_TOKEN` unset only closes the token route; it never opens the
+console to everyone.
 
 ## Things to know
 

@@ -1,8 +1,12 @@
 import {
   STARTING_ELO,
   type ForfeitNotice,
+  type JoinRequestOutcome,
+  type ModerationResult,
   type OnlinePlayer,
   type PublicMatchState,
+  type RemovalNote,
+  type RemovalNotice,
   type RoomActionResult,
   type QueueSnapshot,
   type RoomConfig,
@@ -10,6 +14,7 @@ import {
   type RoomSummary,
 } from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { rememberGuestMatch } from './data/guestHistory.js';
 import { socket } from './socket.js';
 
 const GUEST_KEY = 'fmm.guest';
@@ -35,6 +40,19 @@ function rememberGuest(nickname: string | null): void {
   }
 }
 
+/** Forgets the remembered guest name, so the next load asks for one again. */
+export function forgetStoredGuest(): void {
+  rememberGuest(null);
+}
+
+/** How the host answered our request to join (or the room closed first). */
+export interface RequestResolution {
+  roomId: string;
+  roomName: string;
+  outcome: JoinRequestOutcome;
+  byName: string | null;
+}
+
 /**
  * All socket wiring for the game client.
  *
@@ -47,12 +65,15 @@ export function useGame() {
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [clientCount, setClientCount] = useState(0);
   const [online, setOnline] = useState<OnlinePlayer[]>([]);
+  /** Set when a host or admin removed us; the removed page shows until dismissed. */
+  const [removed, setRemoved] = useState<RemovalNotice | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [welcome, setWelcome] = useState<string | null>(null);
   const [isGuest, setIsGuest] = useState(true);
   const [elo, setElo] = useState(STARTING_ELO);
   const [queue, setQueue] = useState<QueueSnapshot | null>(null);
   const [forfeit, setForfeit] = useState<ForfeitNotice | null>(null);
+  const [requestResolution, setRequestResolution] = useState<RequestResolution | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -63,6 +84,15 @@ export function useGame() {
   const playerIdRef = useRef<string | null>(null);
   /** Set once joined, so a dropped connection can re-join under the same name. */
   const lastNickname = useRef<string | null>(null);
+
+  // Read by long-lived socket listeners, which would otherwise see the values
+  // from the render they were registered in.
+  const isGuestRef = useRef(isGuest);
+  isGuestRef.current = isGuest;
+  /** The name we last played under — the room may be gone when the save lands. */
+  const myNicknameRef = useRef('');
+  const mine = state?.players.find((p) => p.id === playerId);
+  if (mine) myNicknameRef.current = mine.nickname;
 
   const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showError = useCallback((message: string) => {
@@ -130,6 +160,33 @@ export function useGame() {
       setOnline(who ?? []);
     });
 
+    // Kicked, banned, or the room was ended. The server has already taken us
+    // out of the room and the queue; this only changes what is on screen.
+    socket.on('player:removed', (notice) => {
+      activeRoom.current = null;
+      setState(null);
+      setQueue(null);
+      setForfeit(null);
+      setRemoved(notice);
+    });
+
+    // On 'accepted' the server seats us right after this, so adopt the room
+    // now — its state:sync would otherwise be ignored as another room's.
+    socket.on('room:requestResolved', (resolution) => {
+      if (resolution.outcome === 'accepted') {
+        activeRoom.current = resolution.roomId;
+        setForfeit(null);
+      }
+      setRequestResolution(resolution);
+    });
+
+    // A guest's browser remembers its own saved matches for the game log. An
+    // account's matches are found by its profile id instead.
+    socket.on('match:recorded', ({ matchId }) => {
+      if (!isGuestRef.current) return;
+      rememberGuestMatch({ matchId, nickname: myNicknameRef.current, at: Date.now() });
+    });
+
     // Leaving drops us back to the lobby; so does the room closing under us.
     socket.on('room:closed', ({ roomId, reason }) => {
       if (roomId !== activeRoom.current) return;
@@ -166,6 +223,9 @@ export function useGame() {
       socket.off('room:notice');
       socket.off('cell:revealed');
       socket.off('lobby:rooms');
+      socket.off('player:removed');
+      socket.off('room:requestResolved');
+      socket.off('match:recorded');
       socket.off('room:closed');
       socket.off('turn:changed');
       socket.off('turn:tick');
@@ -178,7 +238,7 @@ export function useGame() {
 
   /** Forgets the remembered guest and starts over at the nickname screen. */
   const forgetGuest = useCallback(() => {
-    rememberGuest(null);
+    forgetStoredGuest();
     window.location.reload();
   }, []);
 
@@ -240,12 +300,54 @@ export function useGame() {
   const rematch = useCallback(() => socket.emit('game:rematch'), []);
   const dismissForfeit = useCallback(() => setForfeit(null), []);
 
+  /** Host only. The server re-checks every rule; a refusal comes back as `error`. */
+  const kickMember = useCallback(
+    (targetId: string, ban: boolean, note: RemovalNote) =>
+      new Promise<ModerationResult>((resolve) =>
+        socket.emit('room:kick', { targetId, ban, note }, resolve),
+      ),
+    [],
+  );
+
+  const dismissRemoved = useCallback(() => setRemoved(null), []);
+
+  /** Ask an ask-to-join room's host for a seat. Resolves when the request is pending. */
+  const requestJoin = useCallback((roomId: string) => {
+    setRequestResolution(null);
+    return new Promise<ModerationResult>((resolve) =>
+      socket.emit('room:requestJoin', { roomId }, resolve),
+    );
+  }, []);
+
+  const cancelJoinRequest = useCallback(() => socket.emit('room:cancelRequest'), []);
+  const clearRequestResolution = useCallback(() => setRequestResolution(null), []);
+
+  /** Host only: let a requester in, or turn them away. */
+  const answerJoinRequest = useCallback(
+    (requesterId: string, accept: boolean) =>
+      new Promise<ModerationResult>((resolve) =>
+        socket.emit('room:answerRequest', { requesterId, accept }, (result) => {
+          if (!result.ok) showError(result.error ?? 'That did not work.');
+          resolve(result);
+        }),
+      ),
+    [showError],
+  );
+
   return {
     connected,
     state,
     rooms,
     clientCount,
     online,
+    removed,
+    dismissRemoved,
+    kickMember,
+    requestJoin,
+    cancelJoinRequest,
+    answerJoinRequest,
+    requestResolution,
+    clearRequestResolution,
     playerId,
     welcome,
     isGuest,
