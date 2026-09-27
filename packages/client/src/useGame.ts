@@ -1,6 +1,7 @@
 import {
   STARTING_ELO,
   type ForfeitNotice,
+  type OnlinePlayer,
   type PublicMatchState,
   type RoomActionResult,
   type QueueSnapshot,
@@ -45,6 +46,7 @@ export function useGame() {
   const [state, setState] = useState<PublicMatchState | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [clientCount, setClientCount] = useState(0);
+  const [online, setOnline] = useState<OnlinePlayer[]>([]);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [welcome, setWelcome] = useState<string | null>(null);
   const [isGuest, setIsGuest] = useState(true);
@@ -122,9 +124,10 @@ export function useGame() {
     });
     socket.on('room:notice', ({ message }) => showError(message));
 
-    socket.on('lobby:rooms', ({ rooms: list, clientCount: count }) => {
+    socket.on('lobby:rooms', ({ rooms: list, clientCount: count, online: who }) => {
       setRooms(list);
       setClientCount(count);
+      setOnline(who ?? []);
     });
 
     // Leaving drops us back to the lobby; so does the room closing under us.
@@ -242,6 +245,7 @@ export function useGame() {
     state,
     rooms,
     clientCount,
+    online,
     playerId,
     welcome,
     isGuest,

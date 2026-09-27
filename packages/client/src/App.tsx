@@ -20,6 +20,7 @@ export function App() {
     state,
     rooms,
     clientCount,
+    online,
     playerId,
     welcome,
     isGuest,
@@ -134,6 +135,8 @@ export function App() {
         <LobbyScreen
           rooms={rooms}
           clientCount={clientCount}
+          online={online}
+          myId={playerId}
           onCreate={createRoom}
           onJoin={joinRoom}
           onSpectate={spectateRoom}

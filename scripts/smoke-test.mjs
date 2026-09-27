@@ -498,8 +498,15 @@ section('forfeit and leaving');
 {
   const p1 = await connect();
   const p2 = await connect();
+  let lobby = null;
+  p1.on('lobby:rooms', (payload) => (lobby = payload));
   await setName(p1, 'Fern');
   await setName(p2, 'Gus');
+  await sleep(300);
+  const names = (lobby?.online ?? []).map((p) => p.nickname);
+  check('the lobby tells each client who else is online',
+    names.includes('Fern') && names.includes('Gus') && !names.includes('(joining…)'),
+    `${names.length} online`);
   const p1View = track(p1);
   const p2View = track(p2);
   const forfeits = [];

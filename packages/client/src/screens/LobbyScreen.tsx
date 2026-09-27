@@ -5,6 +5,7 @@ import {
   MIN_GRID,
   MIN_PLAYERS_TO_START,
   validateRoomConfig,
+  type OnlinePlayer,
   type RoomConfig,
   type RoomMode,
   type RoomSummary,
@@ -14,6 +15,8 @@ import { useMemo, useState } from 'react';
 interface Props {
   rooms: RoomSummary[];
   clientCount: number;
+  online: OnlinePlayer[];
+  myId: string | null;
   onCreate: (name: string, config: RoomConfig) => void;
   onJoin: (roomId: string) => void;
   onSpectate: (roomId: string) => void;
@@ -21,17 +24,23 @@ interface Props {
 
 const CLASSIC: RoomConfig = { ...CLASSIC_PRESET };
 
-export function LobbyScreen({ rooms, clientCount, onCreate, onJoin, onSpectate }: Props) {
+export function LobbyScreen({
+  rooms,
+  online,
+  myId,
+  onCreate,
+  onJoin,
+  onSpectate,
+}: Props) {
   const [showCreate, setShowCreate] = useState(false);
 
   return (
+    <div className="lobby-grid">
     <div className="stack">
       <div className="lobby-head">
         <div>
           <h2 className="section-title">Games</h2>
-          <p className="muted">
-            {rooms.length} open · {clientCount} player{clientCount === 1 ? '' : 's'} online
-          </p>
+          <p className="muted">{rooms.length} open</p>
         </div>
         <button onClick={() => setShowCreate((v) => !v)}>
           {showCreate ? 'Cancel' : '+ Create game'}
@@ -62,6 +71,59 @@ export function LobbyScreen({ rooms, clientCount, onCreate, onJoin, onSpectate }
         </ul>
       )}
     </div>
+
+    <OnlinePanel online={online} rooms={rooms} myId={myId} />
+    </div>
+  );
+}
+
+/**
+ * Everyone connected right now and where they are.
+ *
+ * Spec: "the server will provide information about the other connected
+ * client. This allows each client to know which users are currently
+ * connected to the same network."
+ */
+function OnlinePanel({
+  online,
+  rooms,
+  myId,
+}: {
+  online: OnlinePlayer[];
+  rooms: RoomSummary[];
+  myId: string | null;
+}) {
+  const statusOf = (player: OnlinePlayer) => {
+    if (!player.roomId) return 'in lobby';
+    if (player.seat === 'spectator') return `watching ${player.roomId}`;
+    const room = rooms.find((r) => r.id === player.roomId);
+    return room?.status === 'playing' ? `playing ${player.roomId}` : `in room ${player.roomId}`;
+  };
+
+  return (
+    <aside className="card online-panel" aria-label="Players online">
+      <div className="online-head">
+        <span className="online-count">{online.length}</span>
+        <span className="muted">online now</span>
+      </div>
+
+      {online.length === 0 ? (
+        <p className="muted">Nobody else yet.</p>
+      ) : (
+        <ul className="list online-list">
+          {online.map((player) => (
+            <li key={player.id}>
+              <span className="who">
+                <span className="online-dot" aria-hidden="true" />
+                {player.nickname}
+                {player.id === myId && <span className="tag me">you</span>}
+              </span>
+              <span className="muted">{statusOf(player)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
   );
 }
 

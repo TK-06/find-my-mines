@@ -134,9 +134,13 @@ function adminState(): AdminState {
   };
 }
 
+function lobbyPayload() {
+  return { rooms: rooms.list(), clientCount: registry.count, online: registry.roster() };
+}
+
 /** Refresh the landing-page game list and the server console together. */
 function pushUpdates(): void {
-  io.emit('lobby:rooms', { rooms: rooms.list(), clientCount: registry.count });
+  io.emit('lobby:rooms', lobbyPayload());
   adminIo.emit('admin:state', adminState());
   printConsole();
 }
@@ -226,7 +230,7 @@ io.on('connection', (socket) => {
   registry.add(socket.id, address);
   pushUpdates();
 
-  socket.emit('lobby:rooms', { rooms: rooms.list(), clientCount: registry.count });
+  socket.emit('lobby:rooms', lobbyPayload());
 
   const sessionId = sessionIdOf(socket);
 
@@ -318,7 +322,7 @@ io.on('connection', (socket) => {
 
   socket.on('room:leave', () => {
     leaveCurrentRoom(socket);
-    socket.emit('lobby:rooms', { rooms: rooms.list(), clientCount: registry.count });
+    socket.emit('lobby:rooms', lobbyPayload());
     pushUpdates();
   });
 

@@ -1,4 +1,6 @@
-import type { ClientInfo, Seat } from '@fmm/shared';
+import type { ClientInfo, OnlinePlayer, Seat } from '@fmm/shared';
+
+const UNNAMED = '(joining…)';
 
 /**
  * Every currently-connected game client.
@@ -14,7 +16,7 @@ export class ClientRegistry {
   add(id: string, address: string): void {
     this.clients.set(id, {
       id,
-      nickname: '(joining…)',
+      nickname: UNNAMED,
       seat: 'spectator',
       connectedAt: Date.now(),
       address,
@@ -54,8 +56,14 @@ export class ClientRegistry {
     return [...this.clients.values()].sort((a, b) => a.connectedAt - b.connectedAt);
   }
 
-  /** Roster shape sent to game clients (no addresses — that is admin-only). */
-  roster(): { id: string; nickname: string; seat: Seat }[] {
-    return this.list().map(({ id, nickname, seat }) => ({ id, nickname, seat }));
+  /**
+   * Who is online, as sent to game clients: named players only (a socket that
+   * has not picked a nickname yet is not someone you can play), and no
+   * addresses — those are admin-only.
+   */
+  roster(): OnlinePlayer[] {
+    return this.list()
+      .filter((client) => client.nickname !== UNNAMED)
+      .map(({ id, nickname, roomId, seat }) => ({ id, nickname, roomId, seat }));
   }
 }

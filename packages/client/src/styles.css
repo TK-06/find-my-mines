@@ -580,3 +580,31 @@ input[type='checkbox'] { accent-color: var(--ink); }
 .elo-badge { font-size: 13px; color: var(--slate); }
 .elo-badge strong { font-family: var(--mono); font-size: 18px; color: var(--ink); margin-right: 2px; }
 .tag.away { border-color: var(--signal); color: var(--signal); }
+
+/* ── lobby: games left, who's online right ──────────────── */
+.lobby-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 24px;
+  align-items: start;
+}
+.online-panel { padding: 16px 18px; }
+.online-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.online-count {
+  font-family: var(--display);
+  font-stretch: 125%;
+  font-weight: 800;
+  font-size: 40px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.online-list { max-height: 360px; overflow-y: auto; }
+.online-list li { font-size: 14px; }
+.online-list .who { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; }
+.online-list .muted { white-space: nowrap; font-family: var(--mono); font-size: 11px; }
+.online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
+
+@media (max-width: 820px) {
+  .lobby-grid { grid-template-columns: 1fr; }
+  .online-panel { order: -1; }
+}

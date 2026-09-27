@@ -106,6 +106,18 @@ export interface ForfeitNotice {
   players: { id: string; nickname: string; score: number; eloDelta?: number }[];
 }
 
+/**
+ * Someone connected to the server, as other players see them. No address —
+ * that stays on the server console.
+ */
+export interface OnlinePlayer {
+  id: string;
+  nickname: string;
+  /** Room they are in, or null while on the landing page. */
+  roomId: string | null;
+  seat: Seat;
+}
+
 /** One row of the landing page's game list. */
 export interface RoomSummary {
   id: string;

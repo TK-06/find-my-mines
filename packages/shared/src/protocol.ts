@@ -1,6 +1,7 @@
 import type {
   AdminState,
   ForfeitNotice,
+  OnlinePlayer,
   PublicMatchState,
   QueueSnapshot,
   RevealedCell,
@@ -65,8 +66,16 @@ export interface ClientToServerEvents {
 }
 
 export interface ServerToClientEvents {
-  /** The landing page's game list. Sent on nickname join and on any room change. */
-  'lobby:rooms': (payload: { rooms: RoomSummary[]; clientCount: number }) => void;
+  /**
+   * The landing page's game list and who is online. Sent on connect, on
+   * nickname join, and on any room change. Spec: "the server will provide
+   * information about the other connected client".
+   */
+  'lobby:rooms': (payload: {
+    rooms: RoomSummary[];
+    clientCount: number;
+    online: OnlinePlayer[];
+  }) => void;
 
   /** Full room snapshot. Sent on join/spectate, reset, and every match event. */
   'state:sync': (state: PublicMatchState) => void;
