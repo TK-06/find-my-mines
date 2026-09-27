@@ -550,6 +550,61 @@ section('forfeit and leaving');
   p2.close();
 }
 
+// ── reconnect grace period ─────────────────────────────────────────────────
+section('reconnect grace period');
+
+{
+  const withSession = (sessionId) =>
+    new Promise((resolve, reject) => {
+      const socket = io(URL, { transports: ['websocket'], forceNew: true, auth: { sessionId } });
+      socket.once('connect', () => resolve(socket));
+      socket.once('connect_error', reject);
+    });
+  const S1 = 'smoke-session-aaaaaaaaaaaaaaaa';
+  const S2 = 'smoke-session-bbbbbbbbbbbbbbbb';
+
+  const host = await withSession(S1);
+  let guest = await withSession(S2);
+  await setName(host, 'Hana');
+  await setName(guest, 'Ivo');
+  const hostView = track(host);
+  const forfeits = [];
+  host.on('match:forfeit', (n) => forfeits.push(n));
+
+  const room = await emitAck(host, 'room:create', { name: 'Grace', config: CLASSIC });
+  await emitAck(guest, 'room:join', { roomId: room.roomId });
+  host.emit('game:start');
+  await sleep(400);
+
+  guest.close();
+  await sleep(400);
+  const away = hostView.state?.players.find((p) => p.nickname === 'Ivo');
+  check('a dropped player keeps their seat, marked disconnected',
+    away && away.connected === false && hostView.state?.status === 'playing',
+    away ? `connected=${away.connected}, ${hostView.state?.status}` : 'seat gone');
+  check('no forfeit while the seat is held', forfeits.length === 0);
+
+  guest = await withSession(S2);
+  const guestView = track(guest);
+  const rejoin = await setName(guest, 'Ivo');
+  await sleep(400);
+  check('reconnecting with the same session resumes the room', rejoin.roomId === room.roomId,
+    String(rejoin.roomId));
+  const back = hostView.state?.players.find((p) => p.nickname === 'Ivo');
+  check('the resumed seat is live under the new connection',
+    back?.id === guest.id && back?.connected === true && guestView.state?.roomId === room.roomId);
+  check('the match carried on through the reconnect', hostView.state?.status === 'playing',
+    hostView.state?.status);
+
+  guest.close();
+  console.log('  …waiting out the grace period');
+  await sleep(31000);
+  check('not coming back within the grace period forfeits the match',
+    forfeits[0]?.winnerNickname === 'Hana', forfeits[0] ? `winner ${forfeits[0].winnerNickname}` : 'no forfeit');
+
+  host.close();
+}
+
 for (const socket of [alice, bob, carol, dave, admin]) socket.close();
 
 console.log(`\n${passed.length} passed, ${failed.length} failed\n`);

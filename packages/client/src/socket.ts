@@ -25,6 +25,33 @@ const hostedServer =
 const target = isDev ? SERVER_URL : hostedServer || window.location.origin;
 
 /**
+ * Identifies this tab across reconnects, so the server can hand a held seat
+ * back after a refresh or a dropped connection. Per tab (sessionStorage): a
+ * second tab is a second player.
+ */
+function tabSessionId(): string {
+  const key = 'fmm.session';
+  // getRandomValues, not randomUUID: the LAN demo runs over plain http, where
+  // randomUUID does not exist.
+  const fresh = () =>
+    Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
+      b.toString(16).padStart(2, '0'),
+    ).join('');
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const id = fresh();
+    sessionStorage.setItem(key, id);
+    return id;
+  } catch {
+    // Storage blocked: reconnects within this page load still work.
+    return fresh();
+  }
+}
+
+const sessionId = tabSessionId();
+
+/**
  * Not auto-connected: the /admin console imports this module too, and a game
  * socket opened there would show up as a phantom client in the server's own
  * "clients online" count. `useGame` connects it, and only the game screen
@@ -33,6 +60,7 @@ const target = isDev ? SERVER_URL : hostedServer || window.location.origin;
 export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(target, {
   autoConnect: false,
   transports: ['websocket', 'polling'],
+  auth: { sessionId },
 });
 
 /**
@@ -41,7 +69,7 @@ export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(tar
  * sign-in or sign-out so the next connection carries the right identity.
  */
 export function setAccessToken(accessToken: string | undefined): void {
-  socket.auth = accessToken ? { accessToken } : {};
+  socket.auth = accessToken ? { accessToken, sessionId } : { sessionId };
 }
 
 export const adminSocket: Socket<ServerToAdminEvents, AdminToServerEvents> = io(

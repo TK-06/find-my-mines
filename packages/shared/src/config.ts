@@ -48,6 +48,13 @@ export const TURN_SECONDS = 10;
 export const BOMB_RESETS_TIMER = false;
 
 /**
+ * How long a seated player's place is held after their connection drops
+ * (refresh, Wi-Fi blip, laptop lid). Reconnecting within this window resumes
+ * the same seat, score and turn; after it, they count as having left.
+ */
+export const RECONNECT_GRACE_SECONDS = 30;
+
+/**
  * Default seat count. Rooms now carry their own `maxPlayers`, so this is only
  * the Classic value — see CLASSIC_PRESET below.
  */

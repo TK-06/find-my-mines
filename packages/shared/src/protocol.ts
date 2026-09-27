@@ -30,6 +30,8 @@ export interface JoinResult {
   isGuest: boolean;
   /** Current rating; guests always get the starting value. */
   elo: number;
+  /** Set when this join resumed a seat held after a dropped connection. */
+  roomId?: string;
 }
 
 export interface RoomActionResult {

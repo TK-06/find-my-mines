@@ -78,6 +78,8 @@ export function useGame() {
       setIsGuest(result.isGuest);
       setElo(result.elo);
       if (result.isGuest && nickname) rememberGuest(nickname);
+      // The server held our seat through a dropped connection or a refresh.
+      if (result.roomId) activeRoom.current = result.roomId;
     });
   }, []);
 

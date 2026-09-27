@@ -15,7 +15,12 @@ import {
   type ServerToAdminEvents,
   type ServerToClientEvents,
 } from '@fmm/shared';
-import { CLASSIC_PRESET, type QueueEntry, type RoomMode } from '@fmm/shared';
+import {
+  CLASSIC_PRESET,
+  RECONNECT_GRACE_SECONDS,
+  type QueueEntry,
+  type RoomMode,
+} from '@fmm/shared';
 import { ADMIN_TOKEN, ADVERTISED_HOST, CORS_ORIGIN, HOST, PORT } from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
@@ -198,6 +203,22 @@ function identityOf(socketId: string): Identity {
   return identities.get(socketId) ?? guestIdentity('Player');
 }
 
+/**
+ * Seats held for players whose connection dropped, keyed by the per-tab
+ * session id the client sends in its handshake. A reconnect with the same id
+ * inside the grace window takes the seat back; otherwise the timer runs the
+ * normal leave (a forfeit, mid-match).
+ */
+const heldSeats = new Map<
+  string,
+  { socketId: string; roomId: string; timer: ReturnType<typeof setTimeout> }
+>();
+
+function sessionIdOf(socket: { handshake: { auth?: Record<string, unknown> } }): string | null {
+  const id = socket.handshake.auth?.sessionId;
+  return typeof id === 'string' && id.length >= 16 && id.length <= 64 ? id : null;
+}
+
 // ── game namespace ──────────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
@@ -206,6 +227,8 @@ io.on('connection', (socket) => {
   pushUpdates();
 
   socket.emit('lobby:rooms', { rooms: rooms.list(), clientCount: registry.count });
+
+  const sessionId = sessionIdOf(socket);
 
   socket.on('player:join', async ({ nickname }, ack) => {
     const clean = String(nickname ?? '').trim().slice(0, 20) || 'Player';
@@ -219,6 +242,8 @@ io.on('connection', (socket) => {
 
     registry.setNickname(socket.id, identity.nickname);
 
+    const resumed = resumeHeldSeat(socket);
+
     const result: JoinResult = {
       ok: true,
       playerId: socket.id,
@@ -226,8 +251,11 @@ io.on('connection', (socket) => {
       welcome: `Welcome, ${identity.nickname}.`,
       isGuest: identity.isGuest,
       elo: identity.elo,
+      roomId: resumed?.roomId,
     };
     ack?.(result);
+    // After the ack, so the client already knows which room this is for.
+    if (resumed) socket.emit('state:sync', resumed.publicState());
     pushUpdates();
   });
 
@@ -318,9 +346,47 @@ io.on('connection', (socket) => {
     rooms.roomOf(socket.id)?.voteRematch(socket.id);
   });
 
+  /** Takes back a seat held for this tab, if there is one. */
+  function resumeHeldSeat(target: typeof socket) {
+    const held = sessionId ? heldSeats.get(sessionId) : undefined;
+    if (!held || !sessionId) return null;
+
+    clearTimeout(held.timer);
+    heldSeats.delete(sessionId);
+
+    const room = rooms.get(held.roomId);
+    if (!room || !room.rebind(held.socketId, target.id)) return null;
+
+    rooms.retrack(held.socketId, target.id);
+    target.join(room.roomId);
+    registry.setRoom(target.id, room.roomId);
+    registry.setSeat(target.id, 'player');
+    return room;
+  }
+
   socket.on('disconnect', () => {
     queue.leave(socket.id);
-    leaveCurrentRoom(socket);
+
+    // A seated player gets a grace period to come back; anyone else (lobby,
+    // spectators, no session id) leaves at once, as before.
+    const room = rooms.roomOf(socket.id);
+    if (sessionId && room?.isSeated(socket.id)) {
+      room.markDisconnected(socket.id);
+      const previous = heldSeats.get(sessionId);
+      if (previous) clearTimeout(previous.timer);
+      heldSeats.set(sessionId, {
+        socketId: socket.id,
+        roomId: room.roomId,
+        timer: setTimeout(() => {
+          heldSeats.delete(sessionId);
+          leaveCurrentRoom(socket);
+          pushUpdates();
+        }, RECONNECT_GRACE_SECONDS * 1000),
+      });
+    } else {
+      leaveCurrentRoom(socket);
+    }
+
     registry.remove(socket.id);
     identities.delete(socket.id);
     pushUpdates();

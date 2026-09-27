@@ -176,6 +176,43 @@ export class MatchManager {
     };
   }
 
+  /**
+   * A seated player's connection dropped. Their seat, score and turn are held;
+   * the turn clock keeps running, so a long absence just costs them turns.
+   */
+  markDisconnected(id: string): void {
+    const player = this.players.find((p) => p.id === id);
+    if (!player) return;
+    player.connected = false;
+    this.out.notice(`${player.nickname} disconnected. Holding their seat…`);
+    this.out.stateSync(this.publicState());
+    this.out.changed();
+  }
+
+  /**
+   * Hands a held seat to the player's new connection. Every reference to the
+   * old socket id moves with it, so turn, votes and history carry over.
+   */
+  rebind(oldId: string, newId: string): boolean {
+    const player = this.players.find((p) => p.id === oldId);
+    if (!player) return false;
+
+    player.id = newId;
+    player.connected = true;
+    if (this.currentPlayerId === oldId) this.currentPlayerId = newId;
+    if (this.winnerId === oldId) this.winnerId = newId;
+    if (this.lastWinnerId === oldId) this.lastWinnerId = newId;
+    if (this.rematchVotes.delete(oldId)) this.rematchVotes.add(newId);
+    for (const cell of this.revealed) {
+      if (cell.byPlayerId === oldId) cell.byPlayerId = newId;
+    }
+
+    this.out.notice(`${player.nickname} is back.`);
+    this.out.stateSync(this.publicState());
+    this.out.changed();
+    return true;
+  }
+
   /** Removes a member. Returns true when the room is now empty and should close. */
   remove(id: string): boolean {
     const leaver = this.players.find((p) => p.id === id);

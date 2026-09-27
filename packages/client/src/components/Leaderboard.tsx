@@ -73,6 +73,7 @@ export function Leaderboard({ state, myId }: Props) {
                   {player.nickname}
                   {isMe && <span className="tag me">you</span>}
                   {isHost && <span className="tag host">host</span>}
+                  {!player.connected && <span className="tag away">reconnecting</span>}
                   {onTurn && state.status === 'playing' && (
                     <span className="tag turn">on turn</span>
                   )}

@@ -579,3 +579,4 @@ input[type='checkbox'] { accent-color: var(--ink); }
 
 .elo-badge { font-size: 13px; color: var(--slate); }
 .elo-badge strong { font-family: var(--mono); font-size: 18px; color: var(--ink); margin-right: 2px; }
+.tag.away { border-color: var(--signal); color: var(--signal); }

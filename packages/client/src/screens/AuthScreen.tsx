@@ -43,7 +43,13 @@ export function AuthScreen({ onGuest, connected }: Props) {
       const result = await supabase!.auth.signUp({
         email,
         password,
-        options: { data: { username: nickname.trim() || undefined } },
+        options: {
+          data: { username: nickname.trim() || undefined },
+          // Without this the confirmation link uses Supabase's Site URL, which
+          // defaults to localhost. The origin must also be in Supabase's
+          // Redirect URLs allow-list, or Supabase falls back to the Site URL.
+          emailRedirectTo: window.location.origin,
+        },
       });
       if (!result.error && !result.data.session) {
         setNotice('Check your email to confirm the account, then sign in.');
