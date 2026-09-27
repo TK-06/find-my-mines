@@ -15,6 +15,16 @@ export const SERVER_HOST = 'localhost';
 export const SERVER_PORT = 3000;
 export const SERVER_URL = `http://${SERVER_HOST}:${SERVER_PORT}`;
 
+/**
+ * Public game server for the hosted build (client on Vercel, server on Render).
+ * Set this to the Render URL, e.g. 'https://find-my-mines.onrender.com'.
+ *
+ * Empty means the production client talks to whatever origin served it, which
+ * is the case when the Node server serves the client itself (LAN / Docker).
+ * `npm run dev` always uses SERVER_URL above and ignores this.
+ */
+export const PUBLIC_SERVER_URL = '';
+
 /** Board dimensions. Parameterised so the future "custom map size" mode is a config change. */
 export const GRID_ROWS = 6;
 export const GRID_COLS = 6;

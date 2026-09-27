@@ -16,7 +16,7 @@ import {
   type ServerToClientEvents,
 } from '@fmm/shared';
 import { CLASSIC_PRESET, type QueueEntry, type RoomMode } from '@fmm/shared';
-import { ADVERTISED_HOST, CORS_ORIGIN, HOST, PORT } from './config.js';
+import { ADMIN_TOKEN, ADVERTISED_HOST, CORS_ORIGIN, HOST, PORT } from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
 import { guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
@@ -317,6 +317,11 @@ io.on('connection', (socket) => {
 });
 
 // ── admin namespace (the server console) ────────────────────────────────────
+
+adminIo.use((socket, next) => {
+  if (!ADMIN_TOKEN || socket.handshake.auth?.token === ADMIN_TOKEN) return next();
+  next(new Error('Admin token required: open /admin?token=<ADMIN_TOKEN>.'));
+});
 
 adminIo.on('connection', (socket) => {
   socket.emit('admin:state', adminState());

@@ -1,0 +1,26 @@
+# Render Blueprint for the Socket.IO game server.
+# Render → New → Blueprint → pick this repo. Secrets marked `sync: false` are
+# asked for in the dashboard and never committed.
+services:
+  - type: web
+    name: find-my-mines-server
+    runtime: node
+    plan: free
+    region: singapore # same region as the Supabase project (ap-southeast-1)
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: HOST
+        value: 0.0.0.0
+      # Your Vercel address(es), comma-separated.
+      - key: CORS_ORIGIN
+        sync: false
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

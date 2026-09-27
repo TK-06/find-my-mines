@@ -1,5 +1,6 @@
 import {
   ADMIN_NAMESPACE,
+  PUBLIC_SERVER_URL,
   SERVER_URL,
   type AdminToServerEvents,
   type ClientToServerEvents,
@@ -13,10 +14,15 @@ import { io, type Socket } from 'socket.io-client';
  * never asks the user for an IP or port (assignment requirement).
  *
  * In dev the Vite server is on :5173 while the game server is on :3000, so we
- * connect to SERVER_URL explicitly. In production both are the same origin.
+ * connect to SERVER_URL explicitly. In production the client either talks to
+ * PUBLIC_SERVER_URL (hosted: client on Vercel, server on Render) or, when that
+ * is empty, to the origin that served it. VITE_SERVER_URL overrides both so a
+ * Vercel build can be repointed from its dashboard without a commit.
  */
 const isDev = import.meta.env.DEV;
-const target = isDev ? SERVER_URL : window.location.origin;
+const hostedServer =
+  (import.meta.env.VITE_SERVER_URL as string | undefined) || PUBLIC_SERVER_URL;
+const target = isDev ? SERVER_URL : hostedServer || window.location.origin;
 
 /**
  * Not auto-connected: the /admin console imports this module too, and a game
@@ -40,5 +46,10 @@ export function setAccessToken(accessToken: string | undefined): void {
 
 export const adminSocket: Socket<ServerToAdminEvents, AdminToServerEvents> = io(
   `${target}${ADMIN_NAMESPACE}`,
-  { autoConnect: false, transports: ['websocket', 'polling'] },
+  {
+    autoConnect: false,
+    transports: ['websocket', 'polling'],
+    // Only checked when the server sets ADMIN_TOKEN: open /admin?token=<value>.
+    auth: { token: new URLSearchParams(window.location.search).get('token') ?? '' },
+  },
 );

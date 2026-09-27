@@ -88,7 +88,11 @@ section('admin console');
 
 // The server emits admin:state the instant the socket connects, so the listener
 // must be attached before the connection completes.
-const admin = io(URL + ADMIN_NS, { transports: ['websocket'], forceNew: true });
+const admin = io(URL + ADMIN_NS, {
+  transports: ['websocket'],
+  forceNew: true,
+  auth: { token: process.env.ADMIN_TOKEN ?? '' },
+});
 const firstAdminState = await new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error('timeout waiting for admin:state')), 6000);
   admin.once('admin:state', (state) => {
