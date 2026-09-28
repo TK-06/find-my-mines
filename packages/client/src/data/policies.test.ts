@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest';
+import {
+  CONTACT_EMAIL,
+  POLICIES,
+  POLICY_ORDER,
+  contactMailto,
+  inlineParts,
+  isPolicy,
+  type Policy,
+} from './policies.js';
+
+describe('contactMailto', () => {
+  it('addresses the one contact email and fills in the subject', () => {
+    expect(contactMailto('Bug report')).toBe(
+      'mailto:Palangtaj@gmail.com?subject=Find%20My%20Mines%3A%20Bug%20report',
+    );
+  });
+
+  it('encodes characters that would otherwise end the subject early', () => {
+    expect(contactMailto('Course & team')).toBe(
+      'mailto:Palangtaj@gmail.com?subject=Find%20My%20Mines%3A%20Course%20%26%20team',
+    );
+  });
+});
+
+describe('inlineParts', () => {
+  it('returns plain text as one part', () => {
+    expect(inlineParts('No links here.')).toEqual([{ text: 'No links here.' }]);
+  });
+
+  it('splits out [text](href) links', () => {
+    expect(inlineParts('Email [us](mailto:a@b.c) any time.')).toEqual([
+      { text: 'Email ' },
+      { text: 'us', href: 'mailto:a@b.c' },
+      { text: ' any time.' },
+    ]);
+  });
+
+  it('handles links at either end and side by side', () => {
+    expect(inlineParts('[a](/x)[b](/y)')).toEqual([
+      { text: 'a', href: '/x' },
+      { text: 'b', href: '/y' },
+    ]);
+  });
+
+  it('leaves brackets that are not a link alone', () => {
+    expect(inlineParts('a [b] (c)')).toEqual([{ text: 'a [b] (c)' }]);
+  });
+});
+
+describe('isPolicy', () => {
+  it('knows the three policy pages and nothing else', () => {
+    expect(POLICY_ORDER.every(isPolicy)).toBe(true);
+    expect(isPolicy('game')).toBe(false);
+    expect(isPolicy('admin')).toBe(false);
+  });
+});
+
+/** Every word a page shows, links included, for checking what it claims. */
+function allText(policy: Policy): string {
+  return [
+    policy.title,
+    policy.intro,
+    ...policy.sections.flatMap((s) => [s.title, ...s.blocks.flatMap((b) => (typeof b === 'string' ? [b] : b))]),
+  ].join('\n');
+}
+
+describe('policy pages', () => {
+  it('are the three tabs, in order', () => {
+    expect(POLICY_ORDER).toEqual(['privacy', 'security', 'terms']);
+    for (const id of POLICY_ORDER) expect(POLICIES[id].id).toBe(id);
+  });
+
+  it('give every section a unique, URL-safe anchor', () => {
+    for (const id of POLICY_ORDER) {
+      const anchors = POLICIES[id].sections.map((s) => s.id);
+      expect(new Set(anchors).size).toBe(anchors.length);
+      for (const anchor of anchors) expect(anchor).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+    }
+  });
+
+  it('each tell people how to reach us', () => {
+    for (const id of POLICY_ORDER) expect(allText(POLICIES[id])).toContain(CONTACT_EMAIL);
+  });
+
+  // The game server is moving hosts; the pages must not promise where it runs.
+  it('never name a hosting provider or region for the game server', () => {
+    const named = ['Render', 'Vercel', 'Railway', 'Heroku', 'Netlify', 'Cloudflare', 'AWS', 'Azure', 'DigitalOcean', 'Singapore', 'region'];
+    for (const id of POLICY_ORDER) {
+      const text = allText(POLICIES[id]);
+      for (const word of named) expect(text).not.toMatch(new RegExp(`\\b${word}\\b`, 'i'));
+    }
+  });
+});

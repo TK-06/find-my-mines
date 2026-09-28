@@ -1,5 +1,6 @@
 import { TURN_SECONDS, type MinePosition, type PublicMatchState, type RevealedCell } from '@fmm/shared';
 import type { CSSProperties } from 'react';
+import { MineSprite } from './MineSprite.js';
 
 interface Props {
   state: PublicMatchState;
@@ -66,7 +67,9 @@ export function Board({ state, myTurn, onReveal, mines }: Props) {
                   className="cell hidden-mine"
                   disabled
                   aria-label={`${where}, covered, mine`}
-                />
+                >
+                  <MineSprite />
+                </button>
               );
             }
 
@@ -92,7 +95,7 @@ export function Board({ state, myTurn, onReveal, mines }: Props) {
                 disabled
                 aria-label={isBomb ? `${where}, mine` : `${where}, ${cell.adjacent} adjacent mines`}
               >
-                {!isBomb && cell.adjacent > 0 ? cell.adjacent : ''}
+                {isBomb ? <MineSprite /> : cell.adjacent > 0 ? cell.adjacent : ''}
               </button>
             );
           }),

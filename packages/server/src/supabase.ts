@@ -48,6 +48,41 @@ export async function adminAccountFromToken(
   return row ? (data.user.email ?? data.user.id) : null;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether two accounts are friends: an accepted row in `public.friendships`,
+ * whoever asked. Read with the service role, so the answer never depends on
+ * what either player's browser says.
+ *
+ * False when Supabase is off, the table is missing, or anything goes wrong —
+ * the invite is refused, which is the safe way to fail.
+ */
+export async function areFriends(a: string, b: string): Promise<boolean> {
+  if (!admin || a === b || !UUID.test(a) || !UUID.test(b)) return false;
+
+  try {
+    // Both ids on both sides: with self-friendship ruled out by the table,
+    // that matches exactly a→b or b→a.
+    const { data, error } = await admin
+      .from('friendships')
+      .select('requester_id')
+      .in('requester_id', [a, b])
+      .in('addressee_id', [a, b])
+      .eq('status', 'accepted')
+      .limit(1);
+    if (error) {
+      // Most likely migration 0003 has not been applied yet.
+      console.error('[friends] could not check a friendship:', error.message);
+      return false;
+    }
+    return (data?.length ?? 0) > 0;
+  } catch (error) {
+    console.error('[friends] could not check a friendship:', error);
+    return false;
+  }
+}
+
 /** A guest identity. No account, no persistence, fixed starting rating. */
 export function guestIdentity(nickname: string): Identity {
   return {

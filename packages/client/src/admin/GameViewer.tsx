@@ -1,6 +1,7 @@
 import type { AdminRoomView } from '@fmm/shared';
 import { Board } from '../components/Board.js';
 import { Leaderboard } from '../components/Leaderboard.js';
+import { MineSprite } from '../components/MineSprite.js';
 
 interface Props {
   view: AdminRoomView;
@@ -57,7 +58,7 @@ export function GameViewer({ view, onStop, onToggleMines, onEndGame }: Props) {
   );
 }
 
-/** A mine icon, struck through while the mines are hidden. */
+/** The board's pixel mine, struck through while the mines are hidden. */
 function MineToggle({ showing, onToggle }: { showing: boolean; onToggle: () => void }) {
   return (
     <button
@@ -69,7 +70,7 @@ function MineToggle({ showing, onToggle }: { showing: boolean; onToggle: () => v
       onClick={onToggle}
     >
       <span className="mine-icon" aria-hidden>
-        💣
+        <MineSprite />
       </span>
     </button>
   );

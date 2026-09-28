@@ -90,6 +90,24 @@ export interface OnlinePlayer {
   status: PresenceStatus;
   /** Set for room, playing and watching. */
   roomId: string | null;
+  /**
+   * The account behind this connection, null for a guest. Profile ids are
+   * already public (the game log shows them); a client needs this to find its
+   * friends in the list.
+   */
+  profileId: string | null;
+}
+
+/** A friend asked you to join the room they are in. */
+export interface FriendInvite {
+  /** Unique per invite, so the client can dismiss one. */
+  id: string;
+  fromName: string;
+  fromProfileId: string;
+  roomId: string;
+  roomName: string;
+  /** When the server sent it, in epoch milliseconds. */
+  sentAt: number;
 }
 
 /** A spectator, as listed to everyone in the room. */

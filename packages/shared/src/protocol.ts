@@ -2,6 +2,7 @@ import type {
   AdminRoomView,
   AdminState,
   ForfeitNotice,
+  FriendInvite,
   JoinRequestOutcome,
   LogLine,
   ModerationResult,
@@ -86,6 +87,15 @@ export interface ClientToServerEvents {
     ack: (result: ModerationResult) => void,
   ) => void;
 
+  /**
+   * Signed-in players only: ask an online friend to join the room you are in.
+   * The server checks the friendship itself — the client's word is not enough.
+   */
+  'friend:invite': (
+    payload: { profileId: string },
+    ack: (result: ModerationResult) => void,
+  ) => void;
+
   /** Matchmaking: join the pool for a mode, or leave it. */
   'queue:join': (payload: { mode: RoomMode }) => void;
   'queue:leave': () => void;
@@ -150,6 +160,9 @@ export interface ServerToClientEvents {
    * guest's browser remember its own games for the game log.
    */
   'match:recorded': (payload: { matchId: string }) => void;
+
+  /** A friend invited you to the room they are in. Sent to each of your tabs. */
+  'friend:invited': (invite: FriendInvite) => void;
 
   'error:msg': (payload: { code: string; message: string }) => void;
 }

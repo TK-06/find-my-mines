@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 
-export type Route = 'game' | 'profile' | 'games' | 'ranks' | 'admin';
+export type Route =
+  | 'game'
+  | 'profile'
+  | 'games'
+  | 'ranks'
+  | 'admin'
+  | 'privacy'
+  | 'security'
+  | 'terms';
 
 const PATHS: Record<Route, string> = {
   game: '/',
@@ -8,14 +16,23 @@ const PATHS: Record<Route, string> = {
   games: '/games',
   ranks: '/ranks',
   admin: '/admin',
+  privacy: '/privacy',
+  security: '/security',
+  terms: '/terms',
 };
 
+/** The URL a route lives at — for real hrefs, so middle-click and "copy link" work. */
+export function pathFor(route: Route): string {
+  return PATHS[route];
+}
+
 /**
- * A four-route router in twenty lines.
+ * A small router in a few lines.
  *
  * The server serves index.html for every path, so deep links work; this just
  * maps the pathname to a screen and pushes history on navigation. A real
- * router would be more dependency than this app needs.
+ * router would be more dependency than this app needs. Only the pathname is
+ * read, so in-page #anchors never change the screen.
  */
 export function routeFromPath(pathname: string): Route {
   switch (pathname.replace(/\/+$/, '') || '/') {
@@ -27,9 +44,67 @@ export function routeFromPath(pathname: string): Route {
       return 'games';
     case '/ranks':
       return 'ranks';
+    case '/privacy':
+      return 'privacy';
+    case '/security':
+      return 'security';
+    case '/terms':
+      return 'terms';
     default:
       return 'game';
   }
+}
+
+type ClickLike = Pick<
+  MouseEvent,
+  'button' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'defaultPrevented'
+>;
+
+/**
+ * Whether a click on an internal link is ours to handle. Anything else — a
+ * modifier for a new tab or window, a middle click — belongs to the browser,
+ * which follows the href and gets index.html like any deep link.
+ */
+export function isPlainLeftClick(event: ClickLike): boolean {
+  return (
+    event.button === 0 &&
+    !event.defaultPrevented &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
+/** A real link to another screen that navigates without a page reload. */
+export function RouteLink({
+  to,
+  current,
+  onNavigate,
+  className,
+  children,
+}: {
+  to: Route;
+  /** The route on screen now, to mark this link as the current page. */
+  current?: Route;
+  onNavigate: (next: Route) => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <a
+      href={PATHS[to]}
+      className={className}
+      aria-current={current === to ? 'page' : undefined}
+      onClick={(event) => {
+        if (!isPlainLeftClick(event)) return;
+        event.preventDefault();
+        onNavigate(to);
+      }}
+    >
+      {children}
+    </a>
+  );
 }
 
 export function useRoute(): [Route, (next: Route) => void] {
@@ -45,6 +120,9 @@ export function useRoute(): [Route, (next: Route) => void] {
   const navigate = (next: Route) => {
     window.history.pushState({}, '', PATHS[next]);
     setRoute(next);
+    // A new screen starts at its top, as a page load would. Footer links sit at
+    // the very bottom, so without this the next page opens scrolled away.
+    window.scrollTo(0, 0);
   };
 
   return [route, navigate];

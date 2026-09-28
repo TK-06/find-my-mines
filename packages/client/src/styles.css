@@ -2,7 +2,8 @@
  * Find My Mines — flat, minimal, no gradients.
  *
  * Ink on cool grey. One accent, signal orange, and it only ever means "your
- * turn / the clock is running". Mines are ink. Everything else is neutral.
+ * turn / the clock is running" (and the spark on a mine's fuse). Mines are an
+ * 8-bit pixel bomb. Everything else is neutral.
  */
 
 :root {
@@ -125,16 +126,6 @@ strong { font-weight: 700; }
 .nav-link:hover:not(:disabled) { color: var(--ink); background: transparent; }
 .nav-link.active { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); border-radius: 0; }
 
-.theme-toggle {
-  background: transparent;
-  border: 1px solid var(--rule);
-  color: var(--slate);
-  padding: 5px 10px;
-  font-size: 13px;
-  font-weight: 500;
-}
-.theme-toggle:hover:not(:disabled) { color: var(--ink); background: transparent; border-color: var(--slate); }
-
 .conn {
   display: inline-flex;
   align-items: center;
@@ -231,6 +222,8 @@ input[type='checkbox'] { accent-color: var(--ink); }
 }
 .tag.me { border-color: var(--ink); color: var(--ink); }
 .tag.turn { border-color: var(--signal); background: var(--signal); color: var(--signal-ink); }
+/* Outlined in ink, not orange: --signal is kept for "your turn / clock running". */
+.tag.next { border-color: var(--ink); color: var(--ink); }
 .tag.winner, .tag.ready { border-color: var(--good); color: var(--good); }
 .tag.mode-ranked { border-color: var(--ink); color: var(--ink); }
 .tag.status-playing { color: var(--good); border-color: var(--good); }
@@ -416,15 +409,9 @@ input[type='checkbox'] { accent-color: var(--ink); }
 .cell.empty[data-n='7'] { color: var(--n7); }
 .cell.empty[data-n='8'] { color: var(--n8); }
 
-/* A mine is a filled ink square with a paper dot: no emoji, reads at any size. */
-.cell.bomb { background: var(--ink); border-color: var(--ink); animation: drop 0.18s ease-out; }
-.cell.bomb::before {
-  content: '';
-  width: 32%;
-  height: 32%;
-  border-radius: 50%;
-  background: var(--paper);
-}
+/* A found mine: the pixel bomb (MineSprite) on a plain tile with a solid edge,
+   so it stands apart from the dotted empty cells. Sprite rules: "pixel mine". */
+.cell.bomb { background: var(--surface); border-color: var(--slate); animation: drop 0.18s ease-out; }
 @keyframes drop { from { transform: scale(0.85); } to { transform: scale(1); } }
 
 /* ── timer + leaderboard ────────────────────────────────── */
@@ -680,16 +667,10 @@ textarea:focus { border-color: var(--ink); }
 .viewer { display: grid; gap: 16px; border-color: var(--ink); }
 .viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
 
-/* A covered mine, visible only to an admin with the toggle on: a hollow ring,
-   so it never reads as a mine someone has found (those are solid). */
+/* A covered mine, visible only to an admin with the toggle on: the same pixel
+   bomb, see-through inside a dashed red edge, so it never reads as a mine
+   someone has found (those are solid). The fade is under "pixel mine". */
 .cell.hidden-mine { border-style: dashed; border-color: var(--bad); }
-.cell.hidden-mine::before {
-  content: '';
-  width: 32%;
-  height: 32%;
-  border-radius: 50%;
-  border: 2px solid var(--bad);
-}
 
 .mine-toggle {
   position: relative;
@@ -703,7 +684,7 @@ textarea:focus { border-color: var(--ink); }
 }
 .mine-toggle:hover:not(:disabled) { background: var(--sunken); border-color: var(--slate); }
 .mine-toggle.on { border-color: var(--bad); box-shadow: inset 0 0 0 1px var(--bad); }
-.mine-toggle .mine-icon { position: relative; line-height: 1; }
+.mine-toggle .mine-icon { position: relative; display: block; width: 20px; height: 20px; }
 .mine-toggle.off .mine-icon { opacity: 0.6; }
 /* The slash: mines are hidden. */
 .mine-toggle.off .mine-icon::after {
@@ -802,3 +783,473 @@ a.button-link {
   background: var(--ink);
 }
 a.button-link:hover { background: var(--slate); border-color: var(--slate); }
+
+/* ── pixel mine ─────────────────────────────────────────── */
+/* The 8-bit bomb from MineSprite. Its colours live in data/mineSprite.ts; this
+   only sizes it, themes the outline and lights the spark. It fills whatever
+   holds it, so the holder decides the size. */
+.pixel-mine { display: block; width: 100%; height: 100%; }
+/* Three quarters of a cell: a clear margin inside the border, and exactly 3×
+   the 16-pixel grid on the largest (64px) cells. */
+.cell .pixel-mine { width: calc(var(--cell) * 0.75); height: calc(var(--cell) * 0.75); }
+.cell.hidden-mine .pixel-mine { opacity: 0.4; }
+
+/* The body is black in both themes, so on a dark tile it gets a one-pixel
+   light ring. On a light tile the ring would only blur the silhouette. */
+.pixel-mine .mine-outline { visibility: hidden; }
+:root[data-theme='dark'] .pixel-mine .mine-outline { visibility: visible; }
+
+/* A found mine's fuse is still lit: the spark and its tips blink out of step.
+   Held-still frames (steps) rather than a fade, to stay 8-bit. */
+.cell.bomb .mine-spark { animation: mine-spark 1s steps(1) infinite; }
+.cell.bomb .mine-spark.tip { animation-delay: -0.5s; }
+@keyframes mine-spark { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .cell.bomb .mine-spark { animation: none; }
+}
+/* ── end: pixel mine ── */
+
+/* ── site footer, contact, policy pages ─────────────────── */
+/* Page and footer in one full-height column: the footer rests at the bottom
+   of the window on a short page and follows the content on a long one. */
+.app.site-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding-bottom: 8px;
+}
+/* Block layout inside, so every screen lays out exactly as before. */
+.site-main { flex: 1 0 auto; }
+
+/* Small and quiet: mono, slate, lowercase. */
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 24px;
+  margin-top: 48px;
+}
+.footer-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+/* The links' padding is their touch target; pull it back so the text lines up
+   with the content edges. */
+.footer-links { margin-left: -8px; }
+.footer-meta { margin-right: -8px; }
+.footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--slate);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r);
+  text-decoration: none;
+  text-transform: lowercase;
+}
+.footer-link:hover:not(:disabled) { color: var(--ink); background: transparent; }
+.footer-link[aria-current='page'] { color: var(--ink); }
+.footer-link svg { flex: none; }
+
+/* Contact popup: the same card as the other dialogs, a grid of mail buttons. */
+.contact-dialog {
+  position: relative;
+  width: min(520px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+}
+.contact-dialog h2 { margin: 0; font-size: 20px; padding-right: 40px; }
+.contact-dialog p:not(.muted) { font-size: 14px; }
+.contact-grid {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.contact-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.contact-option:hover { background: var(--sunken); border-color: var(--slate); }
+.contact-option svg { flex: none; color: var(--slate); }
+.contact-option:hover svg { color: var(--ink); }
+
+/* Policy pages */
+.policy-page { display: grid; gap: 20px; }
+.policy-title {
+  margin: 0;
+  font-family: var(--display);
+  font-stretch: 125%;
+  font-weight: 800;
+  font-size: clamp(30px, 7vw, 52px);
+  line-height: 1;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.policy-updated { margin-top: 10px; }
+.policy-tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--rule); }
+.policy-tabs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--slate);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.policy-tabs a:hover { color: var(--ink); }
+.policy-tabs a[aria-current='page'] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
+
+.policy-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 720px);
+  gap: 40px;
+  align-items: start;
+  margin-top: 8px;
+}
+.policy-toc { position: sticky; top: 16px; }
+.policy-toc-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--slate);
+}
+.policy-toc ol { list-style: none; margin: 0; padding: 0; display: grid; }
+.policy-toc a {
+  display: block;
+  padding: 6px 0 6px 12px;
+  border-left: 2px solid var(--rule);
+  color: var(--slate);
+  font-size: 13px;
+  text-decoration: none;
+}
+.policy-toc a:hover { color: var(--ink); border-left-color: var(--ink); }
+
+.policy-body { display: grid; gap: 32px; font-size: 15px; line-height: 1.6; }
+.policy-intro { font-size: 17px; line-height: 1.5; }
+.policy-section { display: grid; gap: 10px; scroll-margin-top: 16px; }
+.policy-section h3 { margin: 0; font-size: 18px; }
+.policy-section ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.policy-body a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--slate);
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+.policy-body a:hover { text-decoration-color: var(--ink); }
+
+@media (max-width: 820px) {
+  .policy-layout { grid-template-columns: 1fr; gap: 28px; }
+  .policy-toc { position: static; }
+  .policy-toc a { display: flex; align-items: center; min-height: 44px; padding-top: 0; padding-bottom: 0; }
+}
+@media (max-width: 520px) {
+  .contact-grid { grid-template-columns: 1fr; }
+}
+/* ── end: site footer ── */
+
+/* ── profile page ───────────────────────────────────────── */
+/* Who you are (and your friends) on the left, your numbers on the right.
+   minmax(0, 1fr) everywhere: the heatmap and the matches table are wider than
+   a phone and scroll inside their cards, so they must not widen the page. */
+.profile-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.profile-side, .profile-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+
+.profile-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.profile-card-head h3 { margin: 0; }
+.profile-card-head h3 .muted { font-weight: 500; }
+
+/* Rating movement: green up, red down, slate for none. */
+.profile-since { font-family: var(--mono); font-size: 13px; font-weight: 700; white-space: nowrap; }
+.profile-since.up { color: var(--good); }
+.profile-since.down { color: var(--bad); }
+.profile-since.flat { color: var(--slate); }
+
+/* identity card */
+.profile-id-head { display: flex; gap: 14px; align-items: flex-start; }
+.profile-avatar {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r);
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--display);
+  font-stretch: 125%;
+  font-weight: 800;
+  font-size: 26px;
+  line-height: 1;
+  user-select: none;
+}
+.profile-id-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.profile-name-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.profile-name {
+  font-family: var(--display);
+  font-stretch: 112%;
+  font-size: 22px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.profile-name-row button.small { padding: 3px 8px; font-size: 12px; }
+.profile-rename { display: grid; gap: 8px; }
+.profile-rename input[type='text'] { padding: 7px 10px; }
+.profile-rename-actions { display: flex; gap: 6px; }
+.profile-status { font-size: 13px; color: var(--slate); }
+.profile-status:not(:empty) { margin-top: 10px; }
+.profile-status.failed { color: var(--bad); }
+
+.profile-elo-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+.profile-elo {
+  font-family: var(--display);
+  font-stretch: 125%;
+  font-weight: 800;
+  font-size: 48px;
+  line-height: 0.95;
+  margin-bottom: 4px;
+}
+
+/* stat tiles */
+.profile-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.profile-tile {
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+}
+.profile-tile dt { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); }
+.profile-tile dd { margin: 0; }
+.profile-tile .profile-tile-value { font-family: var(--mono); font-size: 24px; font-weight: 700; line-height: 1.2; margin: 6px 0 2px; }
+
+/* rating chart: an SVG line under HTML labels (see RatingChart.tsx) */
+.rating-chart { display: grid; grid-template-columns: 34px minmax(0, 1fr); column-gap: 10px; }
+.rating-axis { position: relative; height: 180px; font-family: var(--mono); font-size: 11px; color: var(--slate); }
+.rating-axis span { position: absolute; right: 0; transform: translateY(-50%); line-height: 1; font-variant-numeric: tabular-nums; }
+.rating-plot { position: relative; height: 180px; cursor: crosshair; touch-action: pan-y; }
+.rating-plot:focus-visible { outline-offset: 4px; }
+.rating-plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.rating-grid { stroke: var(--rule); stroke-width: 1; }
+.rating-line { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.rating-crosshair {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--slate);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+/* The surface-coloured ring keeps the dot legible where it sits on the line. */
+.rating-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 0 2px var(--surface);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.rating-x {
+  grid-column: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--slate);
+}
+.rating-readout { margin-top: 12px; font-size: 13px; color: var(--slate); }
+.rating-readout strong { font-family: var(--mono); font-size: 16px; color: var(--ink); }
+
+/* activity heatmap: five steps from the sunken surface to ink, so it follows
+   the theme without a second palette. */
+.heat-scroll { overflow-x: auto; padding: 4px; margin: -4px; }
+.heatmap { min-width: 560px; display: grid; gap: 4px; }
+.heat-months, .heat-row { display: grid; grid-template-columns: 28px repeat(53, minmax(0, 1fr)); gap: 2px; }
+.heat-months { font-size: 11px; line-height: 1; color: var(--slate); }
+.heat-months span { grid-row: 1; white-space: nowrap; }
+.heat-grid { display: grid; gap: 2px; }
+.heat-day { align-self: center; font-size: 10px; line-height: 1; color: var(--slate); }
+.heat-cell { aspect-ratio: 1; border-radius: 2px; background: var(--sunken); }
+.heat-cell.level-1 { background: color-mix(in srgb, var(--ink) 25%, var(--sunken)); }
+.heat-cell.level-2 { background: color-mix(in srgb, var(--ink) 50%, var(--sunken)); }
+.heat-cell.level-3 { background: color-mix(in srgb, var(--ink) 75%, var(--sunken)); }
+.heat-cell.level-4 { background: var(--ink); }
+.heat-cell.is-future { background: transparent; }
+.heat-cell[role='gridcell']:hover { outline: 1px solid var(--slate); outline-offset: 1px; }
+.heat-cell[role='gridcell']:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.heat-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.heat-legend { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--slate); }
+.heat-legend .heat-cell { width: 10px; }
+.heat-legend .heat-cell.level-0 { margin-left: 3px; }
+.heat-legend .heat-cell.level-4 { margin-right: 3px; }
+
+/* recent matches */
+.recent-scroll { overflow-x: auto; }
+.recent-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.recent-table th {
+  padding: 0 12px 8px 0;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--slate);
+  white-space: nowrap;
+}
+.recent-table td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.recent-table tbody tr:last-child td { border-bottom: 0; }
+.recent-table th:last-child, .recent-table td:last-child { padding-right: 0; }
+.recent-table .num { text-align: right; }
+.recent-table td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.recent-table .when { color: var(--slate); }
+.recent-result { font-weight: 700; }
+.recent-result.win { color: var(--good); }
+.recent-result.loss { color: var(--bad); }
+.recent-result.draw { color: var(--slate); }
+
+@media (max-width: 960px) {
+  .profile-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .profile-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 400px) {
+  .profile-elo { font-size: 40px; }
+}
+/* ── end: profile page ── */
+
+/* ── friends ────────────────────────────────────────────── */
+/* The status dots: green online, yellow playing, grey offline. */
+:root {
+  --friend-online: #1f9d55;
+  --friend-playing: #e0a800;
+  --friend-offline: #a3a9b1;
+}
+:root[data-theme='dark'] {
+  --friend-online: #4cc38a;
+  --friend-playing: #f5c542;
+  --friend-offline: #5b626c;
+}
+
+.friends-panel { display: grid; gap: 12px; }
+.friends-panel p { margin: 0; }
+.friends-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.friends-head h3 { margin: 0; }
+.friend-add { display: flex; gap: 8px; }
+.friend-add input { flex: 1; min-width: 0; }
+
+.list li.friend-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 12px;
+}
+.friend-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+}
+.friend-main { display: grid; gap: 2px; min-width: 0; }
+.friend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.friend-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--slate); }
+.friend-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  flex: none;
+  background: var(--friend-offline);
+}
+.friend-dot.online { background: var(--friend-online); }
+.friend-dot.playing { background: var(--friend-playing); }
+
+.friend-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.friend-actions button.small { padding: 4px 10px; font-size: 12px; }
+.friend-actions button.friend-remove {
+  padding: 3px 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--slate);
+  border-color: transparent;
+}
+.friend-actions button.friend-remove:hover:not(:disabled) {
+  color: var(--bad);
+  border-color: var(--rule);
+  background: transparent;
+}
+.friend-note { font-size: 12px; font-weight: 600; color: var(--good); }
+.friend-note.failed { color: var(--bad); font-weight: 500; max-width: 200px; text-align: right; }
+
+/* A friend's invite, in the same corner stack as the host's join requests. */
+.friend-invite-text { font-size: 14px; overflow-wrap: anywhere; }
+.friend-invite-text .room-code { font-size: 12px; }
+
+@media (max-width: 480px) {
+  .list li.friend-row { grid-template-columns: 32px minmax(0, 1fr); }
+  .friend-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
+}
+/* ── end: friends ── */

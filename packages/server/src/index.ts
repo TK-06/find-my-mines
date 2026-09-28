@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +14,7 @@ import {
   type AdminState,
   type AdminToServerEvents,
   type ClientToServerEvents,
+  type FriendInvite,
   type Identity,
   type JoinResult,
   type OnlinePlayer,
@@ -32,9 +34,10 @@ import { contain, respond, settleWithin } from './safety.js';
 import { ADVERTISED_HOST, CORS_ORIGIN, HOST, PORT } from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
-import { guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
+import { areFriends, guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
 import type { FinishedMatch, MatchBroadcaster, MatchManager } from './match/matchManager.js';
 import { RoomManager } from './rooms/roomManager.js';
+import { InviteLimit } from './state/inviteLimit.js';
 import { ClientRegistry } from './state/registry.js';
 import { isSamePlayer } from './state/seatHold.js';
 
@@ -269,6 +272,7 @@ function onlinePlayers(): OnlinePlayer[] {
           roomStatus: room?.summary().status ?? null,
         }),
         roomId: client.roomId,
+        profileId: identity.profileId,
       },
     ];
   });
@@ -398,6 +402,24 @@ function closeRequestsFor(roomId: string, roomName: string): void {
       byName: null,
     });
   }
+}
+
+// ── friend invites ──────────────────────────────────────────────────────────
+
+/** How long the friendship check may take before the invite is refused. */
+const FRIEND_CHECK_TIMEOUT_MS = 5000;
+
+/** One invite per player → friend every few seconds, however fast they click. */
+const inviteLimit = new InviteLimit();
+
+/** Every connected socket signed in as this account — one per open tab. */
+function socketsOfProfile(profileId: string): string[] {
+  if (!profileId) return [];
+  const found: string[] = [];
+  for (const [socketId, identity] of identities) {
+    if (identity.profileId === profileId) found.push(socketId);
+  }
+  return found;
 }
 
 // ── held seats (reconnect grace period) ─────────────────────────────────────
@@ -901,6 +923,77 @@ io.on('connection', contain((socket: GameSocket) => {
       roomBan: ban,
       note: parsed.note,
     });
+    respond(ack, { ok: true });
+  });
+
+  // Signed-in players only. The friendship is read from the database with the
+  // service role — a client saying "we are friends" is never enough.
+  listen(socket, 'friend:invite', async (payload, ack) => {
+    const sender = identities.get(socket.id);
+    if (!sender?.profileId || sender.isGuest) {
+      respond(ack, { ok: false, error: 'Sign in to invite friends.' });
+      return;
+    }
+    const fromId = sender.profileId;
+    if (!rooms.roomOf(socket.id)) {
+      respond(ack, { ok: false, error: 'Join or create a room first.' });
+      return;
+    }
+
+    const targetId = text(payload, 'profileId');
+    if (targetId === fromId) {
+      respond(ack, { ok: false, error: 'You cannot invite yourself.' });
+      return;
+    }
+    if (socketsOfProfile(targetId).length === 0) {
+      respond(ack, { ok: false, error: 'They are not online right now.' });
+      return;
+    }
+
+    const friends = await settleWithin(
+      areFriends(fromId, targetId),
+      FRIEND_CHECK_TIMEOUT_MS,
+      false,
+    );
+    if (socket.disconnected) return;
+    if (!friends) {
+      respond(ack, { ok: false, error: 'You can only invite friends.' });
+      return;
+    }
+
+    // The database took a moment: the sender may have left their room, or
+    // the friend closed their last tab, in the meantime.
+    const room = rooms.roomOf(socket.id);
+    const targets = socketsOfProfile(targetId);
+    if (!room) {
+      respond(ack, { ok: false, error: 'Join or create a room first.' });
+      return;
+    }
+    if (targets.length === 0) {
+      respond(ack, { ok: false, error: 'They are not online right now.' });
+      return;
+    }
+
+    const wait = inviteLimit.tryInvite(fromId, targetId, Date.now());
+    if (wait > 0) {
+      respond(ack, {
+        ok: false,
+        error: `You just invited them — try again in ${Math.ceil(wait / 1000)} s.`,
+      });
+      return;
+    }
+
+    const invite: FriendInvite = {
+      id: randomUUID(),
+      fromName: sender.nickname,
+      fromProfileId: fromId,
+      roomId: room.roomId,
+      roomName: room.roomName,
+      sentAt: Date.now(),
+    };
+    // Every tab they have open, so the popup is wherever they are looking.
+    io.to(targets).emit('friend:invited', invite);
+    log.add('room', `${sender.nickname} invited ${nameOf(targets[0])} to ${room.roomId}`);
     respond(ack, { ok: true });
   });
 

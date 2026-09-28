@@ -4,6 +4,7 @@ import { identityChanged } from './auth/session.js';
 import { authEnabled, supabase } from './auth/supabase.js';
 import { signOutAfterRemoval } from './data/format.js';
 import { Board } from './components/Board.js';
+import { FriendInviteToasts } from './components/FriendInviteToasts.js';
 import { JoinRequestDialog } from './components/JoinRequestDialog.js';
 import { JoinRequestToasts } from './components/JoinRequestToasts.js';
 import { Leaderboard } from './components/Leaderboard.js';
@@ -11,11 +12,14 @@ import { OnlinePanel } from './components/OnlinePanel.js';
 import { QueuePanel } from './components/QueuePanel.js';
 import { ReasonDialog } from './components/ReasonDialog.js';
 import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
+import { SiteFooter } from './components/SiteFooter.js';
+import { isPolicy } from './data/policies.js';
 import { NavBar, useRoute, type Route } from './router.js';
 import { AuthScreen } from './screens/AuthScreen.js';
 import { GameLogScreen } from './screens/GameLogScreen.js';
 import { LeaderboardScreen } from './screens/LeaderboardScreen.js';
 import { LobbyScreen } from './screens/LobbyScreen.js';
+import { PolicyScreen } from './screens/PolicyScreen.js';
 import { ProfileScreen } from './screens/ProfileScreen.js';
 import { RemovedScreen } from './screens/RemovedScreen.js';
 import { useTheme } from './theme.js';
@@ -55,6 +59,9 @@ export function App() {
     reveal,
     rematch,
     dismissForfeit,
+    friendInvites,
+    inviteFriend,
+    dismissInvite,
   } = useGame();
 
   const [signedIn, setSignedIn] = useState(false);
@@ -153,12 +160,43 @@ export function App() {
     if (ready && !signedIn && !named && connected && guestName) join(guestName);
   }, [ready, signedIn, named, connected, guestName, join]);
 
+  // A friend's invite pops up on every page — except inside a room, where
+  // joining another would give up your seat (a forfeit, mid-match). Invites
+  // that arrive meanwhile wait, and show once you are back out.
+  const inviteToasts =
+    state === null ? (
+      <FriendInviteToasts
+        invites={friendInvites}
+        onJoin={(invite) => {
+          dismissInvite(invite.id);
+          navigate('game');
+          handleJoin(invite.roomId);
+        }}
+        onDismiss={(invite) => dismissInvite(invite.id)}
+      />
+    ) : null;
+
   // Profile, rankings and the game log read public data, so they work before a
   // nickname is chosen. Only the game itself needs an identity.
   if (route === 'profile') {
     return (
       <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
-        <ProfileScreen />
+        <ProfileScreen
+          online={online}
+          rooms={rooms}
+          myRoomId={state?.roomId ?? null}
+          onJoin={(roomId) => {
+            navigate('game');
+            handleJoin(roomId);
+          }}
+          onWatch={(roomId) => {
+            navigate('game');
+            void spectateRoom(roomId);
+          }}
+          onInvite={inviteFriend}
+          onOpenGameLog={() => navigate('games')}
+        />
+        {inviteToasts}
       </Shell>
     );
   }
@@ -167,6 +205,7 @@ export function App() {
     return (
       <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
         <LeaderboardScreen />
+        {inviteToasts}
       </Shell>
     );
   }
@@ -175,6 +214,18 @@ export function App() {
     return (
       <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
         <GameLogScreen />
+        {inviteToasts}
+      </Shell>
+    );
+  }
+
+  // Privacy, security and terms are static text: readable with no nickname,
+  // no sign-in and no database.
+  if (isPolicy(route)) {
+    return (
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+        <PolicyScreen policy={route} onNavigate={navigate} />
+        {inviteToasts}
       </Shell>
     );
   }
@@ -242,6 +293,8 @@ export function App() {
             }}
           />
         )}
+
+        {inviteToasts}
       </Shell>
     );
   }
@@ -395,18 +448,13 @@ function Shell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="app">
+    // A full-height column, so the footer sits at the bottom of the window on
+    // short pages and after the content on long ones.
+    <div className="app site-shell">
       <header className="header">
         <h1 className="title">Find My Mines</h1>
         <div className="header-right">
           <NavBar route={route} onNavigate={onNavigate} />
-          <button
-            className="theme-toggle"
-            onClick={onToggleTheme}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-          >
-            {theme === 'dark' ? 'Light' : 'Dark'}
-          </button>
           <span className={`conn ${connected ? 'online' : 'offline'}`}>
             {connected ? 'Online' : 'Offline'}
           </span>
@@ -416,7 +464,9 @@ function Shell({
       {/* Spec: "a welcome message with their nickname will appear" */}
       {welcome && <p className="welcome">{welcome}</p>}
 
-      {children}
+      <main className="site-main">{children}</main>
+
+      <SiteFooter route={route} onNavigate={onNavigate} theme={theme} onToggleTheme={onToggleTheme} />
 
       {error && <div className="toast">{error}</div>}
     </div>

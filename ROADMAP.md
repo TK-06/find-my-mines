@@ -6,10 +6,12 @@ Update this file whenever a feature lands.
 New to the project? Read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, the rules, and
 how work is split.
 
-**Last updated:** 2026-09-28 — merged Chain's fork (Vercel + Render hosting, flat redesign,
-forfeit wins, 30 s reconnect grace, guests surviving a refresh, sign-up help, `ADMIN_TOKEN`)
-with the join requests, guest game log and console work, and fixed ratings drifting after a
-player's first ranked room. AI bot still on hold.
+**Last updated:** 2026-09-28 — friends (requests, live status, invites; needs migration
+0003), the rebuilt profile page (rating chart, activity heatmap), the 8-bit pixel mine, a site
+footer with a contact popup, and privacy / security / terms pages. Earlier the same day:
+merged Chain's fork (Vercel + Render hosting, flat redesign, forfeit wins, 30 s reconnect
+grace, guests surviving a refresh, sign-up help, `ADMIN_TOKEN`) and fixed ratings drifting
+after a player's first ranked room. AI bot still on hold.
 
 ---
 
@@ -82,14 +84,17 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | 12 | Theme | **Done** | Light/dark toggle, remembered, follows the OS by default |
 | 13 | Leaderboard | **Done** | Live in-match ranking **and** the persistent `/ranks` page |
 | 14 | Leave button | **Done** | Plus host succession and room cleanup |
-| 15 | Private room, invite | **Partly done** | **Ask to join** is built (Custom rooms; the host accepts or declines from a popup). Invite cards in world chat and share links come with chat; link testing waits for hosting (§4) |
-| 16 | Online, friends | **Online list done** | Lobby shows everyone connected and where they are. Friends not started. (Chain built the same list independently; the merge kept this one, which adds guest tags and Join / Ask buttons) |
+| 15 | Private room, invite | **Partly done** | **Ask to join** is built (Custom rooms; the host accepts or declines from a popup). **Friend invites** are built (see 16). Invite cards in world chat and share links come with chat; link testing waits for hosting (§4) |
+| 16 | Online, friends | **Done 2026-09-28** | Lobby shows everyone connected and where they are. **Friends:** requests by exact username (accept / decline / cancel / remove with an inline confirm), a friends list on `/profile` with live status — green online, yellow playing, grey offline — and Watch / Join / Ask / Invite. Invites are checked by the server against `public.friendships` with the service role; guests cannot invite; one invite per friend per 10 s; the popup shows on any page outside a room and expires after 60 s. **Needs migration 0003** (§3). (Chain built the same online list independently; the merge kept this one) |
 
 ### Also built (not in the original 14)
 
 | Feature | Status | Notes |
 |---|---|---|
-| User profile page | **Done** | `/profile` — rating, record, rename, recent matches |
+| User profile page | **Rebuilt 2026-09-28** | `/profile` in two columns: identity card (initial avatar, inline rename, joined date and day streak, Elo with leaderboard rank and top %, sign out) with Friends under it; stat tiles (matches, win rate, mines found, best Elo), a rating line over the last 30 ranked matches, a year-long activity heatmap, and recent matches linking to the game log. Keyboard-usable chart and heatmap. Pure logic in `client/src/data/profileStats.ts`. No profile pictures yet |
+| Pixel mine | **Done 2026-09-28** | Mines are an 8-bit bomb with a lit fuse (`MineSprite`, sprite data in `client/src/data/mineSprite.ts`). The spark blinks, except under reduced motion. Dark mode adds a light one-pixel outline. The admin's "show mines" view draws covered mines see-through inside the dashed red border, so they never read as found ones |
+| Site footer + contact | **Done 2026-09-28** | Every page: contact, github, terms, security, privacy, the theme toggle (moved from the header) and the version (`client/src/version.ts`, 2.0.0). Contact popup with six mail buttons to Palangtaj@gmail.com, subject filled in |
+| Privacy, security, terms | **Done 2026-09-28** | `/privacy`, `/security`, `/terms` — text in `client/src/data/policies.ts`, checked against what the code actually stores and logs. Readable signed out and without Supabase |
 | Game log page | **Done** | `/games` — history, filter by scope and mode |
 | Server dashboard | **Done** | `/admin` — the connection display the assignment asks for |
 | Server console v2 | **Done** | Terminal panel, game viewer + mine toggle, kick / ban / end game with reasons, admin-only access |
@@ -98,6 +103,7 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | Ask to join | **Done 2026-09-28** | Custom rooms can require the host's approval: request dialog (Cancel / Request / ×), host popup with Accept / Decline, also reachable from the Online now list. Spec: `docs/specs/2026-09-28-join-requests-and-guest-log.md` |
 | Guest game log | **Done 2026-09-28** | "Mine" works for guests: the server sends each seat the saved match id and the browser remembers it |
 | Classic stays original | **Done 2026-09-28** | A 6×6 / 11-mine / 2-player room always lets anyone join and has no host kick or ban — exactly the assignment |
+| Clearer scoreboard | **Done 2026-09-28** | Rows read `8 mines · 800` — the unlabelled all-games total ("8 / 0") is gone from the players' view (the server still keeps it; Reset still clears it). A `next` tag joins `on turn`, from one shared rule (`nextInTurn`, `shared/src/engine/turns.ts`) that the server's turn passing also uses. When the player on turn leaves, the turn now goes to the player after them — before, it jumped to the first player, so the `next` tag would have been wrong |
 | Hosted build | **Done — Chain** | Client on Vercel, game server on Render (`vercel.json`, `render.yaml`, `DEPLOY.md`). `PUBLIC_SERVER_URL` / `VITE_SERVER_URL` point the client at it; the LAN setup is unchanged |
 | Flat redesign | **Done — Chain** | Grey and ink palette, light and dark, one orange accent for "your turn"; survey-grid board with a draining clock line; self-hosted fonts so the LAN demo works offline. The console, dialogs and online list were restyled to match in the merge |
 | Forfeit wins | **Done — Chain** | Leaving mid-match hands the other player the win, **rated in Ranked**. Merge decision: being kicked or banned mid-match counts the same as leaving. An admin *ending* a game still records nothing |
@@ -108,6 +114,7 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | Casual vs Ranked modes | **Done** | Elo only moves in Ranked |
 | Matchmaking pool on the console | **Done** | `/admin` shows who is queued, their rating, wait and current window |
 | Contributor guide | **Done** | `CONTRIBUTING.md` — setup, rules, work split, gotchas |
+| Security policy + GitHub security | **Done 2026-09-28** | `SECURITY.md` (report privately through the Security tab). Turned on: private vulnerability reporting, Dependabot alerts, CodeQL code scanning; secret scanning and push protection were already on. First Dependabot findings: 5 moderate (express/body-parser/qs — same-major update fixes them; vitest — dev tooling only, major upgrade) |
 | Match history schema | **Applied** | `supabase/migrations/0001_accounts_and_elo.sql`, advisors clean |
 
 ---
@@ -131,7 +138,8 @@ checks were run against the live database and all passed:
 | ~~Paste the secret key into `.env`~~ | **Done.** Server reports "Supabase connected". |
 | ~~Add GitHub OAuth app~~ | **Done.** Enabled and live. |
 | ~~Apply `supabase/migrations/0002_admins.sql`~~ | **Done 2026-09-27.** `public.admins` exists; `test:ranked` confirms a non-admin is refused, an admin is let in, and the public key gets "permission denied". |
-| **Add yourself as an admin** | The `insert` statement at the bottom of the migration file, with your username. Needed only to open `/admin` from a machine other than the server. |
+| **Add admins** | Paste `supabase/queries/add-admin.sql` into the SQL Editor and run it — it adds Chain (`chainpong`) and lists every admin; change the username to add someone else. Needed only to open `/admin` from a machine other than the server. |
+| **Apply `supabase/migrations/0003_friends.sql`** | Friends list and invites. Paste the file into the SQL Editor and run it once. Until then `/profile` says the update is needed and invites are refused. |
 | Add Google OAuth | **Paused** until hosting — needs a real domain. See "Social sign-in" below. |
 
 **Fixed 2026-09-28 — one malformed message could crash the server.** Any client sending an
@@ -250,9 +258,9 @@ Ordered by marks per hour of work.
    auto-started rooms, live pool on the server console.
 5. ~~Online players list + server console v2~~ — **done 2026-09-27**. Closes the graded
    "client receives information about other connected clients" gap. Spec in `docs/specs/`.
-6. **Chat + invites** — **next.** World chat in the lobby, in-room chat, invite cards posted
-   into world chat, share links (copy, LINE, phone share sheet), optional private rooms
-   (item 15).
+6. **Chat + share links** — **next.** World chat in the lobby, in-room chat, invite cards
+   posted into world chat, share links (copy, LINE, phone share sheet), optional private rooms
+   (item 15). Friend-to-friend invites already exist (2026-09-28).
 7. **Puzzle mode** — classic single-player Minesweeper (first click safe, flood-fill, flags),
    as its own mode. After chat. Scores as a non-AI feature and reuses the engine.
 8. **AI opponent (item 8)** — **on hold, pending team discussion.** Worth 2 points and
@@ -310,12 +318,15 @@ Every claim of "done" above is backed by a command that can be re-run.
 
 ```
 npm run typecheck   # clean across all three packages
-npm test            # 239 unit tests: engine, room config, Elo, matchmaking, moderation,
-                    #   join requests, presence, admin access check (incl. ADMIN_TOKEN),
-                    #   activity log, handler safety, seat-hold identity, session
-                    #   handling, guest history, formatting
-npm run test:e2e    # 152 socket assertions — needs a running server; ~30 s of it is the
-                    #   reconnect grace period running out
+npm test            # 365 unit tests: engine, turn order, room config, Elo, matchmaking,
+                    #   moderation, join requests, presence, admin access check (incl.
+                    #   ADMIN_TOKEN), activity log, handler safety, seat-hold identity,
+                    #   session handling, guest history, formatting, friends (status,
+                    #   actions, request plan, invite rate limit), profile stats, pixel
+                    #   mine sprite, routes, policy text
+npm run test:e2e    # 159 socket assertions — needs a running server; ~30 s of it is the
+                    #   reconnect grace period running out. FMM_URL=http://localhost:3100
+                    #   points it at a test server on another port
 npm run test:ranked # 40 assertions against the real database — needs a server + credentials
                     #   and migration 0002 (applied)
 ```
@@ -326,8 +337,10 @@ the room's state), Classic staying open with no host kick, forfeits and leaving 
 the reconnect grace period (held seat, resume, expiry), a tab returning as someone else, kicking
 a player whose seat is held, the admin game viewer and mine toggle (mines reach the admin socket
 only), the terminal log, remote console connections being refused with `ADMIN_ONLY` (with or
-without a guessed token when none is set), and garbage payloads on every game and console event
-leaving the server running.
+without a guessed token when none is set), the online list carrying each row's account id (null
+for guests), friend invites refused for guests, and garbage payloads on every game and console
+event leaving the server running. The signed-in invite path needs two real accounts that are
+friends, so it is not in the e2e suite yet.
 
 `test:ranked` creates two confirmed accounts, plays a ranked match and a casual one, then two
 ranked forfeits (leaving, and an admin kick) in new rooms, checks that the rows landed and the

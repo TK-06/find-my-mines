@@ -7,6 +7,7 @@ import {
   hostModerationError,
   isRoomFull,
   joinRequestError,
+  nextInTurn,
   pickOne,
   rateMatch,
   revealCell,
@@ -335,6 +336,11 @@ export class MatchManager {
     const leaver = this.players.find((p) => p.id === id);
     const wasSeated = leaver !== undefined;
     const wasCurrent = this.currentPlayerId === id;
+    // Worked out before they leave the order: the player the leaderboard is
+    // showing as "next" is the one who should get the turn.
+    const successor = wasCurrent
+      ? nextInTurn(this.seatedPlayers().map((p) => p.id), id)
+      : null;
 
     this.players = this.players.filter((p) => p.id !== id);
     this.spectators = this.spectators.filter((s) => s.id !== id);
@@ -353,7 +359,7 @@ export class MatchManager {
         this.forfeitMatch(leaver);
       } else if (wasCurrent) {
         // The player on turn walked away — hand the turn on rather than stall.
-        this.passTurn();
+        this.passTurn(successor);
       }
     } else if (leaver && this.status === 'ended' && tooFew) {
       // Nobody is left to rematch, so the result screen has nothing to wait
@@ -625,13 +631,24 @@ export class MatchManager {
     this.out.changed();
   }
 
-  /** Rotates to the next seated player. Works for any number of seats. */
-  private passTurn(): void {
+  /**
+   * Rotates to the next seated player. Works for any number of seats. Uses the
+   * same rule as the leaderboard's "next" tag, so the two always agree.
+   *
+   * `to` is for when the player on turn has just left: they are no longer in
+   * the order, so the caller works out who came after them beforehand.
+   */
+  private passTurn(to: string | null = null): void {
     const seated = this.seatedPlayers();
     if (seated.length < MIN_PLAYERS_TO_START) return;
 
-    const currentIndex = seated.findIndex((p) => p.id === this.currentPlayerId);
-    const next = seated[(currentIndex + 1) % seated.length]!;
+    const nextId =
+      to ??
+      nextInTurn(
+        seated.map((p) => p.id),
+        this.currentPlayerId,
+      );
+    const next = seated.find((p) => p.id === nextId) ?? seated[0]!;
 
     this.currentPlayerId = next.id;
     this.timer.start(TURN_SECONDS);
