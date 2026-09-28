@@ -54,3 +54,4 @@ $RECYCLE.BIN/
 # Throwaway probe scripts live here during debugging.
 scripts/_*.mjs
 tmp/
+.mcp.json
