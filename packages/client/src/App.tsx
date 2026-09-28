@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { identityChanged } from './auth/session.js';
 import { authEnabled, supabase } from './auth/supabase.js';
 import { signOutAfterRemoval } from './data/format.js';
+import { AiPanel, HintButton, HintLine, useAiHint } from './components/AiPanel.js';
 import { Board } from './components/Board.js';
 import { FriendInviteToasts } from './components/FriendInviteToasts.js';
 import { JoinRequestDialog } from './components/JoinRequestDialog.js';
@@ -12,6 +13,7 @@ import { OnlinePanel } from './components/OnlinePanel.js';
 import { QueuePanel } from './components/QueuePanel.js';
 import { ReasonDialog } from './components/ReasonDialog.js';
 import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
+import { RoomChat } from './components/RoomChat.js';
 import { SiteFooter } from './components/SiteFooter.js';
 import { isPolicy } from './data/policies.js';
 import { NavBar, useRoute, type Route } from './router.js';
@@ -62,7 +64,15 @@ export function App() {
     friendInvites,
     inviteFriend,
     dismissInvite,
+    playVsAi,
+    askHint,
+    roomMessages,
+    sayInRoom,
   } = useGame();
+
+  // Up here with the other hooks, before any early return. Inert outside a
+  // game against the computer.
+  const hint = useAiHint(state, playerId, askHint);
 
   const [signedIn, setSignedIn] = useState(false);
   const [ready, setReady] = useState(!authEnabled);
@@ -268,6 +278,7 @@ export function App() {
           <div className="lobby-layout">
             <div className="stack">
               <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
+              <AiPanel connected={connected} onPlay={playVsAi} />
               <LobbyScreen
                 rooms={rooms}
                 clientCount={clientCount}
@@ -313,6 +324,25 @@ export function App() {
       }
     : undefined;
 
+  // Playing the computer: the turn banner carries the Hint button on your
+  // turn, and the hint's reason shows under it — to you alone. The banner
+  // keeps one height either way, so the board does not jump every turn.
+  const aiSeat = state.origin === 'ai' && isSeated;
+  const turnBanner =
+    state.status === 'playing' && !isSpectator ? (
+      <div className={`banner ${myTurn ? 'you-turn' : 'wait'}${aiSeat ? ' with-hint' : ''}`}>
+        {myTurn ? 'Your turn. Pick a slot.' : `${state.players.find((p) => p.id === state.currentPlayerId)?.nickname ?? 'Another player'} is picking…`}
+        {hint.available && (
+          <HintButton
+            hintsLeft={hint.hintsLeft}
+            asking={hint.asking}
+            disabled={!hint.canRequest}
+            onClick={() => void hint.request()}
+          />
+        )}
+      </div>
+    ) : null;
+
   return (
     <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
       <div className="stack">
@@ -347,17 +377,29 @@ export function App() {
           </div>
         )}
 
-        {state.status === 'playing' && !isSpectator && (
-          <div className={`banner ${myTurn ? 'you-turn' : 'wait'}`}>
-            {myTurn ? 'Your turn. Pick a slot.' : `${state.players.find((p) => p.id === state.currentPlayerId)?.nickname ?? 'Another player'} is picking…`}
+        {aiSeat && turnBanner ? (
+          <div className="ai-turn">
+            {turnBanner}
+            <HintLine note={hint.note} />
           </div>
+        ) : (
+          turnBanner
         )}
 
         <div className={`play-area ${state.status === 'waiting' ? 'no-board' : ''}`}>
           {state.status !== 'waiting' && (
-            <Board state={state} myTurn={myTurn && !isSpectator} onReveal={reveal} />
+            <Board state={state} myTurn={myTurn && !isSpectator} onReveal={reveal} hint={hint.cell} />
           )}
-          <Leaderboard state={state} myId={playerId} moderation={moderation} />
+          <div className="stack room-side">
+            <Leaderboard state={state} myId={playerId} moderation={moderation} />
+            {/* Keyed by room: a half-typed line or an error never carries over. */}
+            <RoomChat
+              key={state.roomId}
+              messages={roomMessages}
+              connected={connected}
+              onSay={sayInRoom}
+            />
+          </div>
         </div>
       </div>
 

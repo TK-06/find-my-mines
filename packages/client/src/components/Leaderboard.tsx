@@ -1,4 +1,5 @@
 import { TURN_SECONDS, nextInTurn, type PublicMatchState } from '@fmm/shared';
+import { isBotSeat } from '../data/aiPlay.js';
 
 /** Kick and ban buttons, present only when this viewer is allowed to moderate. */
 export interface ModerationControls {
@@ -99,6 +100,8 @@ export function Leaderboard({ state, myId, moderation }: Props) {
             const isMe = player.id === myId;
             const isHost = state.hostId === player.id;
             const readyForRematch = state.rematchVotes.includes(player.id);
+            // The computer is not rated, so its row has no Elo to show.
+            const isBot = isBotSeat(player);
 
             return (
               <li
@@ -108,6 +111,7 @@ export function Leaderboard({ state, myId, moderation }: Props) {
                 <span className="rank">{rank}</span>
                 <span className="who">
                   {player.nickname}
+                  {isBot && <span className="tag bot">bot</span>}
                   {isMe && <span className="tag me">you</span>}
                   {isHost && <span className="tag host">host</span>}
                   {!player.connected && <span className="tag away">reconnecting</span>}
@@ -123,7 +127,7 @@ export function Leaderboard({ state, myId, moderation }: Props) {
                   {/* This match only. totalScore (earlier matches) is not shown. */}
                   <strong>{player.score}</strong>
                   <span className="muted"> {player.score === 1 ? 'mine' : 'mines'}</span>
-                  <span className="muted"> · {player.elo}</span>
+                  {!isBot && <span className="muted"> · {player.elo}</span>}
                   {/* Only set after a ranked match, and only for real accounts. */}
                   {player.eloDelta !== undefined && player.eloDelta !== 0 && (
                     <span className={`elo-delta ${player.eloDelta > 0 ? 'up' : 'down'}`}>
@@ -132,7 +136,8 @@ export function Leaderboard({ state, myId, moderation }: Props) {
                   )}
                 </span>
                 {moderation &&
-                  (isMe ? (
+                  // Nothing to kick: the computer comes and goes with the room.
+                  (isMe || isBot ? (
                     <span />
                   ) : (
                     <MemberActions id={player.id} nickname={player.nickname} moderation={moderation} />

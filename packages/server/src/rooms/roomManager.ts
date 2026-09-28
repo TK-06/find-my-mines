@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import {
   coerceRoomConfig,
   generateRoomId,
   validateRoomConfig,
+  type AiLevel,
   type RoomConfig,
   type RoomOrigin,
   type RoomSummary,
@@ -81,6 +83,22 @@ export class RoomManager {
     return members;
   }
 
+  /**
+   * Seats a computer opponent in a room and returns its id, or null when the
+   * room is gone or has no free seat. The id is never a socket id, so bots
+   * never appear among connected clients and anything emitted to them goes
+   * nowhere.
+   */
+  addBot(roomId: string, level: AiLevel): string | null {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+
+    const id = `bot:${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    if (!room.addBot(id, level)) return null;
+    this.memberRoom.set(id, roomId);
+    return id;
+  }
+
   /** Records membership. The caller seats them via the room itself. */
   track(clientId: string, roomId: string): void {
     this.memberRoom.set(clientId, roomId);
@@ -96,8 +114,9 @@ export class RoomManager {
 
   /**
    * Removes a client from whatever room they are in, closing the room if that
-   * left it empty. Returns the room they left, so the caller can leave the
-   * socket.io room and refresh the lobby.
+   * left it empty — or left only computer opponents, who have nobody to play.
+   * Returns the room they left, so the caller can leave the socket.io room and
+   * refresh the lobby.
    */
   leave(clientId: string): { roomId: string | null; closed: boolean } {
     const roomId = this.memberRoom.get(clientId);
@@ -108,7 +127,9 @@ export class RoomManager {
     if (!room) return { roomId, closed: false };
 
     const nowEmpty = room.remove(clientId);
-    if (nowEmpty) {
+    if (nowEmpty || !room.hasHumans()) {
+      for (const id of room.memberIds()) this.memberRoom.delete(id);
+      room.shutdown();
       this.rooms.delete(roomId);
       return { roomId, closed: true };
     }

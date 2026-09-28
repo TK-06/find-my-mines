@@ -1,7 +1,10 @@
 import {
+  AI_HINTS_PER_MATCH,
   BOMB_RESETS_TIMER,
   MIN_PLAYERS_TO_START,
+  STARTING_ELO,
   TURN_SECONDS,
+  botNickname,
   createBoard,
   createRng,
   hostModerationError,
@@ -11,6 +14,7 @@ import {
   pickOne,
   rateMatch,
   revealCell,
+  type AiLevel,
   type Board,
   type ForfeitNotice,
   type Identity,
@@ -47,6 +51,8 @@ interface Occupant {
    * spectating and waiting would skip the host's approval.
    */
   promotable: boolean;
+  /** Set on a computer opponent's seat. It has no socket and no account. */
+  bot?: AiLevel;
 }
 
 /** What the server needs in order to persist a finished match. */
@@ -129,6 +135,9 @@ export class MatchManager {
   /** Pending asks to join, oldest first. The room owns them, so a new host inherits them. */
   private joinRequests: { id: string; identity: Identity }[] = [];
 
+  /** Hints each player has used this match, in a game against the computer. */
+  private hintsUsed = new Map<string, number>();
+
   readonly createdAt = Date.now();
   private readonly timer: TurnTimer;
 
@@ -151,8 +160,18 @@ export class MatchManager {
 
   // ── membership ───────────────────────────────────────────────────────────
 
+  /**
+   * The earliest-joined seated *person*. A computer opponent never hosts: it
+   * cannot press Start or answer a join request, so a room it hosted would be
+   * stuck — say, when the only player leaves an AI room and a spectator is
+   * moved into the free seat.
+   */
   get hostId(): string | null {
-    return this.orderedPlayers()[0]?.id ?? null;
+    return this.host()?.id ?? null;
+  }
+
+  private host(): Occupant | undefined {
+    return this.orderedPlayers().find((p) => !p.bot);
   }
 
   get isEmpty(): boolean {
@@ -169,6 +188,14 @@ export class MatchManager {
 
   has(id: string): boolean {
     return this.isSeated(id) || this.spectators.some((s) => s.id === id);
+  }
+
+  /**
+   * Whether anyone but computer opponents is here, seated or watching. A room
+   * with nobody left to play or watch closes, whatever bots are still seated.
+   */
+  hasHumans(): boolean {
+    return this.spectators.length > 0 || this.players.some((p) => !p.bot);
   }
 
   /** Every member, players then spectators. */
@@ -278,6 +305,26 @@ export class MatchManager {
     return 'spectator';
   }
 
+  /**
+   * Seats a computer opponent. It is treated like a guest — no account, the
+   * starting rating, never rated — and never waits as a spectator: false, and
+   * nothing seated, when the room is full or a match is running.
+   */
+  addBot(id: string, level: AiLevel): boolean {
+    if (isRoomFull(this.config, this.players.length) || this.status === 'playing') return false;
+
+    const identity: Identity = {
+      profileId: null,
+      nickname: botNickname(level),
+      elo: STARTING_ELO,
+      gamesPlayed: 0,
+      isGuest: true,
+    };
+    this.players.push({ ...this.newOccupant(id, identity, false), bot: level });
+    this.out.changed();
+    return true;
+  }
+
   private newOccupant(id: string, identity: Identity, promotable: boolean): Occupant {
     return {
       id,
@@ -321,6 +368,11 @@ export class MatchManager {
     if (this.winnerId === oldId) this.winnerId = newId;
     if (this.lastWinnerId === oldId) this.lastWinnerId = newId;
     if (this.rematchVotes.delete(oldId)) this.rematchVotes.add(newId);
+    const hints = this.hintsUsed.get(oldId);
+    if (hints !== undefined) {
+      this.hintsUsed.delete(oldId);
+      this.hintsUsed.set(newId, hints);
+    }
     for (const cell of this.revealed) {
       if (cell.byPlayerId === oldId) cell.byPlayerId = newId;
     }
@@ -471,6 +523,7 @@ export class MatchManager {
     this.revealed = [];
     this.winnerId = null;
     this.rematchVotes.clear();
+    this.hintsUsed.clear();
     for (const player of this.players) {
       player.score = 0;
       player.eloDelta = undefined;
@@ -625,6 +678,33 @@ export class MatchManager {
     this.out.changed();
   }
 
+  // ── hints (games against the computer) ───────────────────────────────────
+
+  /**
+   * Why this player may not have a hint right now, or null when they may. Only
+   * against the computer, only on your own turn, a few per match — a hint
+   * between people would be an unfair third player.
+   */
+  hintRefusal(playerId: string): string | null {
+    if (this.origin !== 'ai') return 'Hints are only for games against the computer.';
+    if (!this.isSeated(playerId)) return 'Only players can ask for a hint.';
+    if (this.status !== 'playing') return 'Hints are for a match in progress.';
+    if (playerId !== this.currentPlayerId) return 'Wait for your turn to ask for a hint.';
+    if (this.hintsLeft(playerId) <= 0) return 'No hints left this match.';
+    return null;
+  }
+
+  /** Uses one of the player's hints. Returns how many they have left. */
+  spendHint(playerId: string): number {
+    this.hintsUsed.set(playerId, (this.hintsUsed.get(playerId) ?? 0) + 1);
+    return this.hintsLeft(playerId);
+  }
+
+  /** Hints this player has left this match. Every new match (a rematch too) starts afresh. */
+  hintsLeft(playerId: string): number {
+    return Math.max(0, AI_HINTS_PER_MATCH - (this.hintsUsed.get(playerId) ?? 0));
+  }
+
   private handleTimeout(): void {
     if (this.status !== 'playing') return;
     this.passTurn();
@@ -714,6 +794,7 @@ export class MatchManager {
     this.lastWinnerId = null;
     this.currentPlayerId = null;
     this.rematchVotes.clear();
+    this.hintsUsed.clear();
     this.status = 'waiting';
 
     for (const player of this.players) {
@@ -746,6 +827,8 @@ export class MatchManager {
       elo: player.elo,
       isGuest: player.isGuest,
       eloDelta: player.eloDelta,
+      // Only on a bot's seat, so a person's seat serialises exactly as before.
+      ...(player.bot ? { bot: player.bot } : {}),
     };
   }
 
@@ -753,7 +836,7 @@ export class MatchManager {
     return {
       id: this.roomId,
       name: this.roomName,
-      hostNickname: this.orderedPlayers()[0]?.nickname ?? '—',
+      hostNickname: this.host()?.nickname ?? '—',
       config: this.config,
       playerCount: this.players.length,
       spectatorCount: this.spectators.length,

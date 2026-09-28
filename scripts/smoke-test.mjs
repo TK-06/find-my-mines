@@ -1265,6 +1265,226 @@ section('friend invites');
   await sleep(200);
 }
 
+// ── play vs AI ──────────────────────────────────────────────────────────────
+section('play vs AI');
+
+// Run against a server with no GROQ_API_KEY, so the bot plays on the solver
+// alone and the run needs no network beyond the game server.
+{
+  const ann = await connect();
+  const annJoin = await setName(ann, 'Ann');
+  const annView = track(ann);
+  const annLobby = trackLobby(ann);
+  const outsider = await connect();
+  await setName(outsider, 'Otto');
+  const outsiderLobby = trackLobby(outsider);
+  const overheard = [];
+  outsider.on('room:message', (m) => overheard.push(m));
+
+  const badLevel = await emitAck(ann, 'ai:play', { level: 'impossible' });
+  check('ai:play refuses a level that does not exist',
+    badLevel.ok === false && Array.isArray(badLevel.errors), badLevel.errors?.[0] ?? badLevel.error ?? '');
+  const noLevel = await emitAck(ann, 'ai:play', undefined);
+  check('ai:play without a payload is refused cleanly',
+    noLevel.ok === false && !String(noLevel.error ?? '').startsWith('no ack'), JSON.stringify(noLevel));
+
+  // The client follows only a room it adopted, so the ack must come before the
+  // room's first state:sync (and before anything the bot says).
+  const playOrder = [];
+  const noteSync = () => playOrder.push('sync');
+  ann.on('state:sync', noteSync);
+  const played = await new Promise((resolve) =>
+    ann.timeout(5000).emit('ai:play', { level: 'medium' }, (err, result) => {
+      playOrder.push('ack');
+      resolve(err ? { ok: false, error: 'no ack for ai:play' } : result);
+    }),
+  );
+  await sleep(300);
+  ann.off('state:sync', noteSync);
+  const aiRoomId = played.roomId;
+
+  check('ai:play seats you as a player in a new room',
+    played.ok === true && played.seat === 'player' && Boolean(aiRoomId), JSON.stringify(played));
+  check('the ai:play ack arrives before the room’s first state:sync',
+    playOrder[0] === 'ack' && playOrder.includes('sync'), playOrder.join(' → '));
+
+  const aiState = annView.state;
+  const botSeat = aiState?.players.find((p) => p.bot);
+  const botId = botSeat?.id;
+  check('the room seats you and a bot, and the match starts at once',
+    aiState?.roomId === aiRoomId && aiState?.status === 'playing' && aiState.players.length === 2 &&
+      botSeat?.bot === 'medium' && aiState.players.some((p) => p.id === annJoin.playerId && !p.bot),
+    aiState ? `${aiState.status}, ${aiState.players.map((p) => `${p.nickname}${p.bot ? `(${p.bot})` : ''}`).join(' vs ')}` : 'no state');
+  check('an AI room is a casual Classic board with you as host',
+    aiState?.origin === 'ai' && aiState.config.mode === 'casual' && aiState.rows === 6 &&
+      aiState.cols === 6 && aiState.bombCount === 11 && aiState.hostId === annJoin.playerId,
+    JSON.stringify(aiState?.config));
+  check('a bot id is never a connection id', typeof botId === 'string' && botId.startsWith('bot:'), String(botId));
+
+  await sleep(300);
+  check('the bot is never listed as a connected client',
+    Boolean(latestAdmin) && !latestAdmin.clients.some((c) => c.id === botId) &&
+      latestAdmin.clientCount === latestAdmin.clients.length,
+    `${latestAdmin?.clientCount} clients`);
+  check('the bot is not in the players’ online list',
+    !(annLobby.latest?.online ?? []).some((p) => p.id === botId || p.nickname === botSeat?.nickname));
+  check('the AI room is listed in the lobby, so others can watch',
+    (outsiderLobby.latest?.rooms ?? []).some((r) => r.id === aiRoomId));
+
+  // A spectator watches the whole thing, and hears the chat later on.
+  const sam = await connect();
+  await setName(sam, 'Sam');
+  const samWatch = await emitAck(sam, 'room:spectate', { roomId: aiRoomId });
+  check('spectators may watch a game against the computer', samWatch.ok === true && samWatch.seat === 'spectator',
+    samWatch.errors?.[0] ?? '');
+
+  let botMoves = 0;
+  ann.on('cell:revealed', ({ cell }) => {
+    if (cell.byPlayerId === botId) botMoves++;
+  });
+
+  // Play the match out: Ann moves on her turns (hints first, once), the bot on its own.
+  let hintOnTurn = null;
+  let hintCovered = false;
+  let hintAgain = null;
+  const drained = [];
+  let hintOffTurn = null;
+  const attempted = new Set();
+  const deadline = Date.now() + 150_000;
+  while (!annView.ended && Date.now() < deadline) {
+    const s = annView.state;
+    if (!s || s.status !== 'playing') {
+      await sleep(50);
+      continue;
+    }
+    if (s.currentPlayerId === botId) {
+      if (!hintOffTurn) hintOffTurn = await emitAck(ann, 'ai:hint', {});
+      await sleep(50);
+      continue;
+    }
+    if (s.currentPlayerId !== annJoin.playerId) {
+      await sleep(50);
+      continue;
+    }
+    if (!hintOnTurn) {
+      hintOnTurn = await emitAck(ann, 'ai:hint', {});
+      hintCovered = hintOnTurn.ok === true &&
+        !s.revealed.some((c) => c.row === hintOnTurn.row && c.col === hintOnTurn.col);
+      hintAgain = await emitAck(ann, 'ai:hint', {});
+      for (let i = 0; i < 10; i++) {
+        const next = await emitAck(ann, 'ai:hint', {});
+        drained.push(next);
+        if (!next.ok) break;
+      }
+    }
+    const open = new Set(s.revealed.map((c) => `${c.row}:${c.col}`));
+    let target = null;
+    for (let row = 0; row < s.rows && !target; row++) {
+      for (let col = 0; col < s.cols && !target; col++) {
+        const key = `${row}:${col}`;
+        if (!open.has(key) && !attempted.has(`${s.revealed.length}|${key}`)) target = { row, col, key };
+      }
+    }
+    if (target) {
+      attempted.add(`${s.revealed.length}|${target.key}`);
+      ann.emit('game:reveal', { row: target.row, col: target.col });
+    }
+    await sleep(80);
+  }
+
+  check('ai:hint on your turn names a covered cell with a reason',
+    hintCovered && typeof hintOnTurn?.text === 'string' && hintOnTurn.text.length > 0,
+    JSON.stringify(hintOnTurn));
+  check('hintsLeft counts down with each hint',
+    hintAgain?.ok === true && hintOnTurn?.hintsLeft === hintAgain.hintsLeft + 1,
+    `${hintOnTurn?.hintsLeft} → ${hintAgain?.hintsLeft}`);
+  const lastHint = drained.at(-1);
+  check('hints run out, and the refusal still says how many are left',
+    lastHint?.ok === false && lastHint.hintsLeft === 0, JSON.stringify(lastHint));
+  check('ai:hint is refused on the bot’s turn', hintOffTurn?.ok === false, JSON.stringify(hintOffTurn));
+  check('the bot plays its own turns', botMoves >= 1, `${botMoves} bot move(s)`);
+
+  const aiEnded = annView.ended;
+  check('a match against the bot runs to the end', Boolean(aiEnded),
+    aiEnded ? `${aiEnded.players.map((p) => `${p.nickname} ${p.score}`).join(', ')}` : 'timed out');
+  check('scores against the bot add up to the mines', aiEnded?.players.reduce((n, p) => n + p.score, 0) === 11);
+
+  if (aiEnded) {
+    for (let i = 0; i < 40 && !annView.state?.rematchVotes?.includes(botId); i++) await sleep(100);
+    check('the bot votes for a rematch after a moment', annView.state?.rematchVotes?.includes(botId) === true,
+      JSON.stringify(annView.state?.rematchVotes));
+
+    // Ann votes too: a new match, and a fresh set of hints.
+    const again = waitFor(ann, 'match:start', 6000).catch(() => null);
+    ann.emit('game:rematch');
+    check('your vote and the bot’s start the rematch', Boolean(await again));
+    for (let i = 0; i < 150 && annView.state?.currentPlayerId !== annJoin.playerId; i++) await sleep(100);
+    const freshHint = await emitAck(ann, 'ai:hint', {});
+    check('hints reset when a new match starts',
+      freshHint.ok === true && freshHint.hintsLeft === hintOnTurn?.hintsLeft, JSON.stringify(freshHint));
+  }
+
+  // Room chat: everyone in the room hears it, sender included; nobody else does.
+  const samHeard = [];
+  const annHeard = [];
+  sam.on('room:message', (m) => samHeard.push(m));
+  ann.on('room:message', (m) => annHeard.push(m));
+
+  const said = await emitAck(ann, 'room:say', { text: '  hello from Ann  ' });
+  await sleep(250);
+  const heard = samHeard.find((m) => m.fromId === annJoin.playerId);
+  check('room:say reaches the other members of the room',
+    said.ok === true && heard?.text === 'hello from Ann' && heard.fromName === 'Ann' &&
+      heard.kind === 'player' && heard.roomId === aiRoomId && typeof heard.id === 'string' && typeof heard.at === 'number',
+    JSON.stringify(heard ?? said));
+  check('the sender gets their own line back', annHeard.some((m) => m.text === 'hello from Ann'));
+  check('chat never leaves the room', overheard.length === 0, `${overheard.length} overheard`);
+
+  const samSaid = await emitAck(sam, 'room:say', { text: 'go bot' });
+  check('spectators can chat too', samSaid.ok === true, samSaid.error ?? '');
+
+  const empty = await emitAck(ann, 'room:say', { text: '   ' });
+  check('an empty chat line is refused', empty.ok === false, empty.error ?? '');
+  const nowhere = await emitAck(outsider, 'room:say', { text: 'anyone?' });
+  check('chat needs a room', nowhere.ok === false, nowhere.error ?? '');
+
+  const burst = [];
+  for (let i = 0; i < 5; i++) burst.push(await emitAck(ann, 'room:say', { text: `line ${i + 2}` }));
+  check('a burst of five lines inside ten seconds goes through… (hello + four)',
+    burst.slice(0, 4).every((r) => r.ok === true), burst.map((r) => r.ok).join(','));
+  check('…and the sixth is refused', burst[4]?.ok === false, burst[4]?.error ?? '');
+
+  // A normal room gets no hints, whoever asks.
+  const p1 = await connect();
+  const p2 = await connect();
+  await setName(p1, 'Uma');
+  await setName(p2, 'Vic');
+  const p1View = track(p1);
+  const normal = await emitAck(p1, 'room:create', { name: 'No hints', config: CLASSIC });
+  await emitAck(p2, 'room:join', { roomId: normal.roomId });
+  p1.emit('game:start');
+  await sleep(400);
+  const onTurnHere = p1View.state?.currentPlayerId === p1.id ? p1 : p2;
+  const noHint = await emitAck(onTurnHere, 'ai:hint', {});
+  check('ai:hint is refused in a normal room', noHint.ok === false && noHint.hintsLeft === undefined,
+    JSON.stringify(noHint));
+  p1.close();
+  p2.close();
+
+  // The last person out closes the room — the bot does not keep it alive.
+  sam.emit('room:leave');
+  await sleep(200);
+  check('the room stays open while a person is still in it',
+    (outsiderLobby.latest?.rooms ?? []).some((r) => r.id === aiRoomId));
+  ann.emit('room:leave');
+  await sleep(500);
+  check('leaving a game against the computer closes the room',
+    !(outsiderLobby.latest?.rooms ?? []).some((r) => r.id === aiRoomId) &&
+      !latestAdmin?.rooms.some((r) => r.id === aiRoomId));
+
+  for (const socket of [ann, sam, outsider]) socket.close();
+}
+
 // ── malformed messages never take the server down ───────────────────────────
 section('malformed messages');
 
@@ -1273,13 +1493,13 @@ section('malformed messages');
 const CLIENT_EVENTS = [
   'player:join', 'room:create', 'room:join', 'room:spectate', 'room:leave',
   'room:requestJoin', 'room:cancelRequest', 'room:answerRequest', 'room:kick',
-  'friend:invite',
+  'friend:invite', 'ai:play', 'ai:hint', 'room:say',
   'queue:join', 'queue:leave', 'game:start', 'game:reveal', 'game:rematch',
 ];
 const ADMIN_EVENTS = ['admin:kick', 'admin:ban', 'admin:closeRoom', 'admin:watch', 'admin:mines'];
 const BAD_ARGS = [
   [], [undefined], [null], [42], ['text'], [[]], [{}],
-  [{ roomId: {}, nickname: {}, name: [], config: 'x', mode: 7, row: 'a', col: null, targetId: [], note: 'x' }],
+  [{ roomId: {}, nickname: {}, name: [], config: 'x', mode: 7, row: 'a', col: null, targetId: [], note: 'x', level: {}, text: [] }],
   [{}, 5], [null, 'not a function'],
 ];
 
