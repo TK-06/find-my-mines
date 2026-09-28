@@ -1,4 +1,4 @@
-import { TURN_SECONDS, type PublicMatchState } from '@fmm/shared';
+import { TURN_SECONDS, nextInTurn, type PublicMatchState } from '@fmm/shared';
 
 /** Kick and ban buttons, present only when this viewer is allowed to moderate. */
 export interface ModerationControls {
@@ -38,12 +38,21 @@ function MemberActions({
  *
  * Spec: "The player's name and score are displayed on the game client." This
  * covers that for two players and stays readable for a free-for-all room.
- * Ties keep the same rank, so three players on 2 points all read "1".
+ * Ties keep the same rank, so three players on 2 points all read "1", and
+ * keep turn order between them (the sort is stable).
  */
 export function Leaderboard({ state, myId, moderation }: Props) {
-  const ranked = [...state.players].sort(
-    (a, b) => b.score - a.score || b.totalScore - a.totalScore,
-  );
+  const ranked = [...state.players].sort((a, b) => b.score - a.score);
+
+  // `players` arrives in turn order, and the server passes the turn with this
+  // same rule. A seat held for a reconnect still gets turns, so it can be next.
+  const nextId =
+    state.status === 'playing'
+      ? nextInTurn(
+          state.players.map((p) => p.id),
+          state.currentPlayerId,
+        )
+      : null;
 
   let lastScore: number | null = null;
   let lastRank = 0;
@@ -105,13 +114,15 @@ export function Leaderboard({ state, myId, moderation }: Props) {
                   {onTurn && state.status === 'playing' && (
                     <span className="tag turn">on turn</span>
                   )}
+                  {player.id === nextId && <span className="tag next">next</span>}
                   {state.status === 'ended' && readyForRematch && (
                     <span className="tag ready">ready</span>
                   )}
                 </span>
                 <span className="points">
+                  {/* This match only. totalScore (earlier matches) is not shown. */}
                   <strong>{player.score}</strong>
-                  <span className="muted"> / {player.totalScore}</span>
+                  <span className="muted"> {player.score === 1 ? 'mine' : 'mines'}</span>
                   <span className="muted"> · {player.elo}</span>
                   {/* Only set after a ranked match, and only for real accounts. */}
                   {player.eloDelta !== undefined && player.eloDelta !== 0 && (

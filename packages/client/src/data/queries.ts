@@ -178,6 +178,91 @@ export async function fetchMatchesByIds(ids: string[]): Promise<MatchRow[]> {
   }));
 }
 
+/** One of your seats, with the match it was in. Feeds the profile's charts and tiles. */
+export interface ProfileHistoryRow {
+  match_id: string;
+  created_at: string;
+  mode: MatchRow['mode'];
+  config: MatchRow['config'];
+  score: number;
+  elo_before: number;
+  elo_after: number;
+  elo_delta: number;
+  outcome: MatchPlayerRow['outcome'];
+}
+
+/**
+ * Every match one profile played, newest first, with only their own seat.
+ *
+ * Read from `matches` with an inner-joined, filtered `match_players` embed
+ * (the match_id foreign key) rather than the other way round, so the order is
+ * on the table's own column — the thing that stays stable across supabase-js
+ * versions. Capped at 1000 because that is also the most rows Supabase's API
+ * returns per request by default; a year of heatmap fits well inside it.
+ */
+export async function fetchProfileHistory(userId: string, limit = 1000): Promise<ProfileHistoryRow[]> {
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from('matches')
+    .select(
+      'id, created_at, mode, config, match_players!inner(profile_id, score, elo_before, elo_after, elo_delta, outcome)',
+    )
+    .eq('match_players.profile_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('[profile] history load failed:', error.message);
+    return [];
+  }
+
+  type Embedded = Omit<ProfileHistoryRow, 'match_id' | 'created_at' | 'mode' | 'config'>;
+  const matches = (data ?? []) as unknown as (Pick<MatchRow, 'id' | 'created_at' | 'mode' | 'config'> & {
+    match_players: Embedded[] | null;
+  })[];
+
+  return matches.flatMap((match) =>
+    (match.match_players ?? []).map((seat) => ({
+      match_id: match.id,
+      created_at: match.created_at,
+      mode: match.mode,
+      config: match.config,
+      score: seat.score,
+      elo_before: seat.elo_before,
+      elo_after: seat.elo_after,
+      elo_delta: seat.elo_delta,
+      outcome: seat.outcome,
+    })),
+  );
+}
+
+/**
+ * Where a profile stands on the leaderboard view, and how many are ranked at
+ * all. Null when they are not on it (no ranked match yet) or it can't be read;
+ * `total` is null on its own if only the count failed.
+ */
+export async function fetchRank(userId: string): Promise<{ rank: number; total: number | null } | null> {
+  if (!supabase) return null;
+
+  const [mine, everyone] = await Promise.all([
+    supabase.from('leaderboard').select('rank').eq('id', userId).maybeSingle(),
+    // head: true asks for the count alone, with no rows.
+    supabase.from('leaderboard').select('id', { count: 'exact', head: true }),
+  ]);
+
+  if (mine.error) {
+    console.error('[profile] rank load failed:', mine.error.message);
+    return null;
+  }
+  if (!mine.data) return null;
+
+  return {
+    rank: Number((mine.data as { rank: number | string }).rank),
+    total: everyone.error ? null : (everyone.count ?? null),
+  };
+}
+
 /** Top rated players. Reads the security_invoker leaderboard view. */
 export async function fetchLeaderboard(limit = 25): Promise<LeaderboardRow[]> {
   if (!supabase) return [];

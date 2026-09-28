@@ -237,6 +237,12 @@ check(
 check('a spectator shows as watching', onlineNamed('Carol')?.status === 'watching', onlineNamed('Carol')?.status);
 check('guests are marked as guests', onlineNamed('Bob')?.isGuest === true);
 check('the online list never carries a network address', online.every((p) => !('address' in p)));
+// The friends list finds friends by account id; a guest has none to find.
+check(
+  'online rows carry a profileId — null for a guest',
+  ['Alice', 'Bob', 'Carol', 'Dave'].every((n) => onlineNamed(n)?.profileId === null),
+  online.map((p) => `${p.nickname}:${p.profileId}`).join(', '),
+);
 
 const nameless = await connect();
 await sleep(250);
@@ -479,6 +485,20 @@ check('free-for-all match starts with 4 players', ffaStart?.players.length === 4
 const seenTurns = new Set([ffaStart?.currentPlayerId].filter(Boolean));
 alice.on('turn:changed', ({ currentPlayerId }) => seenTurns.add(currentPlayerId));
 
+// The leaderboard's "next" tag reads state.players as the turn order, so the
+// server must hand the turn to the player after the current one in that list,
+// wrapping at the end. A found mine keeps the turn, so only compare handovers.
+const handovers = [];
+let lastOnTurn = ffaStart?.currentPlayerId ?? null;
+const onHandover = ({ currentPlayerId }) => {
+  if (currentPlayerId === lastOnTurn) return;
+  const order = (aliceView.state?.players ?? ffaStart?.players ?? []).map((p) => p.id);
+  const expected = order[(order.indexOf(lastOnTurn) + 1) % order.length];
+  handovers.push({ ok: order.includes(lastOnTurn) && currentPlayerId === expected });
+  lastOnTurn = currentPlayerId;
+};
+alice.on('turn:changed', onHandover);
+
 const ffaById = {
   [aliceJoin.playerId]: alice,
   [bobJoin.playerId]: bob,
@@ -515,6 +535,15 @@ check(
   `${seenTurns.size} distinct players took a turn`,
 );
 
+// Stop before the next section: players leaving can hand the turn elsewhere.
+alice.off('turn:changed', onHandover);
+const outOfOrder = handovers.filter((h) => !h.ok).length;
+check(
+  'the turn passes to the next player in state.players order',
+  handovers.length > 0 && outOfOrder === 0,
+  `${handovers.length} handovers, ${outOfOrder} out of order`,
+);
+
 const ranked = [...(aliceView.state?.players ?? [])].sort((a, b) => b.score - a.score);
 check(
   'leaderboard ordering matches score ordering',
@@ -549,6 +578,77 @@ check(
   Boolean(finalAdmin) && !finalAdmin.rooms.some((r) => r.id === ffa.roomId),
   finalAdmin ? `${finalAdmin.rooms.length} room(s) left` : 'no admin:state received',
 );
+
+// ── the player on turn leaving ─────────────────────────────────────────────
+section('the player on turn leaving');
+
+{
+  const names = ['Quin', 'Rae', 'Sol', 'Tam'];
+  const four = [];
+  const ids = [];
+  for (const name of names) {
+    const socket = await connect();
+    four.push(socket);
+    ids.push((await setName(socket, name)).playerId);
+  }
+  const byId = Object.fromEntries(ids.map((id, i) => [id, four[i]]));
+  const nameOf = (id) => names[ids.indexOf(id)] ?? id;
+  // The first joiner is never the leaver below, so its view stays valid.
+  const view = track(four[0]);
+
+  const room = await emitAck(four[0], 'room:create', {
+    name: 'Turn leaver',
+    config: { ...CLASSIC, maxPlayers: 4 },
+  });
+  for (const socket of four.slice(1)) await emitAck(socket, 'room:join', { roomId: room.roomId });
+  const began = waitFor(four[0], 'match:start', 6000).catch(() => null);
+  four[0].emit('game:start');
+  await began;
+  await sleep(150);
+
+  // The leaver must sit in the middle of the turn order: for the first or last
+  // player, "the one after them" and "the first player left" are the same seat.
+  const middleOnTurn = () => {
+    const order = view.state?.players.map((p) => p.id) ?? [];
+    const index = order.indexOf(view.state?.currentPlayerId);
+    return index > 0 && index < order.length - 1;
+  };
+  const tried = new Set();
+  for (let move = 0; move < 40 && !middleOnTurn(); move++) {
+    const state = view.state;
+    if (!state || state.status !== 'playing') break;
+    const done = new Set(state.revealed.map((c) => `${c.row}:${c.col}`));
+    let target = null;
+    for (let row = 0; row < state.rows && !target; row++) {
+      for (let col = 0; col < state.cols && !target; col++) {
+        const key = `${row}:${col}`;
+        if (!done.has(key) && !tried.has(key)) target = { row, col, key };
+      }
+    }
+    if (!target) break;
+    tried.add(target.key);
+    byId[state.currentPlayerId]?.emit('game:reveal', { row: target.row, col: target.col });
+    await sleep(150);
+  }
+
+  if (middleOnTurn()) {
+    const order = view.state.players.map((p) => p.id);
+    const leaverId = view.state.currentPlayerId;
+    const expected = order[order.indexOf(leaverId) + 1];
+    byId[leaverId].emit('room:leave');
+    await sleep(400);
+    check(
+      'when the player on turn leaves, the turn goes to the player after them',
+      view.state?.status === 'playing' && view.state?.currentPlayerId === expected,
+      `${nameOf(leaverId)} left; expected ${nameOf(expected)}, got ${nameOf(view.state?.currentPlayerId)}`,
+    );
+  } else {
+    check('when the player on turn leaves, the turn goes to the player after them', false,
+      'never got a middle player on turn');
+  }
+
+  for (const socket of four) socket.close();
+}
 
 // ── forfeit and leaving after a match ──────────────────────────────────────
 section('forfeit and leaving');
@@ -1130,6 +1230,41 @@ if (!process.env.ADMIN_TOKEN) {
     emptyToken === 'ADMIN_ONLY' && guessedToken === 'ADMIN_ONLY', `${emptyToken}, ${guessedToken}`);
 }
 
+// ── friend invites ──────────────────────────────────────────────────────────
+section('friend invites');
+
+// Inviting needs two signed-in accounts that are friends in the database, so
+// the full path belongs with test:ranked. Without a database the wire must
+// still turn every guest away, answer a garbage payload, and deliver nothing.
+{
+  const delivered = [];
+  const noteInvite = (invite) => delivered.push(invite);
+  alice.on('friend:invited', noteInvite);
+
+  const fromLobby = await emitAck(bob, 'friend:invite', {
+    profileId: '00000000-0000-4000-8000-000000000000',
+  });
+  check('a guest cannot invite friends',
+    fromLobby.ok === false && /sign in/i.test(fromLobby.error ?? ''), fromLobby.error ?? '');
+
+  const inviteRoom = await emitAck(bob, 'room:create', { name: 'Invites', config: CLASSIC });
+  const fromRoom = await emitAck(bob, 'friend:invite', { profileId: aliceJoin.playerId });
+  check('a guest in a room is still told to sign in',
+    inviteRoom.ok === true && fromRoom.ok === false && /sign in/i.test(fromRoom.error ?? ''),
+    fromRoom.error ?? '');
+
+  const noPayloadInvite = await emitAck(bob, 'friend:invite', undefined);
+  check('an invite without a payload is refused cleanly',
+    noPayloadInvite.ok === false && !String(noPayloadInvite.error).startsWith('no ack'),
+    noPayloadInvite.error ?? '');
+
+  await sleep(200);
+  check('a refused invite reaches nobody', delivered.length === 0, `${delivered.length} delivered`);
+  alice.off('friend:invited', noteInvite);
+  bob.emit('room:leave');
+  await sleep(200);
+}
+
 // ── malformed messages never take the server down ───────────────────────────
 section('malformed messages');
 
@@ -1138,6 +1273,7 @@ section('malformed messages');
 const CLIENT_EVENTS = [
   'player:join', 'room:create', 'room:join', 'room:spectate', 'room:leave',
   'room:requestJoin', 'room:cancelRequest', 'room:answerRequest', 'room:kick',
+  'friend:invite',
   'queue:join', 'queue:leave', 'game:start', 'game:reveal', 'game:rematch',
 ];
 const ADMIN_EVENTS = ['admin:kick', 'admin:ban', 'admin:closeRoom', 'admin:watch', 'admin:mines'];

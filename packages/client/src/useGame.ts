@@ -1,6 +1,7 @@
 import {
   STARTING_ELO,
   type ForfeitNotice,
+  type FriendInvite,
   type JoinRequestOutcome,
   type ModerationResult,
   type OnlinePlayer,
@@ -14,6 +15,7 @@ import {
   type RoomSummary,
 } from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { INVITE_TTL_MS, addInvite } from './data/friendsModel.js';
 import { rememberGuestMatch } from './data/guestHistory.js';
 import { socket } from './socket.js';
 
@@ -74,6 +76,8 @@ export function useGame() {
   const [queue, setQueue] = useState<QueueSnapshot | null>(null);
   const [forfeit, setForfeit] = useState<ForfeitNotice | null>(null);
   const [requestResolution, setRequestResolution] = useState<RequestResolution | null>(null);
+  /** Invites from friends to the room they are in, newest last. */
+  const [friendInvites, setFriendInvites] = useState<FriendInvite[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -100,6 +104,9 @@ export function useGame() {
     if (errorTimer.current) clearTimeout(errorTimer.current);
     errorTimer.current = setTimeout(() => setError(null), 2600);
   }, []);
+
+  /** Each friend invite's own expiry, cleared if the hook goes away first. */
+  const inviteTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
 
   const join = useCallback((nickname: string) => {
     socket.emit('player:join', { nickname }, (result) => {
@@ -209,6 +216,21 @@ export function useGame() {
     });
     socket.on('error:msg', ({ message }) => showError(message));
 
+    // A friend asked us over. A newer invite from the same friend to the same
+    // room replaces the older one, and each goes away by itself after a
+    // minute — by then the room has usually moved on.
+    const timers = inviteTimers.current;
+    socket.on('friend:invited', (invite) => {
+      // Already there: nothing to accept.
+      if (invite.roomId === activeRoom.current) return;
+      setFriendInvites((list) => addInvite(list, invite));
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        setFriendInvites((list) => list.filter((i) => i.id !== invite.id));
+      }, INVITE_TTL_MS);
+      timers.add(timer);
+    });
+
     // Listeners are registered first so the initial lobby:rooms isn't missed.
     if (!socket.connected) socket.connect();
 
@@ -232,7 +254,10 @@ export function useGame() {
       socket.off('queue:status');
       socket.off('queue:matched');
       socket.off('error:msg');
+      socket.off('friend:invited');
       if (errorTimer.current) clearTimeout(errorTimer.current);
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
     };
   }, [showError, join]);
 
@@ -334,6 +359,31 @@ export function useGame() {
     [showError],
   );
 
+  /**
+   * Signed-in players only: invite an online friend to the room you are in.
+   * The server checks the friendship; a refusal comes back as `error`.
+   *
+   * Timed, unlike the other acks: the server's friendship check waits on the
+   * database, and an answer lost to a dropped connection must not leave the
+   * Invite button spinning forever.
+   */
+  const inviteFriend = useCallback(
+    (profileId: string) =>
+      new Promise<ModerationResult>((resolve) =>
+        socket
+          .timeout(8000)
+          .emit('friend:invite', { profileId }, (err: Error | null, result: ModerationResult) =>
+            resolve(err ? { ok: false, error: 'The server did not answer — try again.' } : result),
+          ),
+      ),
+    [],
+  );
+
+  const dismissInvite = useCallback(
+    (id: string) => setFriendInvites((list) => list.filter((invite) => invite.id !== id)),
+    [],
+  );
+
   return {
     connected,
     state,
@@ -367,5 +417,8 @@ export function useGame() {
     reveal,
     rematch,
     dismissForfeit,
+    friendInvites,
+    inviteFriend,
+    dismissInvite,
   };
 }

@@ -1,0 +1,39 @@
+import type { FriendInvite } from '@fmm/shared';
+
+export interface FriendInviteToastsProps {
+  invites: FriendInvite[];
+  onJoin: (invite: FriendInvite) => void;
+  onDismiss: (invite: FriendInvite) => void;
+}
+
+/**
+ * A friend's invite to their room, as a popup in the same corner stack as the
+ * host's join requests. Join goes through the normal join path, so an
+ * ask-to-join room still asks its host — an invite is not a way round that.
+ * useGame keeps at most a few and lets each expire on its own.
+ */
+export function FriendInviteToasts({ invites, onJoin, onDismiss }: FriendInviteToastsProps) {
+  if (invites.length === 0) return null;
+
+  return (
+    <div className="request-toasts" role="status" aria-live="polite">
+      {invites.map((invite) => (
+        <div key={invite.id} className="card request-toast friend-invite">
+          <div className="friend-invite-text">
+            <strong>{invite.fromName}</strong> invited you to{' '}
+            <strong>{invite.roomName}</strong>{' '}
+            <span className="room-code">({invite.roomId})</span>
+          </div>
+          <div className="room-actions">
+            <button className="ghost small" onClick={() => onDismiss(invite)}>
+              Dismiss
+            </button>
+            <button className="small" onClick={() => onJoin(invite)}>
+              Join
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
