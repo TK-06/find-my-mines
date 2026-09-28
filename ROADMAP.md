@@ -6,12 +6,14 @@ Update this file whenever a feature lands.
 New to the project? Read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, the rules, and
 how work is split.
 
-**Last updated:** 2026-09-28 — friends (requests, live status, invites; needs migration
+**Last updated:** 2026-09-29 — Play vs AI built (hybrid bot: solver + Groq LLM, easy /
+medium / hard, AI hint, room chat). Build order changed: everything that runs locally first,
+AWS last. On 2026-09-28: friends (requests, live status, invites; needs migration
 0003), the rebuilt profile page (rating chart, activity heatmap), the 8-bit pixel mine, a site
 footer with a contact popup, and privacy / security / terms pages. Earlier the same day:
 merged Chain's fork (Vercel + Render hosting, flat redesign, forfeit wins, 30 s reconnect
 grace, guests surviving a refresh, sign-up help, `ADMIN_TOKEN`) and fixed ratings drifting
-after a player's first ranked room. AI bot still on hold.
+after a player's first ranked room.
 
 ---
 
@@ -77,7 +79,7 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | 5 | Landing page | **Done** | Game list, join or spectate |
 | 6 | Spectator | **Done** | Extra clients watch; promoted into free seats next match |
 | 7 | Create new room | **Done** | Classic preset default, Custom panel, Casual/Ranked |
-| 8 | **Play with AI** | **On hold** | Mandatory AI feature, 2 points. Awaiting team discussion |
+| 8 | **Play with AI** | **Done 2026-09-29** | Mandatory AI feature, 2 points. Lobby card "Play vs AI" → a casual Classic room against `AI · Easy / Medium / Hard`, started at once, never rated; the bot never hosts; a room left with only the bot closes. **Hybrid bot:** a solver works out each covered cell's mine chance from the numbers on the board (public information only — never the hidden mines); the level (easy / medium / hard) decides how often it makes a deliberate mistake; an LLM on Groq (`openai/gpt-oss-20b` to start, `AI_MODEL` to switch) picks from the shortlist and talks in the room chat. No key, rate limit, slow or bad answer → the solver's own pick, so a turn never stalls. **AI hint** (second AI feature) in games against the bot. See §4 for Jev and Fruit Fly |
 | 9 | Matchmaking | **Done** | Casual/Ranked pools, Elo window widens while waiting, auto-start |
 | 10 | Elo | **Done** | Live end to end; verified writing to the database |
 | 11 | Login: guest (800) / registered | **Done** | Guest, email/password and **GitHub** live. Google paused until hosting gives a real domain |
@@ -249,7 +251,8 @@ path is covered by a regression test.
 
 ## 4. Build order
 
-Ordered by marks per hour of work.
+Ordered by marks per hour of work. **Decided 2026-09-29: build everything that runs on a laptop
+first, reach an almost-final version, then go live on AWS** only for what needs real resources.
 
 1. ~~Supabase go-live~~ — **done**, verified by `npm run test:ranked`.
 2. ~~Persistent leaderboard page~~ — **done**, `/ranks`.
@@ -258,25 +261,43 @@ Ordered by marks per hour of work.
    auto-started rooms, live pool on the server console.
 5. ~~Online players list + server console v2~~ — **done 2026-09-27**. Closes the graded
    "client receives information about other connected clients" gap. Spec in `docs/specs/`.
-6. **Chat + share links** — **next.** World chat in the lobby, in-room chat, invite cards
-   posted into world chat, share links (copy, LINE, phone share sheet), optional private rooms
-   (item 15). Friend-to-friend invites already exist (2026-09-28).
+6. ~~**Play vs AI + AI hint + room chat (item 8)**~~ — **done 2026-09-29.** Hybrid bot (solver +
+   Groq LLM with a strict answer format), three levels, bot lines in a Discord-style room chat,
+   hints in games against the bot. `GROQ_API_KEY` in `.env` (server-only); without it the bot
+   plays on the solver alone. `npm run ai:eval --workspace @fmm/server` compares models (valid
+   answers, speed, real-mine hit rate, agreement with the solver) — try light models and pick the
+   final one. First run, 5 boards, `openai/gpt-oss-20b`: 5/5 valid, median 595 ms, ~466 tokens a
+   call. Budget: ≤ 20 calls and 6K tokens a minute server-wide (Groq free tier is 30 req / 8K
+   tokens a minute), pause after a 429; beyond it the bot plays the solver's pick silently.
+   Hints: 3 per player per match, your turn only. Room chat: 5 lines per 10 s, not stored. AI
+   matches are recorded like any casual match (the bot as a guest seat).
 7. **Puzzle mode** — classic single-player Minesweeper (first click safe, flood-fill, flags),
-   as its own mode. After chat. Scores as a non-AI feature and reuses the engine.
-8. **AI opponent (item 8)** — **on hold, pending team discussion.** Worth 2 points and
-   mandatory to claim *any* AI points, so it should not slip far. Options on the table:
-   constraint propagation over the revealed numbers, or an LLM opponent (mind the 10-second
-   turn and demo-day network). Reuses `shared/engine`, so a solver is testable without a socket.
-9. **AWS hosting** — last, once the feature set is frozen (EC2, CloudWatch, ELB).
-   **Get a real domain as part of this.** It unblocks Google OAuth in two ways at once, and
-   Google is the only feature currently parked. See "When you deploy" under Social sign-in.
-   Vercel was considered and ruled out for the game server: its WebSockets close at the
-   function's max duration and new connections can land on a different instance, while this
-   server keeps every room in one process's memory. **Interim hosting exists (Chain):** client
-   on Vercel, server on Render — see `DEPLOY.md`. For temporary public access from the server
-   laptop, a Cloudflare quick tunnel also works.
-10. **Resume Google OAuth** — after the domain exists: add the three consent-screen links,
+   as its own mode, **with the AI hint**. Reuses the engine and the solver.
+8. **World chat + invite cards** — lobby chat, invite cards posted into it. Room chat and
+   friend-to-friend invites already exist by then.
+9. **Share invite links** — copy link, LINE, phone share sheet; optional private rooms
+   (item 15). Built and tested locally; the full test waits for a public address.
+10. **Fruit Fly bot (experiment)** — a computer level driven by a small circuit from the male
+    fruit fly connectome (MaleCNS, CC BY 4.0), CPU-only like the browser fly tic-tac-toe, with a
+    trained readout choosing among the solver's candidate cells. Be honest in the demo: as in the
+    viral fly-game clips, the trained readout does most of the work. The full-brain version
+    (~166k neurons) needs an NVIDIA GPU — a friend's machine or a cloud GPU later.
+11. **AWS hosting** — last, once the feature set is frozen (EC2, CloudWatch, ELB).
+    **Get a real domain as part of this.** It unblocks Google OAuth and fixes sign-up emails
+    that return to localhost (Supabase Site URL). Optional here: AWS Bedrock as the model
+    provider, a GPU for the full-brain fly. Vercel was ruled out for the game server: its
+    WebSockets close at the function's max duration and new connections can land on a different
+    instance, while this server keeps every room in one process's memory. **Interim hosting
+    exists (Chain):** client on Vercel, server on Render — see `DEPLOY.md`. For temporary public
+    access from the server laptop, a Cloudflare quick tunnel also works.
+12. **Resume Google OAuth** — after the domain exists: add the three consent-screen links,
     set the authorized domain, publish, then set `VITE_OAUTH_PROVIDERS=google,github`.
+
+**Reminder — Jev (TypeSafe):** the owner had trouble getting an API key (2026-09-29). Once
+`TYPESAFE_API_KEY` works, add Jev as a second move picker: `POST https://api.typesafe.ai/v1/systemone`
+with a `choice` question whose options are the candidate cells (it returns the choice plus a
+probability per option, 70–500 ms). It does not write text, so a Jev bot uses stock lines in
+the chat. Add it to `ai:eval` next to the Groq models.
 
 ### Parked until the game is online
 
@@ -293,8 +314,9 @@ Decided 2026-09-27. Each of these needs a public server, so revisit them once ho
 Everything scoped for v1.0.0 is built **except the AI bot**, which is on hold pending the
 team discussion. Remaining before hosting: that bot, and optionally puzzle mode.
 
-**Extra-points estimate:** AI opponent 2 + LLM assistant 2 + leaderboard 1 + matchmaking 1 +
-theme 1 + puzzle 1 = 8 of the 10 available, with chat/emotes in reserve.
+**Extra-points estimate (rubric: AI feature 2, non-AI 1, cap 10, at least one AI feature
+required):** AI opponent 2 + AI hint 2 + six of the many non-AI extras already built = 10.
+Chat, share links and puzzle mode add demo value, not marks.
 
 ---
 
@@ -318,13 +340,15 @@ Every claim of "done" above is backed by a command that can be re-run.
 
 ```
 npm run typecheck   # clean across all three packages
-npm test            # 365 unit tests: engine, turn order, room config, Elo, matchmaking,
+npm test            # 516 unit tests: engine, turn order, room config, Elo, matchmaking,
                     #   moderation, join requests, presence, admin access check (incl.
                     #   ADMIN_TOKEN), activity log, handler safety, seat-hold identity,
                     #   session handling, guest history, formatting, friends (status,
                     #   actions, request plan, invite rate limit), profile stats, pixel
-                    #   mine sprite, routes, policy text
-npm run test:e2e    # 159 socket assertions — needs a running server; ~30 s of it is the
+                    #   mine sprite, routes, policy text, mine-probability solver (checked
+                    #   against brute force), AI levels, hints, Groq advisor (fake fetch),
+                    #   bot controller, chat rules and limits
+npm run test:e2e    # 191 socket assertions — needs a running server; ~30 s of it is the
                     #   reconnect grace period running out. FMM_URL=http://localhost:3100
                     #   points it at a test server on another port
 npm run test:ranked # 40 assertions against the real database — needs a server + credentials
@@ -338,7 +362,9 @@ the reconnect grace period (held seat, resume, expiry), a tab returning as someo
 a player whose seat is held, the admin game viewer and mine toggle (mines reach the admin socket
 only), the terminal log, remote console connections being refused with `ADMIN_ONLY` (with or
 without a guessed token when none is set), the online list carrying each row's account id (null
-for guests), friend invites refused for guests, and garbage payloads on every game and console
+for guests), friend invites refused for guests, Play vs AI (a bot seat that plays its turns from
+public state, hints on your turn only and counting down, room chat reaching every member with its
+limits, the room closing when the player leaves), and garbage payloads on every game and console
 event leaving the server running. The signed-in invite path needs two real accounts that are
 friends, so it is not in the e2e suite yet.
 

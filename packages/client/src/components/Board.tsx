@@ -12,6 +12,11 @@ interface Props {
    * this — the server sends mine positions solely on the /admin namespace.
    */
   mines?: MinePosition[] | null;
+  /**
+   * Games against the computer: the covered cell the player's last hint
+   * pointed at. Only ever this player's own — the hint is never broadcast.
+   */
+  hint?: { row: number; col: number } | null;
 }
 
 /** Index the reveal history by cell for O(1) lookup while rendering. */
@@ -26,7 +31,7 @@ const colName = (col: number) => String.fromCharCode(65 + col);
  * The board as a survey grid: lettered columns, numbered rows, and the turn
  * clock as a line along the top edge that drains while the turn runs.
  */
-export function Board({ state, myTurn, onReveal, mines }: Props) {
+export function Board({ state, myTurn, onReveal, mines, hint }: Props) {
   const revealed = revealMap(state.revealed);
   const hiddenMines = new Set((mines ?? []).map((m) => `${m.row}:${m.col}`));
   const interactive = myTurn && state.status === 'playing';
@@ -74,13 +79,15 @@ export function Board({ state, myTurn, onReveal, mines }: Props) {
             }
 
             if (!cell) {
+              // Said in the label too, not only drawn: "C4, covered, hinted".
+              const hinted = hint?.row === row && hint?.col === col;
               return (
                 <button
                   key={`${row}:${col}`}
-                  className="cell"
+                  className={hinted ? 'cell hinted' : 'cell'}
                   disabled={!interactive}
                   onClick={() => onReveal(row, col)}
-                  aria-label={`${where}, covered`}
+                  aria-label={`${where}, covered${hinted ? ', hinted' : ''}`}
                 />
               );
             }

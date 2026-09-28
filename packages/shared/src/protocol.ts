@@ -1,6 +1,9 @@
 import type {
   AdminRoomView,
   AdminState,
+  AiHintResult,
+  AiLevel,
+  ChatMessage,
   ForfeitNotice,
   FriendInvite,
   JoinRequestOutcome,
@@ -96,6 +99,20 @@ export interface ClientToServerEvents {
     ack: (result: ModerationResult) => void,
   ) => void;
 
+  /**
+   * Start a game against a computer opponent: a new Classic-sized casual room
+   * with you and the bot seated, started at once. Never rated.
+   */
+  'ai:play': (payload: { level: AiLevel }, ack: (result: RoomActionResult) => void) => void;
+  /**
+   * In a game against the computer, on your turn: which covered cell is most
+   * likely a mine, and why. A few per match.
+   */
+  'ai:hint': (payload: Record<string, never>, ack: (result: AiHintResult) => void) => void;
+
+  /** Say something in your room's chat. Players and spectators alike. */
+  'room:say': (payload: { text: string }, ack: (result: ModerationResult) => void) => void;
+
   /** Matchmaking: join the pool for a mode, or leave it. */
   'queue:join': (payload: { mode: RoomMode }) => void;
   'queue:leave': () => void;
@@ -163,6 +180,9 @@ export interface ServerToClientEvents {
 
   /** A friend invited you to the room they are in. Sent to each of your tabs. */
   'friend:invited': (invite: FriendInvite) => void;
+
+  /** A line in your room's chat, from a player or the computer opponent. */
+  'room:message': (message: ChatMessage) => void;
 
   'error:msg': (payload: { code: string; message: string }) => void;
 }

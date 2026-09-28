@@ -11,9 +11,13 @@ export type RoomMode = 'casual' | 'ranked';
 
 /**
  * How a room came to exist. A matchmade room has no host anyone chose, so the
- * host's moderation powers do not apply there.
+ * host's moderation powers do not apply there. An 'ai' room is one player
+ * against a computer opponent.
  */
-export type RoomOrigin = 'created' | 'matchmaking';
+export type RoomOrigin = 'created' | 'matchmaking' | 'ai';
+
+/** How hard a computer opponent plays. */
+export type AiLevel = 'easy' | 'medium' | 'hard';
 
 /**
  * Per-room settings, chosen when the room is created.
@@ -46,6 +50,31 @@ export interface PlayerPublic {
   isGuest: boolean;
   /** Set for the duration of the end-of-match screen after a ranked game. */
   eloDelta?: number;
+  /** Set on a computer opponent's seat: how hard it plays. */
+  bot?: AiLevel;
+}
+
+/** One line in a room's chat. Not stored anywhere — it lives as long as the room. */
+export interface ChatMessage {
+  id: string;
+  roomId: string;
+  fromId: string;
+  fromName: string;
+  kind: 'player' | 'bot';
+  text: string;
+  /** Server time, epoch milliseconds. */
+  at: number;
+}
+
+/** The answer to asking for a hint in a game against the computer. */
+export interface AiHintResult {
+  ok: boolean;
+  error?: string;
+  row?: number;
+  col?: number;
+  /** Why this cell, in a sentence. */
+  text?: string;
+  hintsLeft?: number;
 }
 
 /**

@@ -1,5 +1,9 @@
 import {
   STARTING_ELO,
+  cleanChatText,
+  type AiHintResult,
+  type AiLevel,
+  type ChatMessage,
   type ForfeitNotice,
   type FriendInvite,
   type JoinRequestOutcome,
@@ -15,6 +19,7 @@ import {
   type RoomSummary,
 } from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { addChatMessage } from './data/chat.js';
 import { INVITE_TTL_MS, addInvite } from './data/friendsModel.js';
 import { rememberGuestMatch } from './data/guestHistory.js';
 import { socket } from './socket.js';
@@ -78,6 +83,8 @@ export function useGame() {
   const [requestResolution, setRequestResolution] = useState<RequestResolution | null>(null);
   /** Invites from friends to the room they are in, newest last. */
   const [friendInvites, setFriendInvites] = useState<FriendInvite[]>([]);
+  /** The chat of the room we follow, oldest first. Nothing is kept once we leave it. */
+  const [roomMessages, setRoomMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -85,6 +92,16 @@ export function useGame() {
    * room are ignored — after leaving, a late update must not pull us back in.
    */
   const activeRoom = useRef<string | null>(null);
+
+  /**
+   * Adopt a room (or none) as the one we follow. Every place that changes
+   * `activeRoom` goes through here, so the chat always belongs to it: lines
+   * from the room we were in never show up in the next one.
+   */
+  const followRoom = useCallback((roomId: string | null) => {
+    activeRoom.current = roomId;
+    setRoomMessages([]);
+  }, []);
   const playerIdRef = useRef<string | null>(null);
   /** Set once joined, so a dropped connection can re-join under the same name. */
   const lastNickname = useRef<string | null>(null);
@@ -118,9 +135,9 @@ export function useGame() {
       setElo(result.elo);
       if (result.isGuest && nickname) rememberGuest(nickname);
       // The server held our seat through a dropped connection or a refresh.
-      if (result.roomId) activeRoom.current = result.roomId;
+      if (result.roomId) followRoom(result.roomId);
     });
-  }, []);
+  }, [followRoom]);
 
   useEffect(() => {
     /** Mirrors a room snapshot, but only for the room we are actually in. */
@@ -136,7 +153,7 @@ export function useGame() {
       // The server forgets a socket when it drops (Render waking up, Wi-Fi
       // blip). Re-join under the same name instead of stranding the player.
       if (lastNickname.current !== null) {
-        activeRoom.current = null;
+        followRoom(null);
         setState(null);
         join(lastNickname.current);
       }
@@ -170,7 +187,7 @@ export function useGame() {
     // Kicked, banned, or the room was ended. The server has already taken us
     // out of the room and the queue; this only changes what is on screen.
     socket.on('player:removed', (notice) => {
-      activeRoom.current = null;
+      followRoom(null);
       setState(null);
       setQueue(null);
       setForfeit(null);
@@ -181,7 +198,7 @@ export function useGame() {
     // now — its state:sync would otherwise be ignored as another room's.
     socket.on('room:requestResolved', (resolution) => {
       if (resolution.outcome === 'accepted') {
-        activeRoom.current = resolution.roomId;
+        followRoom(resolution.roomId);
         setForfeit(null);
       }
       setRequestResolution(resolution);
@@ -197,7 +214,7 @@ export function useGame() {
     // Leaving drops us back to the lobby; so does the room closing under us.
     socket.on('room:closed', ({ roomId, reason }) => {
       if (roomId !== activeRoom.current) return;
-      activeRoom.current = null;
+      followRoom(null);
       setState(null);
       showError(reason);
     });
@@ -210,11 +227,18 @@ export function useGame() {
     );
     socket.on('queue:status', setQueue);
     socket.on('queue:matched', ({ roomId }) => {
-      activeRoom.current = roomId;
+      followRoom(roomId);
       setForfeit(null);
       setQueue(null);
     });
     socket.on('error:msg', ({ message }) => showError(message));
+
+    // Room chat. Read the room now, not inside the updater: by the time React
+    // runs it we may already follow another room.
+    socket.on('room:message', (message) => {
+      const roomId = activeRoom.current;
+      setRoomMessages((list) => addChatMessage(list, message, roomId));
+    });
 
     // A friend asked us over. A newer invite from the same friend to the same
     // room replaces the older one, and each goes away by itself after a
@@ -254,12 +278,13 @@ export function useGame() {
       socket.off('queue:status');
       socket.off('queue:matched');
       socket.off('error:msg');
+      socket.off('room:message');
       socket.off('friend:invited');
       if (errorTimer.current) clearTimeout(errorTimer.current);
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
     };
-  }, [showError, join]);
+  }, [showError, join, followRoom]);
 
   /** Forgets the remembered guest and starts over at the nickname screen. */
   const forgetGuest = useCallback(() => {
@@ -270,13 +295,13 @@ export function useGame() {
   const handleRoomAck = useCallback(
     (result: RoomActionResult) => {
       if (result.ok && result.roomId) {
-        activeRoom.current = result.roomId;
+        followRoom(result.roomId);
         setForfeit(null);
       }
       if (!result.ok) showError(result.errors?.[0] ?? 'That did not work.');
       return result;
     },
-    [showError],
+    [showError, followRoom],
   );
 
   const createRoom = useCallback(
@@ -303,13 +328,26 @@ export function useGame() {
     [handleRoomAck],
   );
 
+  /**
+   * A game against the computer. The server makes the room, seats us and the
+   * bot, and starts at once — so, like creating a room, the ack's room is
+   * adopted before its first state:sync arrives.
+   */
+  const playVsAi = useCallback(
+    (level: AiLevel) =>
+      new Promise<RoomActionResult>((resolve) =>
+        socket.emit('ai:play', { level }, (r) => resolve(handleRoomAck(r))),
+      ),
+    [handleRoomAck],
+  );
+
   const leaveRoom = useCallback(() => {
     // Cleared before emitting, so nothing the room sends afterwards is applied.
-    activeRoom.current = null;
+    followRoom(null);
     socket.emit('room:leave');
     setState(null);
     setForfeit(null);
-  }, []);
+  }, [followRoom]);
 
   const joinQueue = useCallback((mode: RoomMode) => socket.emit('queue:join', { mode }), []);
   const leaveQueue = useCallback(() => {
@@ -384,6 +422,49 @@ export function useGame() {
     [],
   );
 
+  /**
+   * In a game against the computer, on your turn: the server's pick of the
+   * covered cell most likely to be a mine. It counts the hints; a refusal
+   * (not your turn, none left) comes back as `error`. Timed, so a lost answer
+   * cannot leave the button waiting forever.
+   */
+  const askHint = useCallback(
+    () =>
+      new Promise<AiHintResult>((resolve) =>
+        socket
+          .timeout(10_000)
+          .emit('ai:hint', {}, (err: Error | null, result: AiHintResult) =>
+            resolve(
+              err || !result
+                ? { ok: false, error: 'The server did not answer — try again.' }
+                : result,
+            ),
+          ),
+      ),
+    [],
+  );
+
+  /**
+   * Say something in the room's chat. Nothing is shown until the server sends
+   * the line back to the whole room, us included — it may refuse (too fast,
+   * not in a room) and says why in `error`.
+   */
+  const sayInRoom = useCallback((text: string) => {
+    const clean = cleanChatText(text);
+    if (clean === null) {
+      return Promise.resolve<ModerationResult>({ ok: false, error: 'Type a message first.' });
+    }
+    return new Promise<ModerationResult>((resolve) =>
+      socket
+        .timeout(8000)
+        .emit('room:say', { text: clean }, (err: Error | null, result: ModerationResult) =>
+          resolve(
+            err || !result ? { ok: false, error: 'The server did not answer — try again.' } : result,
+          ),
+        ),
+    );
+  }, []);
+
   return {
     connected,
     state,
@@ -420,5 +501,9 @@ export function useGame() {
     friendInvites,
     inviteFriend,
     dismissInvite,
+    playVsAi,
+    askHint,
+    roomMessages,
+    sayInRoom,
   };
 }

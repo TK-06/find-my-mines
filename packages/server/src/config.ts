@@ -32,3 +32,17 @@ export const CORS_ORIGIN: string | string[] =
  * console is open to everyone.
  */
 export const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? '';
+
+/**
+ * Play vs AI. The computer opponent always plays on the solver; with a Groq
+ * key it also asks a language model to choose among the solver's candidates
+ * and to say something in the room chat. No key means no model — never a
+ * broken game.
+ *
+ * The key is a SECRET: server-only, never logged, never sent to a client, and
+ * never given a VITE_ prefix (Vite would bundle it into the browser).
+ */
+export const GROQ_API_KEY = process.env.GROQ_API_KEY ?? '';
+
+/** Which Groq model advises the bot. See `npm run ai:eval` for how they compare. */
+export const AI_MODEL = process.env.AI_MODEL?.trim() || 'openai/gpt-oss-20b';

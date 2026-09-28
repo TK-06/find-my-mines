@@ -8,11 +8,18 @@ import {
   ADMIN_NAMESPACE,
   CLASSIC_PRESET,
   RECONNECT_GRACE_SECONDS,
+  botNickname,
+  cleanChatText,
+  describeHint,
   describeReasons,
+  hintFor,
+  isAiLevel,
+  mineProbabilities,
   parseRemovalNote,
   presenceOf,
   type AdminState,
   type AdminToServerEvents,
+  type ChatMessage,
   type ClientToServerEvents,
   type FriendInvite,
   type Identity,
@@ -30,13 +37,16 @@ import {
 } from '@fmm/shared';
 import { attachAdminNamespace } from './admin/adminNamespace.js';
 import { ActivityLog } from './admin/activityLog.js';
+import { createAdvisor } from './ai/advisor.js';
+import { BotController } from './ai/botController.js';
 import { contain, respond, settleWithin } from './safety.js';
-import { ADVERTISED_HOST, CORS_ORIGIN, HOST, PORT } from './config.js';
+import { ADVERTISED_HOST, AI_MODEL, CORS_ORIGIN, GROQ_API_KEY, HOST, PORT } from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
 import { areFriends, guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
 import type { FinishedMatch, MatchBroadcaster, MatchManager } from './match/matchManager.js';
 import { RoomManager } from './rooms/roomManager.js';
+import { ChatLimit } from './state/chatLimit.js';
 import { InviteLimit } from './state/inviteLimit.js';
 import { ClientRegistry } from './state/registry.js';
 import { isSamePlayer } from './state/seatHold.js';
@@ -92,14 +102,17 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
       to().emit('match:start', state);
       log.add('match', `${roomId} started — ${state.players.map((p) => p.nickname).join(', ')}`);
       watched();
+      bots.update(roomId);
     },
     cellRevealed: (cell: RevealedCell, state) => {
       to().emit('cell:revealed', { cell, state });
       watched();
+      bots.update(roomId);
     },
     turnChanged: (currentPlayerId, secondsLeft) => {
       to().emit('turn:changed', { currentPlayerId, secondsLeft });
       watched();
+      bots.update(roomId);
     },
     turnTick: (secondsLeft) => {
       to().emit('turn:tick', { secondsLeft });
@@ -116,14 +129,17 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
         persistResult(result);
       }
       watched();
+      bots.update(roomId);
     },
     matchReset: (state) => {
       to().emit('match:reset', state);
       watched();
+      bots.update(roomId);
     },
     stateSync: (state) => {
       to().emit('state:sync', state);
       watched();
+      bots.update(roomId);
     },
     matchForfeited: (notice, result) => {
       to().emit('match:forfeit', notice);
@@ -136,11 +152,46 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
         persistResult(result);
       }
       watched();
+      bots.update(roomId);
     },
     notice: (message) => to().emit('room:notice', { message }),
     error: (playerId, code, message) => io.to(playerId).emit('error:msg', { code, message }),
     changed: () => pushUpdates(),
   };
+});
+
+// ── computer opponents ──────────────────────────────────────────────────────
+
+/**
+ * Null without GROQ_API_KEY: bots then play on the solver alone. Failures are
+ * logged briefly — a status, never the key or a prompt.
+ */
+const advisor = createAdvisor({
+  apiKey: GROQ_API_KEY,
+  model: AI_MODEL,
+  warn: (line) => log.add('match', `AI ${line}`),
+});
+
+/** Plays every bot's turns. Fed by the room broadcasters above; told when rooms close. */
+const bots = new BotController({
+  room: (roomId) => rooms.get(roomId),
+  advisor,
+  say: (roomId, bot, text) => {
+    const message: ChatMessage = {
+      id: randomUUID(),
+      roomId,
+      fromId: bot.id,
+      fromName: bot.nickname,
+      kind: 'bot',
+      text,
+      at: Date.now(),
+    };
+    io.to(roomId).emit('room:message', message);
+  },
+  report: (error) => {
+    console.error('[bot] a computer move failed:', error);
+    log.add('error', `a computer move failed — ${error instanceof Error ? error.message : String(error)}`);
+  },
 });
 
 /**
@@ -345,6 +396,7 @@ function leaveCurrentRoom(socket: { id: string; leave: (room: string) => void })
   if (closed) {
     io.to(roomId).emit('room:closed', { roomId, reason: 'Everyone left the room.' });
     closeRequestsFor(roomId, roomName);
+    bots.forget(roomId);
     adminConsole.roomChanged(roomId);
   }
 }
@@ -411,6 +463,9 @@ const FRIEND_CHECK_TIMEOUT_MS = 5000;
 
 /** One invite per player → friend every few seconds, however fast they click. */
 const inviteLimit = new InviteLimit();
+
+/** A few chat lines per connection every few seconds, so nobody floods a room. */
+const chatLimit = new ChatLimit();
 
 /** Every connected socket signed in as this account — one per open tab. */
 function socketsOfProfile(profileId: string): string[] {
@@ -641,6 +696,7 @@ const adminConsole = attachAdminNamespace({
 
     closeRequestsFor(roomId, roomName);
     forgetHeldSeatsIn(roomId);
+    bots.forget(roomId);
     adminConsole.roomChanged(roomId);
     pushUpdates();
     return true;
@@ -997,6 +1053,135 @@ io.on('connection', contain((socket: GameSocket) => {
     respond(ack, { ok: true });
   });
 
+  // Play vs AI: a fresh Classic-sized casual room with the player seated, then
+  // a computer opponent, started at once. The player joined first, so they
+  // are the host. Never rated; spectators may still watch.
+  listen(socket, 'ai:play', (payload, ack) => {
+    const level: unknown = payload?.level;
+    if (!isAiLevel(level)) {
+      respond(ack, { ok: false, errors: ['Pick easy, medium or hard.'] });
+      return;
+    }
+
+    const identity = identityOf(socket.id);
+    const created = rooms.create(
+      `${identity.nickname} vs ${botNickname(level)}`,
+      { ...CLASSIC_PRESET, maxPlayers: 2, mode: 'casual' },
+      'ai',
+    );
+    if (!created.ok || !created.roomId) {
+      respond(ack, { ok: false, errors: created.errors ?? ['Could not start a game against the computer.'] });
+      return;
+    }
+
+    withdrawRequest(socket.id);
+    queue.leave(socket.id);
+    leaveCurrentRoom(socket);
+
+    const room = rooms.get(created.roomId)!;
+    const seat = room.addPlayer(socket.id, identity);
+    rooms.track(socket.id, room.roomId);
+    socket.join(room.roomId);
+    registry.setRoom(socket.id, room.roomId);
+    registry.setSeat(socket.id, seat);
+
+    if (!rooms.addBot(room.roomId, level)) {
+      // Cannot happen in a fresh two-seat room; if it ever does, leave nothing behind.
+      leaveCurrentRoom(socket);
+      respond(ack, { ok: false, errors: ['Could not start a game against the computer.'] });
+      pushUpdates();
+      return;
+    }
+    bots.adopt(room.roomId);
+    log.add('room', `${nameOf(socket.id)} started ${room.roomId} "${room.roomName}" against the computer`);
+
+    // The ack first: the client only follows a room it adopted, so it must
+    // know this one before the room's first state:sync — or the bot's first line.
+    respond(ack, { ok: true, roomId: room.roomId, seat });
+    io.to(room.roomId).emit('state:sync', room.publicState());
+    room.start(socket.id);
+    pushUpdates();
+  });
+
+  // A hint in a game against the computer: the covered cell the solver thinks
+  // most likely a mine, worked out from the public board — never from the
+  // mine positions. Refusals carry the count too, so the button stays honest.
+  listen(socket, 'ai:hint', (_payload, ack) => {
+    const room = rooms.roomOf(socket.id);
+    if (!room) {
+      respond(ack, { ok: false, error: 'You are not in a room.' });
+      return;
+    }
+
+    const hintsLeft =
+      room.origin === 'ai' && room.isSeated(socket.id) ? room.hintsLeft(socket.id) : undefined;
+    const refusal = room.hintRefusal(socket.id);
+    if (refusal) {
+      respond(ack, { ok: false, error: refusal, hintsLeft });
+      return;
+    }
+
+    const state = room.publicState();
+    const hint = hintFor(
+      mineProbabilities({
+        rows: state.rows,
+        cols: state.cols,
+        mineCount: state.bombCount,
+        revealed: state.revealed,
+      }),
+    );
+    if (!hint) {
+      respond(ack, { ok: false, error: 'There is nothing left to uncover.', hintsLeft });
+      return;
+    }
+
+    respond(ack, {
+      ok: true,
+      row: hint.row,
+      col: hint.col,
+      text: describeHint(hint),
+      hintsLeft: room.spendHint(socket.id),
+    });
+  });
+
+  // Room chat, players and spectators alike. Nothing is stored: a line goes to
+  // whoever is in the room right now — the sender included, whose client shows
+  // its own line when the server echoes it.
+  listen(socket, 'room:say', (payload, ack) => {
+    const room = rooms.roomOf(socket.id);
+    if (!room) {
+      respond(ack, { ok: false, error: 'Join a room to chat.' });
+      return;
+    }
+
+    const clean = cleanChatText(payload?.text);
+    if (!clean) {
+      respond(ack, { ok: false, error: 'Type something to send.' });
+      return;
+    }
+
+    const wait = chatLimit.trySend(socket.id, Date.now());
+    if (wait > 0) {
+      respond(ack, {
+        ok: false,
+        error: `Slow down — you can send again in ${Math.ceil(wait / 1000)} s.`,
+      });
+      return;
+    }
+
+    const message: ChatMessage = {
+      id: randomUUID(),
+      roomId: room.roomId,
+      fromId: socket.id,
+      fromName: identityOf(socket.id).nickname,
+      kind: 'player',
+      text: clean,
+      at: Date.now(),
+    };
+    io.to(room.roomId).emit('room:message', message);
+    respond(ack, { ok: true });
+  });
+
   listen(socket, 'queue:join', (payload) => {
     // Cannot sit in a room and a queue at once, or wait on a host meanwhile.
     withdrawRequest(socket.id);
@@ -1041,6 +1226,7 @@ io.on('connection', contain((socket: GameSocket) => {
 
         registry.remove(socket.id);
         identities.delete(socket.id);
+        chatLimit.forget(socket.id);
         pushUpdates();
       },
       (error) => handlerFailed(socket.id, 'disconnect', error, []),
@@ -1095,6 +1281,7 @@ httpServer.listen(PORT, HOST, () => {
   Game    →  http://${ADVERTISED_HOST}:${PORT}
   Console →  http://${ADVERTISED_HOST}:${PORT}/admin
   Accounts→  ${supabaseEnabled ? 'Supabase connected' : 'guest-only (no SUPABASE_URL / SERVICE_ROLE_KEY)'}
+  AI      →  ${advisor ? `solver + Groq ${advisor.model}` : 'solver only (no GROQ_API_KEY)'}
 `);
   printConsole();
 });
