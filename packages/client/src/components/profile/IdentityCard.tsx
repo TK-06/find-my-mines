@@ -1,7 +1,24 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react';
 import { supabase } from '../../auth/supabase.js';
-import { formatDay, initialOf, topPercent } from '../../data/profileStats.js';
+import {
+  AVATAR_SETUP_MESSAGE,
+  checkAvatarFile,
+  pictureUrl,
+  removeAvatar,
+  uploadAvatar,
+  type CropSquare,
+} from '../../data/avatar.js';
+import { formatDay, topPercent } from '../../data/profileStats.js';
 import type { ProfileRow } from '../../data/queries.js';
+import { Avatar } from '../Avatar.js';
+import { AvatarCropDialog } from './AvatarCropDialog.js';
 
 interface Props {
   profile: ProfileRow;
@@ -14,11 +31,15 @@ interface Props {
 }
 
 /**
- * Who you are: avatar letter, display name (renamed in place), how long you've
- * played, and your rating with its place on the leaderboard.
+ * Who you are: your picture (or initial), display name (renamed in place), how
+ * long you've played, and your rating with its place on the leaderboard.
  *
  * The rating is only ever shown here — it is written by the game server, and a
  * database trigger ignores any client attempt to change it.
+ *
+ * The picture is uploaded straight to Supabase Storage with your own session
+ * (see data/avatar.ts); the card keeps the current path itself, so a change
+ * shows at once without reloading the page.
  */
 export function IdentityCard({ profile, streak, standing, onRename }: Props) {
   const [editing, setEditing] = useState(false);
@@ -26,10 +47,40 @@ export function IdentityCard({ profile, streak, standing, onRename }: Props) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; failed: boolean } | null>(null);
 
+  /** Where the picture is stored, or null for none. */
+  const [picturePath, setPicturePath] = useState<string | null>(profile.avatar_path ?? null);
+  /** A picture change in flight, so its buttons cannot be pressed twice. */
+  const [pictureBusy, setPictureBusy] = useState<'upload' | 'remove' | null>(null);
+  /** The file waiting in the crop dialog; nothing is uploaded until it is saved. */
+  const [cropFile, setCropFile] = useState<File | null>(null);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const editRef = useRef<HTMLButtonElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const chooseRef = useRef<HTMLButtonElement>(null);
+  const removeRef = useRef<HTMLButtonElement>(null);
   /** Set when the form closes, so focus goes back to the button that opened it. */
   const refocusEdit = useRef(false);
+
+  /**
+   * Which picture button gets focus when a change finishes. Both are disabled
+   * while it runs, and a disabled button cannot take focus, so focus goes
+   * back only once the render that enables them again has happened. The same
+   * goes for a closed crop dialog, which has just been holding focus.
+   */
+  const refocusTo = useRef<'choose' | 'remove' | null>(null);
+
+  // A fresh profile row (say, after a rename) is the truth about the picture.
+  useEffect(() => {
+    setPicturePath(profile.avatar_path ?? null);
+  }, [profile.avatar_path]);
+
+  useEffect(() => {
+    if (pictureBusy !== null || cropFile || !refocusTo.current) return;
+    const target = refocusTo.current === 'remove' ? removeRef.current : chooseRef.current;
+    refocusTo.current = null;
+    target?.focus();
+  }, [pictureBusy, cropFile]);
 
   useEffect(() => {
     if (editing) {
@@ -75,6 +126,64 @@ export function IdentityCard({ profile, streak, standing, onRename }: Props) {
     }
   }
 
+  function onPictureChosen(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Cleared at once, so choosing the same file again still counts as a change.
+    event.target.value = '';
+    if (!file || !client || pictureBusy) return;
+
+    // A refusal needs no dialog: say so on the card, as every other picture message.
+    const refusal = checkAvatarFile(file);
+    if (refusal) {
+      setMessage({ text: refusal, failed: true });
+      return;
+    }
+    setMessage(null);
+    setCropFile(file);
+  }
+
+  function cancelCrop() {
+    refocusTo.current = 'choose';
+    setCropFile(null);
+  }
+
+  async function savePicture(crop: CropSquare) {
+    if (!cropFile || !client || pictureBusy) return;
+
+    setPictureBusy('upload');
+    setMessage(null);
+    const result = await uploadAvatar(client, profile.id, cropFile, picturePath, crop);
+    refocusTo.current = 'choose';
+    setCropFile(null);
+    setPictureBusy(null);
+    if (result.ok) {
+      setPicturePath(result.path);
+      setMessage({
+        text: result.note ?? 'Picture saved. Games show it from the next time you load the page.',
+        failed: false,
+      });
+    } else {
+      setMessage({ text: result.error, failed: true });
+    }
+  }
+
+  async function removePicture() {
+    if (!client || pictureBusy) return;
+    setPictureBusy('remove');
+    setMessage(null);
+    const result = await removeAvatar(client, profile.id, picturePath);
+    // After a removal the Remove button is gone, so focus goes to the picture
+    // button; after a failure, back to Remove to try again.
+    refocusTo.current = result.ok ? 'choose' : 'remove';
+    setPictureBusy(null);
+    if (result.ok) {
+      setPicturePath(null);
+      setMessage({ text: 'Picture removed.', failed: false });
+    } else {
+      setMessage({ text: result.error, failed: true });
+    }
+  }
+
   const joined = new Date(profile.created_at);
   const since = [
     Number.isNaN(joined.getTime()) ? null : `Joined ${formatDay(joined)}`,
@@ -92,13 +201,19 @@ export function IdentityCard({ profile, streak, standing, onRename }: Props) {
 
   const unchanged = name.trim() === profile.username || name.trim() === '';
   const client = supabase;
+  /** False until migration 0004 adds the column: the profile loaded without it. */
+  const picturesReady = profile.avatar_path !== undefined;
 
   return (
     <section className="card profile-id" aria-label="Your profile">
       <div className="profile-id-head">
-        <div className="profile-avatar" aria-hidden="true">
-          {initialOf(profile.username)}
-        </div>
+        {/* Your name is right beside it, so the picture stays silent. */}
+        <Avatar
+          className="profile-avatar"
+          name={profile.username}
+          url={pictureUrl(profile.id, picturePath)}
+          size={56}
+        />
 
         <div className="profile-id-main">
           {editing ? (
@@ -143,6 +258,44 @@ export function IdentityCard({ profile, streak, standing, onRename }: Props) {
         </div>
       </div>
 
+      {client &&
+        (picturesReady ? (
+          <div className="profile-picture-actions" aria-busy={pictureBusy !== null}>
+            {/* The real control is the button; the input is only the browser's picker. */}
+            <input
+              ref={fileRef}
+              className="avatar-file"
+              type="file"
+              accept="image/*"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={onPictureChosen}
+            />
+            <button
+              ref={chooseRef}
+              type="button"
+              className="ghost small"
+              disabled={pictureBusy !== null}
+              onClick={() => fileRef.current?.click()}
+            >
+              {pictureBusy === 'upload' ? 'Uploading…' : picturePath ? 'Change picture' : 'Add a picture'}
+            </button>
+            {picturePath && (
+              <button
+                ref={removeRef}
+                type="button"
+                className="ghost small"
+                disabled={pictureBusy !== null}
+                onClick={() => void removePicture()}
+              >
+                {pictureBusy === 'remove' ? 'Removing…' : 'Remove picture'}
+              </button>
+            )}
+          </div>
+        ) : (
+          <p className="muted profile-picture-setup">{AVATAR_SETUP_MESSAGE}</p>
+        ))}
+
       {/* Always rendered, so screen readers announce the message when it appears. */}
       <p role="status" className={`profile-status ${message?.failed ? 'failed' : ''}`}>
         {message?.text}
@@ -163,6 +316,15 @@ export function IdentityCard({ profile, streak, standing, onRename }: Props) {
           </button>
         )}
       </div>
+
+      {cropFile && (
+        <AvatarCropDialog
+          file={cropFile}
+          saving={pictureBusy === 'upload'}
+          onCancel={cancelCrop}
+          onSave={(crop) => void savePicture(crop)}
+        />
+      )}
     </section>
   );
 }

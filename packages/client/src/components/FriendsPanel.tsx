@@ -11,11 +11,11 @@ import {
   MISSING_TABLE_MESSAGE,
   friendRows,
   groupFriendships,
-  initialOf,
   type FriendAction,
   type FriendRow,
   type Friendship,
 } from '../data/friendsModel.js';
+import { Avatar } from './Avatar.js';
 
 export interface FriendsPanelProps {
   /** The signed-in player's profile id. */
@@ -61,6 +61,8 @@ export function FriendsPanel({
   onInvite,
 }: FriendsPanelProps) {
   const [friendships, setFriendships] = useState<Friendship[]>([]);
+  /** Profile pictures by profile id, read with the friendships. */
+  const [pictures, setPictures] = useState<ReadonlyMap<string, string>>(new Map());
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [missingTable, setMissingTable] = useState(false);
@@ -98,6 +100,7 @@ export function FriendsPanel({
     // The panel went away, or a newer load started, while this one was out.
     if (!alive.current || mine !== loadCount.current) return;
     setFriendships(result.friendships);
+    setPictures(result.pictures);
     setLoadError(result.error);
     setMissingTable(result.missingTable);
     setLoaded(true);
@@ -245,9 +248,11 @@ export function FriendsPanel({
             <ul className="list friend-list">
               {groups.incoming.map((request) => (
                 <li key={request.otherId} className="friend-row">
-                  <span className="friend-avatar" aria-hidden>
-                    {initialOf(request.otherName)}
-                  </span>
+                  <Avatar
+                    className="friend-avatar"
+                    name={request.otherName}
+                    url={pictures.get(request.otherId)}
+                  />
                   <span className="friend-main">
                     <strong className="friend-name">{request.otherName}</strong>
                     <span className="friend-status">wants to be friends</span>
@@ -285,9 +290,11 @@ export function FriendsPanel({
             <ul className="list friend-list">
               {groups.outgoing.map((request) => (
                 <li key={request.otherId} className="friend-row">
-                  <span className="friend-avatar" aria-hidden>
-                    {initialOf(request.otherName)}
-                  </span>
+                  <Avatar
+                    className="friend-avatar"
+                    name={request.otherName}
+                    url={pictures.get(request.otherId)}
+                  />
                   <span className="friend-main">
                     <strong className="friend-name">{request.otherName}</strong>
                     <span className="friend-status">Request sent</span>
@@ -319,9 +326,7 @@ export function FriendsPanel({
                 const action = row.action;
                 return (
                   <li key={row.profileId} className="friend-row">
-                    <span className="friend-avatar" aria-hidden>
-                      {initialOf(row.name)}
-                    </span>
+                    <Avatar className="friend-avatar" name={row.name} url={pictures.get(row.profileId)} />
                     <span className="friend-main">
                       <strong className="friend-name">{row.name}</strong>
                       <span className="friend-status">

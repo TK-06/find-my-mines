@@ -25,6 +25,7 @@ const VIEW: BoardView = {
 
 const INPUT: PromptInput = {
   level: 'hard',
+  model: 'ai',
   view: VIEW,
   scores: { you: 1, opponent: 0 },
   candidates: [
@@ -56,6 +57,14 @@ describe('buildMessages', () => {
     expect(system?.content).toMatch(/friendly/i);
   });
 
+  it('gives the Fruit Fly its own voice at any level, and keeps the level’s for the AI and the JEV', () => {
+    const fly = buildMessages({ ...INPUT, model: 'fly', level: 'easy' })[0]!.content;
+    expect(fly).toMatch(/fruit fly/i);
+    expect(fly).toMatch(/easy/i);
+    expect(system?.content).not.toMatch(/fruit fly/i);
+    expect(buildMessages({ ...INPUT, model: 'jev' })[0]!.content).toBe(system?.content);
+  });
+
   it('gives the board, the scores and the candidates with their mine chance', () => {
     expect(user?.role).toBe('user');
     expect(user?.content).toContain(boardText(VIEW));
@@ -66,7 +75,7 @@ describe('buildMessages', () => {
 
   it('carries nothing a player typed — no nicknames, no chat — so nobody can steer the model', () => {
     const everything = buildMessages(INPUT).map((m) => m.content).join('\n');
-    expect(Object.keys(INPUT).sort()).toEqual(['candidates', 'level', 'scores', 'view']);
+    expect(Object.keys(INPUT).sort()).toEqual(['candidates', 'level', 'model', 'scores', 'view']);
     expect(everything).not.toMatch(/nickname/i);
   });
 });

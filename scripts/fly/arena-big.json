@@ -1,0 +1,20 @@
+{
+  "temperatures": {
+    "easy": 1.5,
+    "medium": 0.6,
+    "hard": 0
+  },
+  "rows": [
+    {
+      "size": 10,
+      "a": "fly:hard",
+      "b": "solver:medium",
+      "matches": 100,
+      "win": 0.36,
+      "draw": 0,
+      "loss": 0.64,
+      "meanMines": 14.21,
+      "ms": 37082.166099999995
+    }
+  ]
+}

@@ -4,6 +4,8 @@ import {
   MAX_PLAYERS_LIMIT,
   MIN_GRID,
   MIN_PLAYERS_TO_START,
+  isClassicConfig,
+  parseRoomCode,
   validateRoomConfig,
   type RoomConfig,
   type RoomMode,
@@ -37,6 +39,8 @@ export function LobbyScreen({ rooms, clientCount, onCreate, onJoin, onSpectate }
           {showCreate ? 'Cancel' : '+ Create game'}
         </button>
       </div>
+
+      <JoinByCode onJoin={onJoin} onSpectate={onSpectate} />
 
       {showCreate && (
         <CreateGameForm
@@ -107,6 +111,77 @@ function RoomRow({
   );
 }
 
+/**
+ * A room someone told you about: private rooms are not in the list, and a
+ * code read out loud is quicker than finding the row. Takes a pasted share
+ * link too. Joining goes the same way as the list's Join button.
+ */
+function JoinByCode({
+  onJoin,
+  onSpectate,
+}: {
+  onJoin: (roomId: string) => void;
+  onSpectate: (roomId: string) => void;
+}) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const empty = text.trim() === '';
+
+  const submit = (watch: boolean) => {
+    const code = parseRoomCode(text);
+    if (!code) {
+      setError('Room codes are 4 letters or numbers, like K7QX.');
+      return;
+    }
+    setError(null);
+    setText(code);
+    if (watch) onSpectate(code);
+    else onJoin(code);
+  };
+
+  return (
+    <form
+      className="join-code"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit(false);
+      }}
+    >
+      <label className="field-label" htmlFor="join-code">
+        Join by code
+      </label>
+      <div className="join-code-row">
+        <input
+          id="join-code"
+          type="text"
+          value={text}
+          placeholder="ABCD"
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? 'join-code-error' : undefined}
+          onChange={(e) => {
+            setText(e.target.value);
+            setError(null);
+          }}
+        />
+        <button type="submit" disabled={empty}>
+          Join
+        </button>
+        <button type="button" className="ghost" disabled={empty} onClick={() => submit(true)}>
+          Watch
+        </button>
+      </div>
+      {error && (
+        <p id="join-code-error" className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
 function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomConfig) => void }) {
   const [name, setName] = useState('');
   const [preset, setPreset] = useState<'classic' | 'custom'>('classic');
@@ -118,6 +193,8 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
   const [mode, setMode] = useState<RoomMode>('casual');
   // Custom rooms showcase the host approving players; Classic stays open.
   const [askToJoin, setAskToJoin] = useState(true);
+  // Listed unless the host says otherwise; a private room is found by its code.
+  const [isPrivate, setIsPrivate] = useState(false);
 
   const board =
     preset === 'classic'
@@ -125,7 +202,18 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
       : { rows, cols, mineCount, maxPlayers: unlimited ? null : maxPlayers };
 
   // Mode is independent of the board preset — you can play Classic ranked.
-  const config: RoomConfig = { ...board, mode, joinByRequest: preset === 'custom' && askToJoin };
+  const config: RoomConfig = {
+    ...board,
+    mode,
+    joinByRequest: preset === 'custom' && askToJoin,
+    private: preset === 'custom' && isPrivate,
+  };
+
+  // A Custom board with Classic's numbers is Classic, and the server keeps
+  // Classic open and listed whatever the form sends. Say so before creating,
+  // rather than let someone believe a listed room is private.
+  const classicOverrides =
+    preset === 'custom' && (askToJoin || isPrivate) && isClassicConfig(board);
 
   // Same validator the server runs, so the message matches what it would say.
   const errors = useMemo(() => validateRoomConfig(config), [config]);
@@ -183,6 +271,25 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
           />
           Players ask to join — you approve each one
         </label>
+      )}
+
+      {preset === 'custom' && (
+        <label className="checkbox" style={{ marginTop: 0 }}>
+          <input
+            type="checkbox"
+            checked={isPrivate}
+            onChange={(e) => setIsPrivate(e.target.checked)}
+          />
+          Private room — only people with the link or code can join
+        </label>
+      )}
+
+      {classicOverrides && (
+        <p className="muted classic-note" role="status">
+          {CLASSIC.rows}×{CLASSIC.cols} with {CLASSIC.mineCount} mines and {CLASSIC.maxPlayers} players
+          is the Classic board, which keeps the original rules: it is listed and anyone can join
+          directly. Change the board or the player limit to use the options above.
+        </p>
       )}
 
       {preset === 'custom' && (

@@ -1,27 +1,45 @@
 import {
   STARTING_ELO,
   cleanChatText,
+  type AiAbout,
   type AiHintResult,
-  type AiLevel,
   type ChatMessage,
   type ForfeitNotice,
   type FriendInvite,
   type JoinRequestOutcome,
+  type LobbyMessage,
   type ModerationResult,
   type OnlinePlayer,
   type PublicMatchState,
   type RemovalNote,
   type RemovalNotice,
   type RoomActionResult,
+  type RoomLookupResult,
   type QueueSnapshot,
   type RoomConfig,
   type RoomMode,
   type RoomSummary,
 } from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AiSetup } from './data/aiPlay.js';
 import { addChatMessage } from './data/chat.js';
 import { INVITE_TTL_MS, addInvite } from './data/friendsModel.js';
-import { rememberGuestMatch } from './data/guestHistory.js';
+import {
+  clearGuestProfile,
+  endedResultApplies,
+  forfeitResultApplies,
+  forfeitSeats,
+  loadGuestProfile,
+  saveGuestProfile,
+  unofficialRatingChange,
+  withGuestName,
+  withResult,
+  type GuestProfile,
+  type RatedSeat,
+  type UnofficialChange,
+} from './data/guestCookie.js';
+import { clearGuestMatches, rememberGuestMatch } from './data/guestHistory.js';
+import { addLobbyMessage, lobbyHistory } from './data/worldChat.js';
 import { socket } from './socket.js';
 
 const GUEST_KEY = 'fmm.guest';
@@ -85,7 +103,26 @@ export function useGame() {
   const [friendInvites, setFriendInvites] = useState<FriendInvite[]>([]);
   /** The chat of the room we follow, oldest first. Nothing is kept once we leave it. */
   const [roomMessages, setRoomMessages] = useState<ChatMessage[]>([]);
+  /** The lobby's world chat, oldest first: the server's history, then each new line. */
+  const [lobbyMessages, setLobbyMessages] = useState<LobbyMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The guest remembered by this browser (the `fmm_guest` cookie), with their
+   * unofficial rating. Read once at load; null for anyone else. Kept in memory
+   * too, so a browser that blocks cookies still tallies for as long as the tab lives.
+   */
+  const [guestProfile, setGuestProfile] = useState<GuestProfile | null>(() => loadGuestProfile());
+  const guestProfileRef = useRef(guestProfile);
+  /** The guest's own rating change for the match just finished, for the result screen. */
+  const [guestChange, setGuestChange] = useState<UnofficialChange | null>(null);
+  /**
+   * The last state seen while a match was being played, in the room we follow.
+   * A result is counted by comparing against it, and it is dropped the moment
+   * one is counted — that is what keeps a match from counting twice.
+   */
+  const playingSnapshot = useRef<PublicMatchState | null>(null);
+  /** Set once "Forget me" is used by a tab that already has a name: nothing is remembered again until it reloads. */
+  const suppressRemember = useRef(false);
 
   /**
    * The room this client is in, as far as it knows. Room events for any other
@@ -100,6 +137,8 @@ export function useGame() {
    */
   const followRoom = useCallback((roomId: string | null) => {
     activeRoom.current = roomId;
+    playingSnapshot.current = null;
+    setGuestChange(null);
     setRoomMessages([]);
   }, []);
   const playerIdRef = useRef<string | null>(null);
@@ -125,6 +164,32 @@ export function useGame() {
   /** Each friend invite's own expiry, cleared if the hook goes away first. */
   const inviteTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
 
+  /** Keeps the guest's record: in memory, and in the cookie (which is written again, for another 30 days). */
+  const commitGuest = useCallback((next: GuestProfile | null) => {
+    guestProfileRef.current = next;
+    setGuestProfile(next);
+    if (next) saveGuestProfile(next);
+  }, []);
+
+  /**
+   * A finished ranked match, added to the guest's own record. The server has
+   * already rated this seat as a fixed 800 and dropped the result; this is the
+   * browser's private tally. The cookie is read first, so a second tab's
+   * results are not overwritten by this tab's older copy.
+   */
+  const countGuestResult = useCallback(
+    (seats: readonly RatedSeat[], ranked: boolean) => {
+      const myId = playerIdRef.current;
+      if (!isGuestRef.current || myId === null || !ranked || guestProfileRef.current === null) return;
+      const base = loadGuestProfile() ?? guestProfileRef.current;
+      const change = unofficialRatingChange({ ranked, myId, seats, profile: base });
+      if (!change) return;
+      commitGuest(withResult(base, change, Date.now()));
+      setGuestChange(change);
+    },
+    [commitGuest],
+  );
+
   const join = useCallback((nickname: string) => {
     socket.emit('player:join', { nickname }, (result) => {
       lastNickname.current = nickname;
@@ -133,16 +198,29 @@ export function useGame() {
       setWelcome(result.welcome);
       setIsGuest(result.isGuest);
       setElo(result.elo);
-      if (result.isGuest && nickname) rememberGuest(nickname);
+      if (result.isGuest && nickname) {
+        rememberGuest(nickname);
+        // The same person on this browser keeps their record under a new name.
+        if (!suppressRemember.current) {
+          commitGuest(withGuestName(loadGuestProfile() ?? guestProfileRef.current, nickname, Date.now()));
+        }
+      }
       // The server held our seat through a dropped connection or a refresh.
       if (result.roomId) followRoom(result.roomId);
     });
-  }, [followRoom]);
+  }, [followRoom, commitGuest]);
 
   useEffect(() => {
     /** Mirrors a room snapshot, but only for the room we are actually in. */
     const accept = (next: PublicMatchState) => {
       if (next.roomId !== activeRoom.current) return;
+      if (next.status === 'playing') {
+        playingSnapshot.current = next;
+        setGuestChange(null);
+      } else if (endedResultApplies(playingSnapshot.current, next, playerIdRef.current)) {
+        playingSnapshot.current = null;
+        countGuestResult(next.players, next.config.mode === 'ranked');
+      }
       setState(next);
       const me = next.players.find((p) => p.id === playerIdRef.current);
       if (me) setElo(me.elo);
@@ -173,6 +251,13 @@ export function useGame() {
 
     socket.on('match:forfeit', (notice) => {
       if (notice.roomId !== activeRoom.current) return;
+      // The leaver is no longer among the seats, so their rating comes from
+      // the last state seen while the match was played.
+      const snapshot = playingSnapshot.current;
+      if (snapshot && forfeitResultApplies(snapshot, notice, playerIdRef.current)) {
+        playingSnapshot.current = null;
+        countGuestResult(forfeitSeats(notice, snapshot), snapshot.config.mode === 'ranked');
+      }
       // The state:sync that follows carries the updated rating.
       setForfeit(notice);
     });
@@ -207,7 +292,7 @@ export function useGame() {
     // A guest's browser remembers its own saved matches for the game log. An
     // account's matches are found by its profile id instead.
     socket.on('match:recorded', ({ matchId }) => {
-      if (!isGuestRef.current) return;
+      if (!isGuestRef.current || suppressRemember.current) return;
       rememberGuestMatch({ matchId, nickname: myNicknameRef.current, at: Date.now() });
     });
 
@@ -239,6 +324,14 @@ export function useGame() {
       const roomId = activeRoom.current;
       setRoomMessages((list) => addChatMessage(list, message, roomId));
     });
+
+    // World chat. The history comes once per name picked (again after a
+    // reconnect) and replaces what we had; an admin can empty it for everyone.
+    socket.on('lobby:history', (history) => setLobbyMessages(lobbyHistory(history)));
+    socket.on('lobby:message', (message) =>
+      setLobbyMessages((list) => addLobbyMessage(list, message)),
+    );
+    socket.on('lobby:cleared', () => setLobbyMessages([]));
 
     // A friend asked us over. A newer invite from the same friend to the same
     // room replaces the older one, and each goes away by itself after a
@@ -279,17 +372,34 @@ export function useGame() {
       socket.off('queue:matched');
       socket.off('error:msg');
       socket.off('room:message');
+      socket.off('lobby:history');
+      socket.off('lobby:message');
+      socket.off('lobby:cleared');
       socket.off('friend:invited');
       if (errorTimer.current) clearTimeout(errorTimer.current);
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
     };
-  }, [showError, join, followRoom]);
+  }, [showError, join, followRoom, countGuestResult]);
 
   /** Forgets the remembered guest and starts over at the nickname screen. */
   const forgetGuest = useCallback(() => {
     forgetStoredGuest();
     window.location.reload();
+  }, []);
+
+  /**
+   * "Not you?" and "Forget me": the cookie and the remembered matches go, and
+   * the next guest to join starts at 800 with nothing played. A tab that is
+   * already playing under a name stays as it is, but remembers nothing more.
+   */
+  const forgetGuestData = useCallback(() => {
+    suppressRemember.current = playerIdRef.current !== null;
+    clearGuestProfile();
+    clearGuestMatches();
+    guestProfileRef.current = null;
+    setGuestProfile(null);
+    setGuestChange(null);
   }, []);
 
   const handleRoomAck = useCallback(
@@ -329,16 +439,58 @@ export function useGame() {
   );
 
   /**
+   * One room by its code, private rooms included — a join link or "Join by
+   * code" must know whether to join or ask the host. Resolves null, with a
+   * toast saying why, when there is no such room. Timed, so a lost answer
+   * cannot leave the join hanging.
+   */
+  const lookupRoom = useCallback(
+    (roomId: string) =>
+      new Promise<RoomSummary | null>((resolve) =>
+        socket
+          .timeout(8000)
+          .emit('room:lookup', { roomId }, (err: Error | null, result: RoomLookupResult) => {
+            if (!err && result?.ok && result.room) {
+              resolve(result.room);
+              return;
+            }
+            showError(
+              err || !result
+                ? 'The server did not answer — try again.'
+                : (result.error ?? 'That room no longer exists.'),
+            );
+            resolve(null);
+          }),
+      ),
+    [showError],
+  );
+
+  /**
    * A game against the computer. The server makes the room, seats us and the
    * bot, and starts at once — so, like creating a room, the ack's room is
    * adopted before its first state:sync arrives.
    */
   const playVsAi = useCallback(
-    (level: AiLevel) =>
+    (setup: AiSetup) =>
       new Promise<RoomActionResult>((resolve) =>
-        socket.emit('ai:play', { level }, (r) => resolve(handleRoomAck(r))),
+        socket.emit('ai:play', setup, (r) => resolve(handleRoomAck(r))),
       ),
     [handleRoomAck],
+  );
+
+  /**
+   * What the server's language model is, for the "About this opponent"
+   * dialog. Null when there is no answer: the dialog says it could not check
+   * rather than guessing.
+   */
+  const aiAbout = useCallback(
+    () =>
+      new Promise<AiAbout | null>((resolve) =>
+        socket
+          .timeout(8000)
+          .emit('ai:about', {}, (err: Error | null, result: AiAbout) => resolve(err ? null : result)),
+      ),
+    [],
   );
 
   const leaveRoom = useCallback(() => {
@@ -465,6 +617,48 @@ export function useGame() {
     );
   }, []);
 
+  /**
+   * Say something in the lobby's world chat. Like the room chat, the line
+   * shows when the server sends it back to everyone; a refusal (too fast, no
+   * name yet) comes back as `error`.
+   */
+  const sayInLobby = useCallback((text: string) => {
+    const clean = cleanChatText(text);
+    if (clean === null) {
+      return Promise.resolve<ModerationResult>({ ok: false, error: 'Type a message first.' });
+    }
+    return new Promise<ModerationResult>((resolve) =>
+      socket
+        .timeout(8000)
+        .emit('lobby:say', { text: clean }, (err: Error | null, result: ModerationResult) =>
+          resolve(
+            err || !result ? { ok: false, error: 'The server did not answer — try again.' } : result,
+          ),
+        ),
+    );
+  }, []);
+
+  /**
+   * Post an invite card for the room we are playing in to the world chat.
+   * The server decides whether we may (seated, a free seat, the host's call
+   * for a private room, not too often) and says why not in `error`.
+   */
+  const postInvite = useCallback(
+    () =>
+      new Promise<ModerationResult>((resolve) =>
+        socket
+          .timeout(8000)
+          .emit('lobby:invite', {}, (err: Error | null, result: ModerationResult) =>
+            resolve(
+              err || !result
+                ? { ok: false, error: 'The server did not answer — try again.' }
+                : result,
+            ),
+          ),
+      ),
+    [],
+  );
+
   return {
     connected,
     state,
@@ -488,9 +682,13 @@ export function useGame() {
     error,
     join,
     forgetGuest,
+    forgetGuestData,
+    guestProfile,
+    guestChange,
     createRoom,
     joinRoom,
     spectateRoom,
+    lookupRoom,
     leaveRoom,
     joinQueue,
     leaveQueue,
@@ -502,8 +700,12 @@ export function useGame() {
     inviteFriend,
     dismissInvite,
     playVsAi,
+    aiAbout,
     askHint,
     roomMessages,
     sayInRoom,
+    lobbyMessages,
+    sayInLobby,
+    postInvite,
   };
 }

@@ -1,4 +1,5 @@
 import { supabase } from '../auth/supabase.js';
+import { isMissingColumn, pictureUrl } from './avatar.js';
 import {
   MISSING_TABLE_MESSAGE,
   isMissingTable,
@@ -23,6 +24,8 @@ import {
 
 export interface FriendsLoad {
   friendships: Friendship[];
+  /** Profile picture addresses by the other person's profile id. Only people with one. */
+  pictures: ReadonlyMap<string, string>;
   /** Why the list could not be read, or null. */
   error: string | null;
   /** The table does not exist yet — migration 0003 has not been run. */
@@ -49,16 +52,41 @@ function failed(error: DbError | null, fallback: string): FriendsResult {
   return { ok: false, message: fallback };
 }
 
-/** Usernames by profile id. Profiles are publicly readable. */
-async function usernames(ids: string[]): Promise<Map<string, string>> {
-  if (!supabase || ids.length === 0) return new Map();
-  const { data } = await supabase.from('profiles').select('id, username').in('id', ids);
-  return new Map((data ?? []).map((p) => [p.id as string, p.username as string]));
+/**
+ * Usernames and picture addresses by profile id. Profiles are publicly
+ * readable. Before migration 0004 there is no picture column, and asking for
+ * it fails the whole read, so the names are asked for again on their own.
+ */
+async function profilesById(
+  ids: string[],
+): Promise<{ names: Map<string, string>; pictures: Map<string, string> }> {
+  const names = new Map<string, string>();
+  const pictures = new Map<string, string>();
+  if (!supabase || ids.length === 0) return { names, pictures };
+
+  type Row = { id: string; username: string; avatar_path?: string | null };
+  const first = await supabase.from('profiles').select('id, username, avatar_path').in('id', ids);
+  let rows: Row[] | null = first.data;
+  let error = first.error;
+  if (isMissingColumn(error)) {
+    const again = await supabase.from('profiles').select('id, username').in('id', ids);
+    rows = again.data;
+    error = again.error;
+  }
+  if (error) console.error('[friends] could not load names:', error.message);
+
+  for (const row of rows ?? []) {
+    names.set(row.id, row.username);
+    const url = pictureUrl(row.id, row.avatar_path);
+    if (url) pictures.set(row.id, url);
+  }
+  return { names, pictures };
 }
 
 /** Everything between me and anyone: requests both ways, and friends. */
 export async function listFriendships(myId: string): Promise<FriendsLoad> {
-  if (!supabase) return { friendships: [], error: null, missingTable: false };
+  const none = new Map<string, string>();
+  if (!supabase) return { friendships: [], pictures: none, error: null, missingTable: false };
 
   try {
     // No filter needed: row-level security returns only rows this player is in.
@@ -67,6 +95,7 @@ export async function listFriendships(myId: string): Promise<FriendsLoad> {
       const result = failed(error, 'Could not load your friends.');
       return {
         friendships: [],
+        pictures: none,
         error: result.message ?? null,
         missingTable: result.missingTable === true,
       };
@@ -74,11 +103,11 @@ export async function listFriendships(myId: string): Promise<FriendsLoad> {
 
     const records = (data ?? []) as FriendshipRecord[];
     const others = records.map((r) => (r.requester_id === myId ? r.addressee_id : r.requester_id));
-    const names = await usernames([...new Set(others)]);
-    return { friendships: toFriendships(records, myId, names), error: null, missingTable: false };
+    const { names, pictures } = await profilesById([...new Set(others)]);
+    return { friendships: toFriendships(records, myId, names), pictures, error: null, missingTable: false };
   } catch (error) {
     console.error('[friends] load failed:', error);
-    return { friendships: [], error: 'Could not load your friends.', missingTable: false };
+    return { friendships: [], pictures: none, error: 'Could not load your friends.', missingTable: false };
   }
 }
 

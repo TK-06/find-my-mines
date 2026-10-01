@@ -14,7 +14,7 @@ import {
   pickOne,
   rateMatch,
   revealCell,
-  type AiLevel,
+  type BotSetup,
   type Board,
   type ForfeitNotice,
   type Identity,
@@ -52,7 +52,9 @@ interface Occupant {
    */
   promotable: boolean;
   /** Set on a computer opponent's seat. It has no socket and no account. */
-  bot?: AiLevel;
+  bot?: BotSetup;
+  /** The account's profile picture, from the verified identity. Null for guests and bots. */
+  avatarUrl: string | null;
 }
 
 /** What the server needs in order to persist a finished match. */
@@ -310,17 +312,17 @@ export class MatchManager {
    * starting rating, never rated — and never waits as a spectator: false, and
    * nothing seated, when the room is full or a match is running.
    */
-  addBot(id: string, level: AiLevel): boolean {
+  addBot(id: string, setup: BotSetup): boolean {
     if (isRoomFull(this.config, this.players.length) || this.status === 'playing') return false;
 
     const identity: Identity = {
       profileId: null,
-      nickname: botNickname(level),
+      nickname: botNickname(setup),
       elo: STARTING_ELO,
       gamesPlayed: 0,
       isGuest: true,
     };
-    this.players.push({ ...this.newOccupant(id, identity, false), bot: level });
+    this.players.push({ ...this.newOccupant(id, identity, false), bot: { ...setup } });
     this.out.changed();
     return true;
   }
@@ -338,6 +340,7 @@ export class MatchManager {
       elo: identity.elo,
       gamesPlayed: identity.gamesPlayed,
       promotable,
+      avatarUrl: identity.avatarUrl ?? null,
     };
   }
 
@@ -829,6 +832,8 @@ export class MatchManager {
       eloDelta: player.eloDelta,
       // Only on a bot's seat, so a person's seat serialises exactly as before.
       ...(player.bot ? { bot: player.bot } : {}),
+      // Likewise only when there is a picture: guests' seats are unchanged.
+      ...(player.avatarUrl ? { avatarUrl: player.avatarUrl } : {}),
     };
   }
 

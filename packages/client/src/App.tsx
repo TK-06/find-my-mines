@@ -1,22 +1,26 @@
-import { hostCanModerate, type RoomSummary } from '@fmm/shared';
-import { useEffect, useRef, useState } from 'react';
+import { hostCanModerate, isRoomFull, type RoomSummary } from '@fmm/shared';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { identityChanged } from './auth/session.js';
 import { authEnabled, supabase } from './auth/supabase.js';
 import { signOutAfterRemoval } from './data/format.js';
+import type { GuestProfile } from './data/guestCookie.js';
 import { AiPanel, HintButton, HintLine, useAiHint } from './components/AiPanel.js';
 import { Board } from './components/Board.js';
 import { FriendInviteToasts } from './components/FriendInviteToasts.js';
 import { JoinRequestDialog } from './components/JoinRequestDialog.js';
 import { JoinRequestToasts } from './components/JoinRequestToasts.js';
 import { Leaderboard } from './components/Leaderboard.js';
+import { LoadBoundary } from './components/LoadBoundary.js';
 import { OnlinePanel } from './components/OnlinePanel.js';
 import { QueuePanel } from './components/QueuePanel.js';
 import { ReasonDialog } from './components/ReasonDialog.js';
 import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
 import { RoomChat } from './components/RoomChat.js';
+import { ShareRoom } from './components/ShareRoom.js';
 import { SiteFooter } from './components/SiteFooter.js';
+import { PostInviteButton, WorldChat } from './components/WorldChat.js';
 import { isPolicy } from './data/policies.js';
-import { NavBar, useRoute, type Route } from './router.js';
+import { NavBar, joinCodeFromPath, pathFor, useRoute, type Route } from './router.js';
 import { AuthScreen } from './screens/AuthScreen.js';
 import { GameLogScreen } from './screens/GameLogScreen.js';
 import { LeaderboardScreen } from './screens/LeaderboardScreen.js';
@@ -26,6 +30,10 @@ import { ProfileScreen } from './screens/ProfileScreen.js';
 import { RemovedScreen } from './screens/RemovedScreen.js';
 import { useTheme } from './theme.js';
 import { forgetStoredGuest, storedGuestName, useGame } from './useGame.js';
+
+// Puzzle mode loads on first visit: most players never open it, and its board
+// and solver-backed hint need not weigh on the main game's first load.
+const PuzzleScreen = lazy(() => import('./screens/PuzzleScreen.js').then((m) => ({ default: m.PuzzleScreen })));
 
 export function App() {
   const {
@@ -51,9 +59,13 @@ export function App() {
     error,
     join,
     forgetGuest,
+    forgetGuestData,
+    guestProfile,
+    guestChange,
     createRoom,
     joinRoom,
     spectateRoom,
+    lookupRoom,
     leaveRoom,
     joinQueue,
     leaveQueue,
@@ -65,9 +77,13 @@ export function App() {
     inviteFriend,
     dismissInvite,
     playVsAi,
+    aiAbout,
     askHint,
     roomMessages,
     sayInRoom,
+    lobbyMessages,
+    sayInLobby,
+    postInvite,
   } = useGame();
 
   // Up here with the other hooks, before any early return. Inert outside a
@@ -98,15 +114,24 @@ export function App() {
     if (!connected) setJoinTarget(null);
   }, [connected]);
 
-  /** Join from the game list or the online list: ask first where the room requires it. */
+  /**
+   * Join from the game list, the online list, an invite, a share link or a
+   * typed code: ask first where the room requires it. A private room is not
+   * in the game list, so the server is asked about it by its code first.
+   */
   const handleJoin = (roomId: string) => {
-    const room = rooms.find((r) => r.id === roomId);
-    if (room?.config.joinByRequest) {
-      clearRequestResolution();
-      setJoinTarget(room);
-    } else {
-      void joinRoom(roomId);
-    }
+    const joinOrAsk = (room: RoomSummary) => {
+      if (room.config.joinByRequest) {
+        clearRequestResolution();
+        setJoinTarget(room);
+      } else {
+        void joinRoom(room.id);
+      }
+    };
+    const listed = rooms.find((r) => r.id === roomId);
+    if (listed) joinOrAsk(listed);
+    // Not found says so in a toast, the way joining a closed room always has.
+    else void lookupRoom(roomId).then((found) => found && joinOrAsk(found));
   };
 
   // After a ban the page must stay on the ban notice, even though signing out
@@ -158,6 +183,25 @@ export function App() {
 
   const named = playerId !== null;
 
+  /**
+   * A share link (/join/CODE), read once at load. It joins that room as soon
+   * as the player has a name — a guest once they pick one, an account once
+   * signed in — and only from the game screen, so wandering to the profile
+   * first does not pull them into a room from there.
+   */
+  const [linkCode, setLinkCode] = useState(() => joinCodeFromPath(window.location.pathname));
+  useEffect(() => {
+    if (!linkCode || route !== 'game' || !named || !connected) return;
+    setLinkCode(null);
+    // Back to /, so a refresh does not join again.
+    if (joinCodeFromPath(window.location.pathname)) {
+      window.history.replaceState(null, '', pathFor('game'));
+    }
+    // Already there (this tab's held seat came back): joining again would
+    // give that seat up.
+    if (state?.roomId !== linkCode) handleJoin(linkCode);
+  }, [linkCode, route, named, connected, state?.roomId, handleJoin]);
+
   // Screen is derived, not stored: no room state means the lobby.
   // A signed-in user does not need to type anything; join with their profile.
   useEffect(() => {
@@ -205,7 +249,30 @@ export function App() {
           }}
           onInvite={inviteFriend}
           onOpenGameLog={() => navigate('games')}
+          guest={guestProfile}
+          onForgetGuest={forgetGuestData}
         />
+        {inviteToasts}
+      </Shell>
+    );
+  }
+
+  // Puzzle mode is single-player and runs entirely in this browser: no name,
+  // sign-in or server round trip needed.
+  if (route === 'puzzle') {
+    return (
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+        <LoadBoundary what="the puzzle">
+          <Suspense
+            fallback={
+              <div className="card empty-state" role="status">
+                <p className="muted">Loading the puzzle…</p>
+              </div>
+            }
+          >
+            <PuzzleScreen />
+          </Suspense>
+        </LoadBoundary>
         {inviteToasts}
       </Shell>
     );
@@ -260,7 +327,15 @@ export function App() {
     return (
       <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
         {ready && !(guestName && !signedIn) ? (
-          <AuthScreen connected={connected} onGuest={join} />
+          <>
+            {linkCode && (
+              <p className="join-link-note">
+                Pick a name or sign in, and you’ll go straight to room{' '}
+                <span className="room-code">{linkCode}</span>.
+              </p>
+            )}
+            <AuthScreen connected={connected} onGuest={join} remembered={guestProfile} onForget={forgetGuestData} />
+          </>
         ) : (
           <div className="center-screen">
             <p className="muted">{connected ? 'Signing you back in…' : 'Connecting to the server…'}</p>
@@ -274,11 +349,11 @@ export function App() {
     return (
       <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
         <div className="stack">
-          <IdentityBar isGuest={isGuest} elo={elo} onForgetGuest={forgetGuest} />
+          <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
           <div className="lobby-layout">
             <div className="stack">
               <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
-              <AiPanel connected={connected} onPlay={playVsAi} />
+              <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} />
               <LobbyScreen
                 rooms={rooms}
                 clientCount={clientCount}
@@ -287,7 +362,19 @@ export function App() {
                 onSpectate={spectateRoom}
               />
             </div>
-            <OnlinePanel online={online} myId={playerId} rooms={rooms} onJoin={handleJoin} />
+            {/* Who is online, then what they are saying. On phones the two split
+                up: the online list first, the chat after the games. */}
+            <div className="stack lobby-side">
+              <OnlinePanel online={online} myId={playerId} rooms={rooms} onJoin={handleJoin} />
+              <WorldChat
+                messages={lobbyMessages}
+                rooms={rooms}
+                connected={connected}
+                myId={playerId}
+                onSay={sayInLobby}
+                onJoin={handleJoin}
+              />
+            </div>
           </div>
         </div>
 
@@ -346,20 +433,41 @@ export function App() {
   return (
     <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
       <div className="stack">
-        <IdentityBar isGuest={isGuest} elo={elo} onForgetGuest={forgetGuest} />
+        <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
         <div className="room-bar card">
           <div>
             <span className="room-code">{state.roomId}</span>
             <strong style={{ marginLeft: 8 }}>{state.roomName}</strong>
+            {state.config.private && <span className="tag private-tag">private</span>}
             <div className="muted room-meta">
               {state.rows}×{state.cols} · {state.bombCount} mines ·{' '}
               {state.players.length}/{state.config.maxPlayers ?? '∞'} players
               {isSpectator && ' · you are spectating'}
             </div>
           </div>
-          <button className="ghost" onClick={leaveRoom}>
-            Leave room
-          </button>
+          <div className="room-bar-actions">
+            {/* Keyed by room, so an open popover never shows the last room's code. */}
+            <ShareRoom
+              key={state.roomId}
+              roomId={state.roomId}
+              roomName={state.roomName}
+              isPrivate={state.config.private === true}
+            />
+            {/* Players only, as the server enforces; a private room's code goes
+                public only on its host's say-so. A full room — a game against
+                the computer included — has no seat to advertise. Its own key:
+                two siblings sharing one would leave a stale Share control behind
+                when the room changes. */}
+            {isSeated &&
+              state.origin !== 'ai' &&
+              (!state.config.private || isHost) &&
+              !isRoomFull(state.config, state.players.length) && (
+                <PostInviteButton key={`invite-${state.roomId}`} connected={connected} onPost={postInvite} />
+              )}
+            <button className="ghost" onClick={leaveRoom}>
+              Leave room
+            </button>
+          </div>
         </div>
 
         {state.status === 'waiting' && (
@@ -396,6 +504,7 @@ export function App() {
             <RoomChat
               key={state.roomId}
               messages={roomMessages}
+              players={state.players}
               connected={connected}
               onSay={sayInRoom}
             />
@@ -420,7 +529,15 @@ export function App() {
       )}
 
       {forfeit && (
-        <ForfeitOverlay notice={forfeit} myId={playerId} onStay={dismissForfeit} onLeave={leaveRoom} />
+        <ForfeitOverlay
+          notice={forfeit}
+          myId={playerId}
+          ranked={state.config.mode === 'ranked'}
+          seats={state.players}
+          guestChange={guestChange}
+          onStay={dismissForfeit}
+          onLeave={leaveRoom}
+        />
       )}
 
       {state.status === 'ended' && !forfeit && (
@@ -430,6 +547,7 @@ export function App() {
           isSpectator={isSpectator}
           onRematch={rematch}
           onLeave={leaveRoom}
+          guestChange={guestChange}
         />
       )}
     </Shell>
@@ -439,20 +557,29 @@ export function App() {
 function IdentityBar({
   isGuest,
   elo,
+  guest,
   onForgetGuest,
 }: {
   isGuest: boolean;
   elo: number;
+  /** The record this browser keeps for a guest: its rating is the one shown, unofficially. */
+  guest: GuestProfile | null;
   onForgetGuest: () => void;
 }) {
   const client = supabase;
+  // The server rates every guest as a flat 800; a guest sees their own figure.
+  const shown = isGuest && guest ? guest.rating : elo;
   return (
     <div className="identity-bar">
       <span className="elo-badge">
-        <strong>{elo}</strong> Elo
+        <strong>{shown}</strong> Elo
       </span>
       <span className="tag">{isGuest ? 'guest' : 'signed in'}</span>
-      {isGuest && <span className="muted">Guest ratings aren’t saved</span>}
+      {isGuest && (
+        <span className="muted">
+          {guest ? 'unofficial, kept in this browser for 30 days' : 'unofficial, not kept'}
+        </span>
+      )}
       {isGuest && (
         <button className="ghost small" onClick={onForgetGuest}>
           Change name

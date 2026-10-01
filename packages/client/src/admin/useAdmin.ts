@@ -91,6 +91,9 @@ export function useAdmin() {
 
   const reset = useCallback((roomId?: string) => adminSocket.emit('admin:reset', { roomId }), []);
 
+  /** Empties the lobby's world chat for everyone. The terminal log confirms it. */
+  const clearChat = useCallback(() => adminSocket.emit('admin:clearChat'), []);
+
   return {
     state,
     connected,
@@ -103,5 +106,6 @@ export function useAdmin() {
     watch,
     setMinesVisible,
     reset,
+    clearChat,
   };
 }

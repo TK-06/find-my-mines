@@ -5,7 +5,12 @@
  * Instead the server tells every seat the id of the match it just saved
  * (`match:recorded`), and a guest's browser keeps those ids here. The game
  * log's "Mine" then loads exactly those matches — no guessing by nickname.
+ *
+ * Entries older than 30 days are dropped whenever the list is read or written,
+ * so the history and the remembered-guest cookie expire together.
  */
+
+import { GUEST_KEEP_MS } from './guestCookie.js';
 
 export interface GuestMatch {
   matchId: string;
@@ -17,9 +22,19 @@ export interface GuestMatch {
 const STORAGE_KEY = 'fmm.guestMatches';
 const LIMIT = 50;
 
-/** Newest first, no duplicates, at most `limit` entries. */
-export function addGuestMatch(list: GuestMatch[], entry: GuestMatch, limit = LIMIT): GuestMatch[] {
-  return [entry, ...list.filter((m) => m.matchId !== entry.matchId)].slice(0, limit);
+/** Only what is still inside the 30 days. */
+export function pruneGuestMatches(list: GuestMatch[], now = Date.now()): GuestMatch[] {
+  return list.filter((m) => now - m.at <= GUEST_KEEP_MS);
+}
+
+/** Newest first, no duplicates, nothing older than 30 days, at most `limit` entries. */
+export function addGuestMatch(
+  list: GuestMatch[],
+  entry: GuestMatch,
+  limit = LIMIT,
+  now = Date.now(),
+): GuestMatch[] {
+  return pruneGuestMatches([entry, ...list.filter((m) => m.matchId !== entry.matchId)], now).slice(0, limit);
 }
 
 function isGuestMatch(value: unknown): value is GuestMatch {
@@ -34,11 +49,11 @@ function isGuestMatch(value: unknown): value is GuestMatch {
 }
 
 /** Reads stored history, tolerating anything a user or an old version left there. */
-export function parseGuestMatches(raw: string | null): GuestMatch[] {
+export function parseGuestMatches(raw: string | null, now = Date.now()): GuestMatch[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isGuestMatch) : [];
+    return Array.isArray(parsed) ? pruneGuestMatches(parsed.filter(isGuestMatch), now) : [];
   } catch {
     return [];
   }
@@ -60,5 +75,14 @@ export function rememberGuestMatch(entry: GuestMatch): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(addGuestMatch(loadGuestMatches(), entry)));
   } catch {
     // Not remembered — the match is still in the public log under "Everyone".
+  }
+}
+
+/** "Forget me": the remembered matches go, along with the cookie. */
+export function clearGuestMatches(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Nothing stored that could be removed.
   }
 }

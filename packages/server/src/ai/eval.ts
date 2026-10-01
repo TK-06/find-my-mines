@@ -93,7 +93,7 @@ function buildBoard(seed: number): EvalBoard {
   const candidates = covered.sort((a, b) => b.probability - a.probability).slice(0, CANDIDATE_COUNT);
 
   return {
-    input: { level: 'hard', view: { rows, cols, bombCount: mineCount, revealed }, scores: score, candidates },
+    input: { level: 'hard', model: 'ai', view: { rows, cols, bombCount: mineCount, revealed }, scores: score, candidates },
     isMine: (cell) => board.bombs[cell.row]![cell.col]!,
     solverPick: candidates[0]!.cell,
   };

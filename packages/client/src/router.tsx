@@ -1,3 +1,4 @@
+import { parseRoomCode } from '@fmm/shared';
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 
 export type Route =
@@ -5,6 +6,7 @@ export type Route =
   | 'profile'
   | 'games'
   | 'ranks'
+  | 'puzzle'
   | 'admin'
   | 'privacy'
   | 'security'
@@ -15,6 +17,7 @@ const PATHS: Record<Route, string> = {
   profile: '/profile',
   games: '/games',
   ranks: '/ranks',
+  puzzle: '/puzzle',
   admin: '/admin',
   privacy: '/privacy',
   security: '/security',
@@ -24,6 +27,21 @@ const PATHS: Record<Route, string> = {
 /** The URL a route lives at — for real hrefs, so middle-click and "copy link" work. */
 export function pathFor(route: Route): string {
   return PATHS[route];
+}
+
+/** Where a room's share link points: /join/CODE. */
+export function joinPathFor(code: string): string {
+  return `/join/${code.toUpperCase()}`;
+}
+
+/**
+ * The room code in a share link's path, in capitals, or null anywhere else.
+ * The path itself shows the game screen (see routeFromPath), which joins the
+ * room once the player has a name.
+ */
+export function joinCodeFromPath(pathname: string): string | null {
+  const match = /^\/join\/([^/]+)\/*$/.exec(pathname);
+  return match ? parseRoomCode(match[1]) : null;
 }
 
 /**
@@ -44,6 +62,8 @@ export function routeFromPath(pathname: string): Route {
       return 'games';
     case '/ranks':
       return 'ranks';
+    case '/puzzle':
+      return 'puzzle';
     case '/privacy':
       return 'privacy';
     case '/security':
@@ -140,6 +160,7 @@ export function NavBar({
     { key: 'profile', label: 'Profile' },
     { key: 'games', label: 'Game log' },
     { key: 'ranks', label: 'Rankings' },
+    { key: 'puzzle', label: 'Puzzle' },
   ];
 
   return (

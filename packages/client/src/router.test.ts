@@ -1,5 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { isPlainLeftClick, pathFor, routeFromPath, type Route } from './router.js';
+import {
+  isPlainLeftClick,
+  joinCodeFromPath,
+  joinPathFor,
+  pathFor,
+  routeFromPath,
+  type Route,
+} from './router.js';
+
+describe('share links: /join/CODE', () => {
+  it('shows the game for a join link — the lobby is where joining happens', () => {
+    expect(routeFromPath('/join/ABCD')).toBe('game');
+    expect(routeFromPath('/join/abcd/')).toBe('game');
+  });
+
+  it('reads the room code from a join link, in capitals', () => {
+    expect(joinCodeFromPath('/join/ABCD')).toBe('ABCD');
+    expect(joinCodeFromPath('/join/q7k2')).toBe('Q7K2');
+    expect(joinCodeFromPath('/join/WXYZ/')).toBe('WXYZ');
+  });
+
+  it('finds no code anywhere else', () => {
+    for (const path of ['/', '', '/profile', '/join', '/join/', '/join/ABC', '/join/ABCDE', '/join/AB-D', '/join/ABCD/extra', '/games/join/ABCD']) {
+      expect(joinCodeFromPath(path)).toBeNull();
+    }
+  });
+
+  it('builds the path a share link points at, and reads it back', () => {
+    expect(joinPathFor('abcd')).toBe('/join/ABCD');
+    expect(joinCodeFromPath(joinPathFor('Q7K2'))).toBe('Q7K2');
+  });
+});
 
 describe('routeFromPath', () => {
   it('maps the policy pages', () => {

@@ -1,37 +1,28 @@
-import { CHAT_MAX_LENGTH, type ChatMessage, type ModerationResult } from '@fmm/shared';
+import { CHAT_MAX_LENGTH, type ChatMessage, type ModerationResult, type PlayerPublic } from '@fmm/shared';
 import { useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { canSendChat, formatClock, groupMessages, isNearBottom, isoTime } from '../data/chat.js';
-import { initialOf } from '../data/friendsModel.js';
+import { Avatar } from './Avatar.js';
 
 interface Props {
   messages: ChatMessage[];
+  /** The room's seats, to tell which opponent a bot's line is from. */
+  players?: PlayerPublic[];
   connected: boolean;
   onSay: (text: string) => Promise<ModerationResult>;
 }
 
 /**
- * The computer's avatar: a small pixel robot, in the same 8-bit spirit as the
- * mine, so it never passes for a person's initial.
- */
-const ROBOT = (
-  <svg viewBox="0 0 9 8" shapeRendering="crispEdges" aria-hidden="true" focusable="false">
-    <path
-      fill="currentColor"
-      d="M4 0h1v2h-1zM1 2h7v2h-7zM0 4h3v1h-3zM4 4h1v1h-1zM6 4h3v1h-3zM1 5h7v1h-7zM1 6h2v1h-2zM6 6h2v1h-2zM1 7h7v1h-7z"
-    />
-  </svg>
-);
-
-/**
  * The room's chat, for players and spectators alike, laid out like Discord:
- * one avatar, name and time per run of lines from the same sender.
+ * one avatar, name and time per run of lines from the same sender. The
+ * avatar is their profile picture when their account has one, else their
+ * initial; a computer opponent wears its own mark (robot, fly or JEV's logo).
  *
  * The server keeps no history, so this shows what arrived since joining. A
  * line appears when the server sends it back — including your own — so what
  * you see is what everyone in the room saw. Text is rendered as text (React
  * escapes it); nothing a player types is ever treated as markup.
  */
-export function RoomChat({ messages, connected, onSay }: Props) {
+export function RoomChat({ messages, players, connected, onSay }: Props) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,11 +92,17 @@ export function RoomChat({ messages, connected, onSay }: Props) {
         ) : (
           groups.map((group) => {
             const bot = group.kind === 'bot';
+            // Which opponent it is comes from its seat; the AI's robot if the seat is gone.
+            const botModel = players?.find((p) => p.id === group.fromId)?.bot?.model ?? 'ai';
             return (
               <div key={group.key} className="chat-group">
-                <span className={`chat-avatar${bot ? ' bot' : ''}`} aria-hidden="true">
-                  {bot ? ROBOT : initialOf(group.fromName)}
-                </span>
+                {/* The name is printed beside it, so the picture stays silent. */}
+                <Avatar
+                  className="chat-avatar"
+                  name={group.fromName}
+                  url={group.messages[0]?.fromAvatarUrl}
+                  bot={bot && botModel}
+                />
                 <div className="chat-body">
                   <div className="chat-meta">
                     <strong className="chat-name">{group.fromName}</strong>

@@ -1,8 +1,31 @@
 import type { ProbabilityGrid } from './engine/solver.js';
 import { randomInt, type Rng } from './engine/rng.js';
-import type { AiLevel } from './types.js';
+import { BOMB_COUNT, GRID_COLS, GRID_ROWS } from './config.js';
+import type { AiDensity, AiLevel, AiModel, BotSetup } from './types.js';
 
 export const AI_LEVELS: readonly AiLevel[] = ['easy', 'medium', 'hard'];
+
+/**
+ * Every opponent the lobby shows, in its order. Whether JEV can be played is
+ * the server's call (it needs a key) and reaches the client through `ai:about`.
+ */
+export const AI_MODELS: readonly AiModel[] = ['ai', 'fly', 'jev'];
+
+/** Square board sides offered for a game against the computer. 6 is the Classic board. */
+export const AI_BOARD_SIZES: readonly number[] = [6, 8, 10, 12, 16];
+
+export const AI_DENSITIES: readonly AiDensity[] = ['light', 'classic', 'heavy'];
+
+/** Share of the cells that are mines. Classic is the assignment's 11 on 6×6. */
+export const AI_DENSITY_RATIO: Readonly<Record<AiDensity, number>> = {
+  light: 0.2,
+  classic: BOMB_COUNT / (GRID_ROWS * GRID_COLS),
+  heavy: 0.4,
+};
+
+/** What a game against the computer starts with when nothing is chosen: the Classic board. */
+export const AI_DEFAULT_SIZE = GRID_ROWS;
+export const AI_DEFAULT_DENSITY: AiDensity = 'classic';
 
 /** Hints a player may ask for in one match against the computer. */
 export const AI_HINTS_PER_MATCH = 3;
@@ -34,17 +57,44 @@ export function isAiLevel(value: unknown): value is AiLevel {
   return typeof value === 'string' && (AI_LEVELS as readonly string[]).includes(value);
 }
 
+export function isAiModel(value: unknown): value is AiModel {
+  return typeof value === 'string' && (AI_MODELS as readonly string[]).includes(value);
+}
+
+export function isAiDensity(value: unknown): value is AiDensity {
+  return typeof value === 'string' && (AI_DENSITIES as readonly string[]).includes(value);
+}
+
+export function isAiBoardSize(value: unknown): value is number {
+  return typeof value === 'number' && AI_BOARD_SIZES.includes(value);
+}
+
+/**
+ * The board for a game against the computer: a square of `size` with the
+ * density's share of mines, rounded, and never fewer than 1 or as many as the
+ * cells. Classic size and density give exactly the assignment's 6×6 with 11.
+ */
+export function aiBoard(size: number, density: AiDensity): { rows: number; cols: number; mineCount: number } {
+  const cells = size * size;
+  const mineCount = Math.min(cells - 1, Math.max(1, Math.round(cells * AI_DENSITY_RATIO[density])));
+  return { rows: size, cols: size, mineCount };
+}
+
 /** "B3": the column letter and row number the board's rulers show. */
 export function cellLabel(cell: CellRef): string {
   return `${String.fromCharCode(65 + cell.col)}${cell.row + 1}`;
 }
 
-/** The bot's name on the scoreboard, e.g. "AI · Hard". */
-export function botNickname(level: AiLevel): string {
-  return `AI · ${level.charAt(0).toUpperCase()}${level.slice(1)}`;
+/** The opponent's name as players see it. JEV is written in capitals. */
+export const AI_MODEL_NAME: Readonly<Record<AiModel, string>> = { ai: 'AI', fly: 'Fruit Fly', jev: 'JEV' };
+
+/** The bot's name on the scoreboard, e.g. "AI · Hard" or "Fruit Fly · Easy". */
+export function botNickname(setup: BotSetup): string {
+  const { level, model } = setup;
+  return `${AI_MODEL_NAME[model]} · ${level.charAt(0).toUpperCase()}${level.slice(1)}`;
 }
 
-/** How each level plays. The solver is the same for all three; only the policy differs. */
+/** How each level plays. The solver is the same for all of them; only the policy differs. */
 interface LevelPolicy {
   /** Chance that a move is a deliberate mistake. */
   mistakeRate: number;
@@ -86,6 +136,10 @@ interface Ranked extends CellRef {
  * Candidates are two to four distinct covered cells, except where fewer make
  * sense: a single covered cell, a lone certain mine on hard, or a mistake
  * with only one worse cell to choose from.
+ *
+ * The AI and JEV play from this plan. The Fruit Fly does not: it reads the
+ * board with its own neurons (server/src/ai/fly), and the plan is only its
+ * fallback.
  */
 export function planMove(grid: ProbabilityGrid, level: AiLevel, rng: Rng): MovePlan | null {
   const policy = POLICY[level];

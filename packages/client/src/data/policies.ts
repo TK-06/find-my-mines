@@ -16,7 +16,7 @@ import { APP_VERSION, REPO_URL } from '../version.js';
 /** The one address people should write to (the owner asked for just this one). */
 export const CONTACT_EMAIL = 'Palangtaj@gmail.com';
 
-export const POLICY_UPDATED = '28 September 2026';
+export const POLICY_UPDATED = '29 September 2026';
 
 /** A `mailto:` link to the contact address with the subject already filled in. */
 export function contactMailto(topic: string): string {
@@ -104,6 +104,7 @@ const privacy: Policy = {
           'your email address;',
           'your password, stored only as a hash by Supabase Auth, so nobody on the project can read it;',
           'your username;',
+          'your profile picture, if you add one (see below);',
           'your rating and record: games played, wins, losses and draws;',
           'the matches you play (see below).',
         ],
@@ -115,7 +116,9 @@ const privacy: Policy = {
       id: 'guests',
       title: 'If you play as a guest',
       blocks: [
-        'Guests have no account and no profile. Your rating is a fixed 800 and never changes. The name you pick is kept in your browser tab, and by the game server while you are connected.',
+        'Guests have no account and no profile. To the game server a guest is always a fixed 800 and never changes. The name you pick is kept in your browser tab, and by the game server while you are connected.',
+        'Your browser also keeps a small cookie called fmm_guest, so the game can greet you again and show you an unofficial rating. It holds your name, that unofficial rating, and how many ranked games you have won, lost and drawn. The rating is worked out by your browser alone; the game server never reads it, never trusts it, and never saves it. It is not a real rating and does not count on the rankings.',
+        'The cookie stays for 30 days from the last time you played as that guest, then goes by itself. It is sent only to this site, and goes nowhere else. To remove it sooner, use “Forget me on this browser” on your profile page, or “Not you?” on the name screen — either clears it, and the list of matches your browser keeps for the game log, at once — or clear this site’s data in your browser.',
         'Matches you finish as a guest are still saved to the match log, under the name you played with.',
       ],
     },
@@ -129,6 +132,15 @@ const privacy: Policy = {
           'for each player: the name they played under, whether they were a guest, their score, their finishing place, win, loss or draw, and their rating before and after.',
         ],
         'Casual and ranked matches are both saved, and so are guests. A record keeps the name each player used at the time, even if they change it later. Match records are public — anyone can read the match log.',
+      ],
+    },
+    {
+      id: 'profile-picture',
+      title: 'Profile pictures',
+      blocks: [
+        'A profile picture is optional and needs an account. Your browser crops the picture you choose to a small square and saves it again before uploading it, so the original file — and anything hidden inside it, such as where a photo was taken — never leaves your device.',
+        'The square is stored in Supabase Storage and is public. It is shown next to your name around the game — for example in the rankings, friends lists, match scoreboards and chat — and anyone who has its address can open it.',
+        'You can change or remove it at any time on your profile page. Changing it deletes the old picture, and removing it deletes the file. Copies that other people’s browsers have already downloaded can stay in their cache for a while.',
       ],
     },
     {
@@ -146,6 +158,7 @@ const privacy: Policy = {
         'Anyone, signed in or not, can see:',
         [
           'your username, rating and record, and the date your profile was made;',
+          'your profile picture, if you add one;',
           'your match history.',
         ],
         'Everyone connected to the game sees the online list: each player’s name, whether they are a guest, and where they are in the game — in the lobby, in a room, playing or watching — with the room code.',
@@ -157,13 +170,14 @@ const privacy: Policy = {
       id: 'your-browser',
       title: 'What your browser keeps',
       blocks: [
-        'The game uses your browser’s local storage and session storage. It sets no cookies. It keeps:',
+        'The game uses your browser’s local storage and session storage, and sets one cookie, only for guests (the last item). It keeps:',
         [
           'your theme, light or dark;',
           'your sign-in session, if you sign in, so you stay signed in (managed by Supabase);',
           'as a guest, the name you chose — for this tab only, so a refresh does not sign you out;',
           'a random id for this tab, so if your connection drops the server can give your seat back within 30 seconds;',
-          'as a guest, the ids of up to 50 matches you played, with the name you used and when, so the match log can show your own games.',
+          'as a guest, the ids of up to 50 matches you played in the last 30 days, with the name you used and when, so the match log can show your own games;',
+          'as a guest, a cookie called fmm_guest: your name, an unofficial rating your browser works out, and your ranked wins, losses and draws. It lasts 30 days from the last time you played as that guest, is sent only to this site, and is described under “If you play as a guest”.',
         ],
         'The tab-only items go when you close the tab. You can clear the rest in your browser settings at any time.',
       ],
@@ -193,7 +207,7 @@ const privacy: Policy = {
       id: 'services',
       title: 'Services we use',
       blocks: [
-        'Supabase runs our database and sign-in, and sends the email that confirms a new account. Your account data is stored with Supabase, which keeps its own technical logs as part of running the service.',
+        'Supabase runs our database and sign-in, stores profile pictures, and sends the email that confirms a new account. Your account data is stored with Supabase, which keeps its own technical logs as part of running the service.',
         'The website and the game server run on hosting services, which see ordinary network traffic, such as your IP address, when you connect.',
       ],
     },
@@ -203,6 +217,7 @@ const privacy: Policy = {
       blocks: [
         'Accounts and match records stay until you ask us to delete them, or until we wipe the database.',
         'What the server holds in memory goes when you disconnect, or, for the activity log, when the server restarts.',
+        'On your own device, the guest cookie and the guest match list go 30 days after you last played as that guest.',
       ],
     },
     {
@@ -210,9 +225,11 @@ const privacy: Policy = {
       title: 'Your choices',
       blocks: [
         [
-          'Play as a guest. There is no account, and nothing is kept about you beyond match records under the name you chose.',
+          'Play as a guest. There is no account, and nothing is kept about you beyond match records under the name you chose, and the cookie in your own browser.',
+          'Forget a guest on this browser: use “Forget me on this browser” on your profile page, or “Not you?” on the name screen.',
           'Change your username yourself, on your profile page.',
-          `Delete your account: email ${EMAIL} from the address you signed up with and we will remove it, along with your profile. Past match records stay in the public log under the name you played with, no longer linked to an account; say so in the same email if you want your name taken off them too.`,
+          'Add, change or remove your profile picture yourself, on your profile page.',
+          `Delete your account: email ${EMAIL} from the address you signed up with and we will remove it, along with your profile and profile picture. Past match records stay in the public log under the name you played with, no longer linked to an account; say so in the same email if you want your name taken off them too.`,
           'Clear your browser’s storage for this site to remove everything the game keeps on your device.',
         ],
       ],
@@ -297,7 +314,7 @@ const security: Policy = {
     {
       id: 'versions',
       title: 'Supported versions',
-      blocks: [`Only the latest release gets fixes — currently v${APP_VERSION}. Older versions (v1.x) don’t.`],
+      blocks: [`Only the latest release gets fixes — currently v${APP_VERSION}. Older versions don’t.`],
     },
     {
       id: 'protections',
@@ -307,6 +324,7 @@ const security: Policy = {
           'The server decides every move and every score. Your browser only shows what the server tells it.',
           'Mine positions stay on the server. They are never sent to players or spectators.',
           'Only the game server writes ratings. A database rule blocks everyone else — including you, on your own profile.',
+          'Each account can store profile pictures only in its own folder, and only as small WebP, PNG or JPEG images — never SVG, which can carry script.',
           'Passwords are handled by Supabase Auth and stored only as a hash.',
           'The server console opens only on the server machine, for listed admin accounts, or with the operator’s access token.',
         ],

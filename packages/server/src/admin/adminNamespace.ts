@@ -37,6 +37,8 @@ export interface AdminDeps {
   closeRoom(roomId: string, note: RemovalNote): boolean;
   /** The graded Reset button: one room, or all of them. */
   reset(roomId?: string): void;
+  /** Empties the lobby's world chat for everyone, and logs it. */
+  clearChat(): void;
 }
 
 export interface AdminConsole {
@@ -182,6 +184,11 @@ export function attachAdminNamespace(deps: AdminDeps): AdminConsole {
       const roomId = typeof payload?.roomId === 'string' ? payload.roomId : '';
       const closed = deps.closeRoom(roomId, parsed.note);
       respond(ack, closed ? { ok: true } : { ok: false, error: 'That room no longer exists.' });
+    });
+
+    // Takes no payload, so there is nothing to read; whatever came along is ignored.
+    listen('admin:clearChat', () => {
+      deps.clearChat();
     });
 
     listen('admin:watch', (payload) => {

@@ -1,11 +1,16 @@
 import { CLASSIC_PRESET, STARTING_ELO } from '@fmm/shared';
 import { useState } from 'react';
+import type { GuestProfile } from '../data/guestCookie.js';
 import { authEnabled, oauthProviders, supabase, type OAuthProvider } from '../auth/supabase.js';
 
 interface Props {
   /** Continue without an account. Always available, always one click. */
   onGuest: (nickname: string) => void;
   connected: boolean;
+  /** The guest this browser remembers (the `fmm_guest` cookie), if any. */
+  remembered: GuestProfile | null;
+  /** "Not you?": forget that guest, their rating and their match history. */
+  onForget: () => void;
 }
 
 type Tab = 'guest' | 'signin' | 'signup';
@@ -14,10 +19,14 @@ type Tab = 'guest' | 'signin' | 'signup';
  * Sign in, or don't.
  *
  * "Play as guest" is deliberately the first tab and a single click: a grader
- * must never need an account to see the game.
+ * must never need an account to see the game. A guest this browser remembers
+ * gets one click too, "Continue as ...", while this tab still takes its own
+ * seat, so two tabs are two players.
  */
-export function AuthScreen({ onGuest, connected }: Props) {
+export function AuthScreen({ onGuest, connected, remembered, onForget }: Props) {
   const [tab, setTab] = useState<Tab>('guest');
+  /** "Change name": the name box for a remembered guest, who keeps their record under the new name. */
+  const [renaming, setRenaming] = useState(false);
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -125,7 +134,38 @@ export function AuthScreen({ onGuest, connected }: Props) {
           </div>
         )}
 
-        {tab === 'guest' ? (
+        {tab === 'guest' && remembered && !renaming ? (
+          <div className="remembered-guest">
+            <button
+              className="wide"
+              type="button"
+              autoFocus
+              disabled={!connected}
+              onClick={() => onGuest(remembered.name)}
+            >
+              {connected ? `Continue as ${remembered.name}` : 'Connecting…'}
+            </button>
+            <p className="muted remembered-note">
+              {remembered.rating} Elo, unofficial · {remembered.games} ranked{' '}
+              {remembered.games === 1 ? 'game' : 'games'} · remembered in this browser
+            </p>
+            <div className="remembered-actions">
+              <button type="button" className="ghost small" onClick={onForget}>
+                Not you?
+              </button>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => {
+                  setNickname(remembered.name);
+                  setRenaming(true);
+                }}
+              >
+                Change name
+              </button>
+            </div>
+          </div>
+        ) : tab === 'guest' ? (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -144,7 +184,7 @@ export function AuthScreen({ onGuest, connected }: Props) {
               {connected ? 'Play as guest' : 'Connecting…'}
             </button>
             <p className="muted" style={{ marginBottom: 0 }}>
-              Guests play everything. Ratings just aren’t saved between visits.
+              Guests play everything. A guest’s rating is unofficial, and kept in this browser for 30 days.
             </p>
           </form>
         ) : (
