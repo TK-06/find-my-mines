@@ -3,6 +3,7 @@ import type { FriendInvite, OnlinePlayer, PresenceStatus, RoomSummary } from '@f
 import {
   INVITE_TTL_MS,
   MAX_INVITES,
+  PRIVATE_ROOM_TEXT,
   addInvite,
   friendRows,
   groupFriendships,
@@ -164,6 +165,19 @@ describe('friendRows — status', () => {
     );
   });
 
+  it('says a friend is in a private room without naming it', () => {
+    for (const status of ['room', 'playing', 'watching'] as const) {
+      const row = rowFor([{ ...onlineAs('ann', status, null), privateRoom: true }]);
+      expect(row.statusText).toBe(PRIVATE_ROOM_TEXT);
+      expect(row.roomId).toBeNull();
+    }
+    expect(PRIVATE_ROOM_TEXT).toBe('In a private room');
+  });
+
+  it('still colours a friend playing in a private room yellow', () => {
+    expect(rowFor([{ ...onlineAs('ann', 'playing', null), privateRoom: true }]).dot).toBe('playing');
+  });
+
   it('never mistakes a guest tab for a friend', () => {
     expect(rowFor([onlineAs(null, 'lobby')]).presence).toBe('offline');
   });
@@ -211,6 +225,16 @@ describe('friendRows — what you can do', () => {
 
   it('offers no Invite when I am not in a room myself', () => {
     expect(rowFor([onlineAs('ann', 'lobby')], [], null).action).toBeNull();
+  });
+
+  it('offers nothing for a friend in a private room — the server keeps its code back', () => {
+    // A private room's code is withheld (roomId null), so there is nothing to
+    // join or watch — and the friend is busy, so no Invite either.
+    for (const status of ['room', 'playing', 'watching'] as const) {
+      const tab = { ...onlineAs('ann', status, null), privateRoom: true };
+      expect(rowFor([tab], [], null).action).toBeNull();
+      expect(rowFor([tab], [], 'MINE').action).toBeNull();
+    }
   });
 
   it('offers nothing when we are already in the same room — joining it again would drop my seat', () => {

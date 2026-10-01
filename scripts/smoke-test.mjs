@@ -137,6 +137,17 @@ admin.on('admin:state', (state) => {
   latestAdmin = state;
 });
 
+// ── plain HTTP ──────────────────────────────────────────────────────────────
+section('http');
+
+// The page, its assets and /health sit behind a per-address rate limit, which
+// must leave normal use alone and say so in the standard headers.
+const health = await fetch(`${URL}/health`).catch(() => null);
+const healthBody = health?.ok ? await health.json().catch(() => null) : null;
+check('/health answers', healthBody?.ok === true, health ? String(health.status) : 'no response');
+check('HTTP responses carry a RateLimit header', Boolean(health?.headers.get('ratelimit')),
+  health?.headers.get('ratelimit') ?? 'missing');
+
 // ── nickname + lobby ────────────────────────────────────────────────────────
 section('nickname and lobby');
 
@@ -264,6 +275,21 @@ check('a move out of turn is rejected', (await rejection)?.code === 'NOT_YOUR_TU
 const specReject = waitFor(carol, 'error:msg', 3000).catch(() => null);
 carol.emit('game:reveal', { row: 1, col: 1 });
 check('a spectator cannot reveal', Boolean(await specReject));
+
+// A row between two rows names no cell. It used to pass the bounds check and
+// then throw inside the engine; it must be refused like any other bad move.
+const fractionalMover = byId[aliceView.state?.currentPlayerId];
+const revealedBefore = aliceView.state?.revealed.length ?? 0;
+const fractionalReject = fractionalMover
+  ? waitFor(fractionalMover, 'error:msg', 3000).catch(() => null)
+  : null;
+fractionalMover?.emit('game:reveal', { row: 2.5, col: 0 });
+const fractional = await fractionalReject;
+check('a fractional cell is refused as a bad move', fractional?.code === 'BAD_MOVE',
+  fractional ? `${fractional.code}: ${fractional.message}` : 'no error');
+await sleep(100);
+check('a refused fractional cell uncovers nothing',
+  (aliceView.state?.revealed.length ?? 0) === revealedBefore);
 
 // ── play the match to completion ────────────────────────────────────────────
 section('full match');
@@ -1281,7 +1307,7 @@ section('play vs AI');
   const overheard = [];
   outsider.on('room:message', (m) => overheard.push(m));
 
-  const badLevel = await emitAck(ann, 'ai:play', { level: 'impossible' });
+  const badLevel = await emitAck(ann, 'ai:play', { level: 'impossible', model: 'ai' });
   check('ai:play refuses a level that does not exist',
     badLevel.ok === false && Array.isArray(badLevel.errors), badLevel.errors?.[0] ?? badLevel.error ?? '');
   const noLevel = await emitAck(ann, 'ai:play', undefined);
@@ -1294,7 +1320,7 @@ section('play vs AI');
   const noteSync = () => playOrder.push('sync');
   ann.on('state:sync', noteSync);
   const played = await new Promise((resolve) =>
-    ann.timeout(5000).emit('ai:play', { level: 'medium' }, (err, result) => {
+    ann.timeout(5000).emit('ai:play', { level: 'medium', model: 'ai' }, (err, result) => {
       playOrder.push('ack');
       resolve(err ? { ok: false, error: 'no ack for ai:play' } : result);
     }),
@@ -1313,8 +1339,8 @@ section('play vs AI');
   const botId = botSeat?.id;
   check('the room seats you and a bot, and the match starts at once',
     aiState?.roomId === aiRoomId && aiState?.status === 'playing' && aiState.players.length === 2 &&
-      botSeat?.bot === 'medium' && aiState.players.some((p) => p.id === annJoin.playerId && !p.bot),
-    aiState ? `${aiState.status}, ${aiState.players.map((p) => `${p.nickname}${p.bot ? `(${p.bot})` : ''}`).join(' vs ')}` : 'no state');
+      botSeat?.bot?.level === 'medium' && botSeat.bot.model === 'ai' && aiState.players.some((p) => p.id === annJoin.playerId && !p.bot),
+    aiState ? `${aiState.status}, ${aiState.players.map((p) => `${p.nickname}${p.bot ? `(${p.bot.level}/${p.bot.model})` : ''}`).join(' vs ')}` : 'no state');
   check('an AI room is a casual Classic board with you as host',
     aiState?.origin === 'ai' && aiState.config.mode === 'casual' && aiState.rows === 6 &&
       aiState.cols === 6 && aiState.bombCount === 11 && aiState.hostId === annJoin.playerId,
@@ -1485,18 +1511,467 @@ section('play vs AI');
   for (const socket of [ann, sam, outsider]) socket.close();
 }
 
+// ── the Fruit Fly bot ───────────────────────────────────────────────────────
+section('fruit fly bot');
+
+// The experimental level: a connectome circuit picks the bot's moves. A
+// missing or broken circuit file would fall back to the solver without a
+// visible change, so the server's error log is checked too.
+{
+  const fay = await connect();
+  const fayJoin = await setName(fay, 'Fay');
+  const fayView = track(fay);
+  const errorsBefore = adminLog.filter((l) => l.kind === 'error').length;
+
+  const played = await emitAck(fay, 'ai:play', { level: 'hard', model: 'fly' });
+  await sleep(300);
+  const flyState = fayView.state;
+  const flySeat = flyState?.players.find((p) => p.bot);
+  check('ai:play {level: "hard", model: "fly"} seats you against the Fruit Fly',
+    played.ok === true && played.seat === 'player' && flyState?.status === 'playing' &&
+      JSON.stringify(flySeat?.bot) === JSON.stringify({ level: 'hard', model: 'fly' }) &&
+      flySeat.nickname === 'Fruit Fly · Hard' && flyState.roomName.endsWith('vs Fruit Fly · Hard'),
+    flyState ? `${flyState.roomName}: ${flyState.players.map((p) => `${p.nickname}${p.bot ? `(${JSON.stringify(p.bot)})` : ''}`).join(' vs ')}` : JSON.stringify(played));
+
+  let flyMoves = 0;
+  fay.on('cell:revealed', ({ cell }) => {
+    if (cell.byPlayerId === flySeat?.id) flyMoves++;
+  });
+  // Fay opens cells on her turns until the fly has moved a couple of times.
+  const attempted = new Set();
+  const deadline = Date.now() + 40_000;
+  while (flyMoves < 2 && !fayView.ended && Date.now() < deadline) {
+    const s = fayView.state;
+    if (s?.status === 'playing' && s.currentPlayerId === fayJoin.playerId) {
+      const open = new Set(s.revealed.map((c) => `${c.row}:${c.col}`));
+      let target = null;
+      for (let i = 0; i < s.rows * s.cols && !target; i++) {
+        const row = Math.floor(i / s.cols);
+        const col = i % s.cols;
+        const key = `${s.revealed.length}|${row}:${col}`;
+        if (!open.has(`${row}:${col}`) && !attempted.has(key)) target = { row, col, key };
+      }
+      if (target) {
+        attempted.add(target.key);
+        fay.emit('game:reveal', { row: target.row, col: target.col });
+      }
+    }
+    await sleep(80);
+  }
+  check('the Fruit Fly makes moves of its own', flyMoves >= 1, `${flyMoves} fly move(s)`);
+  const flyErrors = adminLog.filter((l) => l.kind === 'error').slice(errorsBefore);
+  check('…through its circuit, with no bot errors logged',
+    !flyErrors.some((l) => /computer move failed/.test(l.text)), flyErrors.map((l) => l.text).join(' | '));
+
+  fay.emit('room:leave');
+  await sleep(200);
+  fay.close();
+}
+
+// ── picking the opponent ────────────────────────────────────────────────────
+section('ai setup');
+
+// The picker's choices: which opponent, which board, and what the AI is made of.
+{
+  const gus = await connect();
+  const gusJoin = await setName(gus, 'Gus');
+  const gusView = track(gus);
+  const errorsBefore = adminLog.filter((l) => l.kind === 'error').length;
+
+  // JEV is playable only on a server with a TypeSafe key, so what is checked
+  // depends on what the server says it has.
+  const jevAbout = await emitAck(gus, 'ai:about', {});
+  const jevOn = jevAbout?.jev !== null && jevAbout?.jev !== undefined;
+  check('ai:about says whether JEV is set up: null, or {provider, model} strings',
+    jevAbout !== null && typeof jevAbout === 'object' && 'jev' in jevAbout &&
+      (jevAbout.jev === null || (typeof jevAbout.jev.provider === 'string' && typeof jevAbout.jev.model === 'string' &&
+        Object.keys(jevAbout.jev).length === 2)) &&
+      !(process.env.JEV_API_KEY && JSON.stringify(jevAbout).includes(process.env.JEV_API_KEY)),
+    JSON.stringify(jevAbout));
+  if (!jevOn) {
+    const jev = await emitAck(gus, 'ai:play', { level: 'easy', model: 'jev' });
+    check('ai:play refuses JEV when the server has no JEV key',
+      jev.ok === false && /isn't set up/i.test(jev.errors?.[0] ?? ''), JSON.stringify(jev));
+  } else {
+    const jevPlayed = await emitAck(gus, 'ai:play', { level: 'hard', model: 'jev' });
+    await sleep(300);
+    const jevState = gusView.state;
+    const jevSeat = jevState?.players.find((p) => p.bot);
+    check('ai:play {level: "hard", model: "jev"} seats you against JEV · Hard',
+      jevPlayed.ok === true && jevState?.status === 'playing' &&
+        JSON.stringify(jevSeat?.bot) === JSON.stringify({ level: 'hard', model: 'jev' }) &&
+        jevSeat.nickname === 'JEV · Hard',
+      jevState ? jevState.players.map((p) => p.nickname).join(' vs ') : JSON.stringify(jevPlayed));
+
+    let jevMoves = 0;
+    gus.on('cell:revealed', ({ cell }) => {
+      if (cell.byPlayerId === jevSeat?.id) jevMoves++;
+    });
+    const jevTried = new Set();
+    const jevUntil = Date.now() + 40_000;
+    while (jevMoves < 1 && !gusView.ended && Date.now() < jevUntil) {
+      const s = gusView.state;
+      if (s?.status === 'playing' && s.currentPlayerId === gusJoin.playerId) {
+        const open = new Set(s.revealed.map((c) => `${c.row}:${c.col}`));
+        let target = null;
+        for (let i = 0; i < s.rows * s.cols && !target; i++) {
+          const row = Math.floor(i / s.cols);
+          const col = i % s.cols;
+          const key = `${s.revealed.length}|${row}:${col}`;
+          if (!open.has(`${row}:${col}`) && !jevTried.has(key)) target = { row, col, key };
+        }
+        if (target) {
+          jevTried.add(target.key);
+          gus.emit('game:reveal', { row: target.row, col: target.col });
+        }
+      }
+      await sleep(80);
+    }
+    check('JEV makes a move, with no bot errors logged',
+      jevMoves >= 1 && !adminLog.filter((l) => l.kind === 'error').slice(errorsBefore).some((l) => /computer move failed/.test(l.text)),
+      `${jevMoves} move(s)`);
+  }
+  const oddSize = await emitAck(gus, 'ai:play', { level: 'easy', model: 'ai', size: 7 });
+  check('ai:play refuses a board size that is not offered',
+    oddSize.ok === false && Array.isArray(oddSize.errors), JSON.stringify(oddSize));
+  const oddDensity = await emitAck(gus, 'ai:play', { level: 'easy', model: 'ai', density: 'extreme' });
+  check('ai:play refuses a mine density that is not offered',
+    oddDensity.ok === false && Array.isArray(oddDensity.errors), JSON.stringify(oddDensity));
+
+  const big = await emitAck(gus, 'ai:play', { level: 'easy', model: 'ai', size: 10, density: 'heavy' });
+  await sleep(300);
+  const bigState = gusView.state;
+  check('ai:play builds the board you picked: 10×10 with heavy mines',
+    big.ok === true && bigState?.rows === 10 && bigState.cols === 10 && bigState.bombCount === 40,
+    bigState ? `${bigState.rows}x${bigState.cols}, ${bigState.bombCount} mines` : JSON.stringify(big));
+
+  const easyFly = await emitAck(gus, 'ai:play', { level: 'easy', model: 'fly' });
+  await sleep(300);
+  const easyState = gusView.state;
+  const easySeat = easyState?.players.find((p) => p.bot);
+  check('ai:play {level: "easy", model: "fly"} seats you against Fruit Fly · Easy',
+    easyFly.ok === true && easySeat?.nickname === 'Fruit Fly · Easy' &&
+      JSON.stringify(easySeat.bot) === JSON.stringify({ level: 'easy', model: 'fly' }),
+    easyState ? easyState.players.map((p) => p.nickname).join(' vs ') : JSON.stringify(easyFly));
+
+  let easyMoves = 0;
+  gus.on('cell:revealed', ({ cell }) => {
+    if (cell.byPlayerId === easySeat?.id) easyMoves++;
+  });
+  const tried = new Set();
+  const until = Date.now() + 40_000;
+  while (easyMoves < 1 && !gusView.ended && Date.now() < until) {
+    const s = gusView.state;
+    if (s?.status === 'playing' && s.currentPlayerId === gusJoin.playerId) {
+      const open = new Set(s.revealed.map((c) => `${c.row}:${c.col}`));
+      let target = null;
+      for (let i = 0; i < s.rows * s.cols && !target; i++) {
+        const row = Math.floor(i / s.cols);
+        const col = i % s.cols;
+        const key = `${s.revealed.length}|${row}:${col}`;
+        if (!open.has(`${row}:${col}`) && !tried.has(key)) target = { row, col, key };
+      }
+      if (target) {
+        tried.add(target.key);
+        gus.emit('game:reveal', { row: target.row, col: target.col });
+      }
+    }
+    await sleep(80);
+  }
+  check('the Fruit Fly on Easy makes a move, with no bot errors logged',
+    easyMoves >= 1 && !adminLog.filter((l) => l.kind === 'error').slice(errorsBefore).some((l) => /computer move failed/.test(l.text)),
+    `${easyMoves} move(s)`);
+
+  const about = await emitAck(gus, 'ai:about', {});
+  check('ai:about says whether a language model is behind the AI, never the key',
+    about !== null && typeof about === 'object' &&
+      (about.llm === null || (typeof about.llm.provider === 'string' && typeof about.llm.model === 'string')) &&
+      !JSON.stringify(about).includes('gsk_') && 'jev' in about,
+    JSON.stringify(about));
+
+  gus.emit('room:leave');
+  await sleep(200);
+  gus.close();
+}
+
+// ── private rooms and joining by code ───────────────────────────────────────
+section('private rooms');
+
+// A private room is left out of the players' game list and its code out of
+// the online list; the console still lists it, and the code gets anyone in.
+{
+  const priya = await connect();
+  const priyaJoin = await setName(priya, 'Priya');
+  const priyaView = track(priya);
+  const quinn = await connect();
+  const quinnJoin = await setName(quinn, 'Quinn');
+  const quinnLobby = trackLobby(quinn);
+  const remy = await connect();
+  const remyJoin = await setName(remy, 'Remy');
+
+  const SECRET = { rows: 5, cols: 5, mineCount: 4, maxPlayers: 3, mode: 'casual', private: true };
+  const made = await emitAck(priya, 'room:create', { name: 'Secret', config: SECRET });
+  const code = made.roomId;
+  await sleep(250);
+  check('a Custom room can be made private',
+    made.ok === true && priyaView.state?.roomId === code && priyaView.state.config.private === true,
+    JSON.stringify(priyaView.state?.config ?? made));
+  check('a private room is left out of other players’ game list',
+    Boolean(quinnLobby.latest) && !quinnLobby.latest.rooms.some((r) => r.id === code),
+    (quinnLobby.latest?.rooms ?? []).map((r) => r.id).join(', '));
+  check('the server console still lists the private room',
+    latestAdmin?.rooms.some((r) => r.id === code && r.config.private === true) === true);
+  check('the console still sees which room its members are in',
+    latestAdmin?.clients.some((c) => c.id === priyaJoin.playerId && c.roomId === code) === true);
+
+  const priyaRow = (quinnLobby.latest?.online ?? []).find((p) => p.id === priyaJoin.playerId);
+  check('the online list says “in a private room” without the code',
+    priyaRow?.privateRoom === true && priyaRow.roomId === null && priyaRow.status === 'room',
+    JSON.stringify(priyaRow));
+
+  // Looking a room up by its code: what a share link or typed code needs to
+  // choose between joining and asking the host.
+  const looked = await emitAck(quinn, 'room:lookup', { roomId: code.toLowerCase() });
+  check('room:lookup finds a private room by its code, in any case',
+    looked.ok === true && looked.room?.id === code && looked.room.config.private === true,
+    JSON.stringify(looked));
+  const unknown = await emitAck(quinn, 'room:lookup', { roomId: 'ZZZZ' });
+  check('room:lookup says when a code leads nowhere',
+    unknown.ok === false && /no longer exists/i.test(unknown.error ?? ''), JSON.stringify(unknown));
+  const lookupGarbage = await emitAck(quinn, 'room:lookup', { roomId: { $gt: '' } });
+  check('room:lookup with a garbage code is refused cleanly',
+    lookupGarbage.ok === false && !String(lookupGarbage.error ?? '').startsWith('no ack'),
+    JSON.stringify(lookupGarbage));
+
+  const joined = await emitAck(quinn, 'room:join', { roomId: code.toLowerCase() });
+  check('joining a private room by its code works',
+    joined.ok === true && joined.seat === 'player' && joined.roomId === code, JSON.stringify(joined));
+  const watching = await emitAck(remy, 'room:spectate', { roomId: code });
+  check('watching a private room by its code works',
+    watching.ok === true && watching.seat === 'spectator', JSON.stringify(watching));
+
+  await sleep(250);
+  const rows = quinnLobby.latest?.online ?? [];
+  const members = [priyaJoin, quinnJoin, remyJoin].map((j) => rows.find((p) => p.id === j.playerId));
+  check('every member, players and spectators, shows as in a private room',
+    members.every((p) => p?.privateRoom === true && p.roomId === null),
+    members.map((p) => `${p?.nickname}:${p?.privateRoom}:${p?.roomId}`).join(', '));
+  check('a spectator in a private room still shows as watching',
+    members[2]?.status === 'watching', members[2]?.status);
+  check('no online row anywhere carries the private code', !rows.some((p) => p.roomId === code));
+  check('the room stays out of the game list once people are in it',
+    !(quinnLobby.latest?.rooms ?? []).some((r) => r.id === code));
+
+  // Private and ask-to-join together: the code finds it, the host still decides.
+  const asking = await emitAck(priya, 'room:create', {
+    name: 'Secret, ask first',
+    config: { ...SECRET, joinByRequest: true },
+  });
+  for (const socket of [quinn, remy]) socket.emit('room:leave');
+  await sleep(250);
+  const askLook = await emitAck(quinn, 'room:lookup', { roomId: asking.roomId });
+  check('room:lookup shows a private room asks to join, so the client asks',
+    askLook.ok === true && askLook.room?.config.joinByRequest === true && askLook.room.config.private === true,
+    JSON.stringify(askLook.room?.config ?? askLook));
+  const askDirect = await emitAck(quinn, 'room:join', { roomId: asking.roomId });
+  check('a private ask-to-join room still refuses a direct join', askDirect.ok === false,
+    askDirect.errors?.[0] ?? '');
+  const asked = await emitAck(quinn, 'room:requestJoin', { roomId: asking.roomId });
+  await sleep(200);
+  check('asking to join a private room by its code reaches the host',
+    asked.ok === true && priyaView.state?.joinRequests?.some((r) => r.id === quinnJoin.playerId) === true,
+    asked.error ?? JSON.stringify(priyaView.state?.joinRequests));
+  quinn.emit('room:cancelRequest');
+
+  // Classic keeps the original rules: always listed, whatever the client asked.
+  const classicPrivate = await emitAck(priya, 'room:create', {
+    name: 'Classic, asked private',
+    config: { ...CLASSIC, private: true },
+  });
+  await sleep(250);
+  check('a Classic room is never private — it comes back listed',
+    classicPrivate.ok === true && priyaView.state?.config.private !== true &&
+      (quinnLobby.latest?.rooms ?? []).some((r) => r.id === classicPrivate.roomId),
+    JSON.stringify(priyaView.state?.config));
+
+  // Only a literal true hides a room; anything else is a listed room, not a crash.
+  const garbage = [];
+  for (const value of ['yes', 1, {}, null, [true]]) {
+    const r = await emitAck(priya, 'room:create', {
+      name: 'Garbage private',
+      config: { ...SECRET, private: value },
+    });
+    await sleep(150);
+    garbage.push({
+      value: JSON.stringify(value),
+      ok: r.ok === true && (quinnLobby.latest?.rooms ?? []).some((room) => room.id === r.roomId),
+    });
+  }
+  check('a garbage private value makes a listed room, never an error',
+    garbage.every((g) => g.ok), garbage.map((g) => `${g.value}:${g.ok}`).join(', '));
+
+  // Games against the computer are Classic-shaped and never private.
+  const vsBot = await emitAck(priya, 'ai:play', { level: 'easy', model: 'ai' });
+  await sleep(250);
+  check('a game against the computer is never private',
+    vsBot.ok === true && (quinnLobby.latest?.rooms ?? []).some((r) => r.id === vsBot.roomId),
+    JSON.stringify(vsBot));
+
+  for (const socket of [priya, quinn, remy]) socket.close();
+  await sleep(200);
+}
+
+// ── world chat and invite cards ─────────────────────────────────────────────
+section('world chat');
+
+// The lobby's chat: any named client, kept in server memory for newcomers,
+// rate-limited per connection. Invite cards advertise a room with a Join
+// button; the admin console can empty it for everyone.
+{
+  /** The next `event` on `socket` that `match` accepts, or null on timeout. */
+  const waitForWhere = (socket, event, match, timeoutMs = 3000) =>
+    new Promise((resolve) => {
+      const onEvent = (payload) => {
+        if (!match(payload)) return;
+        clearTimeout(timer);
+        socket.off(event, onEvent);
+        resolve(payload);
+      };
+      const timer = setTimeout(() => {
+        socket.off(event, onEvent);
+        resolve(null);
+      }, timeoutMs);
+      socket.on(event, onEvent);
+    });
+
+  const wes = await connect();
+  const wesJoin = await setName(wes, 'Wes');
+  const xia = await connect();
+  const xiaJoin = await setName(xia, 'Xia');
+
+  const xiaHeard = waitForWhere(xia, 'lobby:message', (m) => m?.fromId === wesJoin.playerId);
+  const said = await emitAck(wes, 'lobby:say', { text: '  hello \n  world  ' });
+  const heard = await xiaHeard;
+  check('a world-chat line reaches another client, cleaned',
+    said.ok === true && heard?.text === 'hello world' && heard.fromName === 'Wes' &&
+      heard.kind === 'player' && heard.isGuest === true && typeof heard.id === 'string',
+    JSON.stringify(heard ?? said));
+
+  const nameless = await connect();
+  const namelessSay = await emitAck(nameless, 'lobby:say', { text: 'hi' });
+  check('a client with no name cannot talk in the world chat',
+    namelessSay.ok === false && !String(namelessSay.error ?? '').startsWith('no ack'),
+    JSON.stringify(namelessSay));
+  const blank = await emitAck(xia, 'lobby:say', { text: ' \n\t ' });
+  check('an empty world-chat line is refused', blank.ok === false, JSON.stringify(blank));
+
+  // A newcomer is sent the chat so far, right after picking a name.
+  const zed = await connect();
+  const zedHistory = waitFor(zed, 'lobby:history', 3000).catch(() => null);
+  await setName(zed, 'Zed');
+  const history = await zedHistory;
+  check('a newcomer gets the world chat so far',
+    Array.isArray(history) && history.some((m) => m.text === 'hello world' && m.fromId === wesJoin.playerId),
+    Array.isArray(history) ? `${history.length} line(s)` : 'no lobby:history');
+
+  // Wes has sent one line; four more fit in the window, the sixth does not.
+  const burst = [];
+  for (let i = 1; i <= 5; i++) burst.push(await emitAck(wes, 'lobby:say', { text: `line ${i}` }));
+  check('the sixth world-chat line inside ten seconds is refused',
+    burst.slice(0, 4).every((r) => r.ok === true) && burst[4].ok === false && /slow down/i.test(burst[4].error ?? ''),
+    burst.map((r) => (r.ok ? 'ok' : r.error)).join(' | '));
+
+  // Invite cards.
+  const outside = await emitAck(xia, 'lobby:invite', {});
+  check('an invite from outside a room is refused',
+    outside.ok === false && /room/i.test(outside.error ?? ''), JSON.stringify(outside));
+
+  const FRIDAY = { rows: 6, cols: 6, mineCount: 8, maxPlayers: 4, mode: 'casual' };
+  const friday = await emitAck(xia, 'room:create', { name: 'Friday night', config: FRIDAY });
+  const zedCard = waitForWhere(zed, 'lobby:message', (m) => m?.kind === 'invite' && m.fromId === xiaJoin.playerId);
+  const posted = await emitAck(xia, 'lobby:invite', {});
+  const card = await zedCard;
+  check('an invite from a seated player arrives with the right room',
+    friday.ok === true && posted.ok === true &&
+      card?.text === 'Xia invited everyone to Friday night' &&
+      card.invite?.roomId === friday.roomId && card.invite.roomName === 'Friday night' &&
+      card.invite.rows === 6 && card.invite.cols === 6 && card.invite.mineCount === 8 &&
+      card.invite.playerCount === 1 && card.invite.maxPlayers === 4 &&
+      card.invite.mode === 'casual' && card.invite.joinByRequest === false && card.invite.private === undefined,
+    JSON.stringify(card ?? posted));
+
+  const again = await emitAck(xia, 'lobby:invite', {});
+  check('a second invite inside 30 seconds is refused',
+    again.ok === false && /try again/i.test(again.error ?? ''), JSON.stringify(again));
+
+  const watching = await emitAck(zed, 'room:spectate', { roomId: friday.roomId });
+  const fromSpectator = await emitAck(zed, 'lobby:invite', {});
+  check('a spectator cannot post an invite',
+    watching.ok === true && fromSpectator.ok === false && /players/i.test(fromSpectator.error ?? ''),
+    JSON.stringify(fromSpectator));
+  zed.emit('room:leave');
+  await sleep(150);
+
+  // A private room's code goes public only on its host's say-so.
+  const HIDEOUT = { rows: 5, cols: 5, mineCount: 4, maxPlayers: 3, mode: 'casual', private: true };
+  const hideout = await emitAck(wes, 'room:create', { name: 'Hideout', config: HIDEOUT });
+  const zedIn = await emitAck(zed, 'room:join', { roomId: hideout.roomId });
+  const nonHost = await emitAck(zed, 'lobby:invite', {});
+  check("a private room's non-host cannot post its invite",
+    hideout.ok === true && zedIn.ok === true && nonHost.ok === false && /host/i.test(nonHost.error ?? ''),
+    JSON.stringify(nonHost));
+  const xiaSecret = waitForWhere(xia, 'lobby:message', (m) => m?.kind === 'invite' && m.fromId === wesJoin.playerId);
+  const hostPosts = await emitAck(wes, 'lobby:invite', {});
+  const secretCard = await xiaSecret;
+  check("a private room's host may post it, and the card says it is private",
+    hostPosts.ok === true && secretCard?.invite?.roomId === hideout.roomId && secretCard.invite.private === true,
+    JSON.stringify(secretCard ?? hostPosts));
+
+  // A full room has nothing to offer anyone reading the card.
+  const yan = await connect();
+  await setName(yan, 'Yan');
+  const pair = await emitAck(yan, 'room:create', { name: 'Pair', config: CLASSIC });
+  const xiaIn = await emitAck(xia, 'room:join', { roomId: pair.roomId });
+  const whenFull = await emitAck(yan, 'lobby:invite', {});
+  check('a full room cannot be advertised',
+    pair.ok === true && xiaIn.ok === true && whenFull.ok === false && /full/i.test(whenFull.error ?? ''),
+    JSON.stringify(whenFull));
+
+  // The console empties it for everyone, and says so in its log.
+  const wesCleared = waitFor(wes, 'lobby:cleared', 3000).then(() => true, () => false);
+  const zedCleared = waitFor(zed, 'lobby:cleared', 3000).then(() => true, () => false);
+  admin.emit('admin:clearChat');
+  const cleared = await Promise.all([wesCleared, zedCleared]);
+  const late = await connect();
+  const lateHistory = waitFor(late, 'lobby:history', 3000).catch(() => null);
+  await setName(late, 'Late');
+  const afterClear = await lateHistory;
+  // Only this section's own lines are checked: on a shared server someone else
+  // may say something between the clear and the newcomer's arrival.
+  const ours = new Set([wesJoin.playerId, xiaJoin.playerId]);
+  check('admin clearChat empties the world chat for everyone',
+    cleared.every(Boolean) && Array.isArray(afterClear) && !afterClear.some((m) => ours.has(m?.fromId)),
+    `cleared: ${cleared.join(', ')}; newcomer sees ${Array.isArray(afterClear) ? afterClear.length : 'nothing'}`);
+  await sleep(100);
+  check('clearing the world chat is logged under moderation',
+    adminLog.some((l) => l.kind === 'moderation' && /world chat/i.test(l.text)));
+
+  for (const socket of [wes, xia, zed, yan, nameless, late]) socket.close();
+  await sleep(200);
+}
+
 // ── malformed messages never take the server down ───────────────────────────
 section('malformed messages');
 
 // Anyone on the network can send anything. Each event gets missing, wrong-type
 // and hostile payloads, plus a non-function where an acknowledgement goes.
 const CLIENT_EVENTS = [
-  'player:join', 'room:create', 'room:join', 'room:spectate', 'room:leave',
+  'player:join', 'room:create', 'room:join', 'room:spectate', 'room:lookup', 'room:leave',
   'room:requestJoin', 'room:cancelRequest', 'room:answerRequest', 'room:kick',
-  'friend:invite', 'ai:play', 'ai:hint', 'room:say',
+  'friend:invite', 'ai:play', 'ai:about', 'ai:hint', 'room:say', 'lobby:say', 'lobby:invite',
   'queue:join', 'queue:leave', 'game:start', 'game:reveal', 'game:rematch',
 ];
-const ADMIN_EVENTS = ['admin:kick', 'admin:ban', 'admin:closeRoom', 'admin:watch', 'admin:mines'];
+const ADMIN_EVENTS = ['admin:kick', 'admin:ban', 'admin:closeRoom', 'admin:watch', 'admin:mines', 'admin:clearChat'];
 const BAD_ARGS = [
   [], [undefined], [null], [42], ['text'], [[]], [{}],
   [{ roomId: {}, nickname: {}, name: [], config: 'x', mode: 7, row: 'a', col: null, targetId: [], note: 'x', level: {}, text: [] }],

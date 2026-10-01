@@ -1,5 +1,5 @@
 import type { ModerationResult, RemovalNote } from '@fmm/shared';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ReasonDialog } from '../components/ReasonDialog.js';
 import { GameViewer } from './GameViewer.js';
 import { TerminalPanel } from './TerminalPanel.js';
@@ -207,6 +207,7 @@ export function AdminConsole() {
           <button className="danger" disabled={!connected} onClick={() => admin.reset()}>
             Reset all games &amp; scores
           </button>
+          <ClearWorldChat connected={connected} onClear={admin.clearChat} />
         </div>
       </div>
 
@@ -229,6 +230,86 @@ export function AdminConsole() {
           onClose={() => setPending(null)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Empties the lobby's world chat for everyone. It cannot be undone — the chat
+ * lives only in server memory — so the button first asks, right where it is,
+ * instead of in a browser popup.
+ */
+function ClearWorldChat({ connected, onClear }: { connected: boolean; onClear: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [done, setDone] = useState(false);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const asked = useRef(false);
+
+  // Focus follows the question: onto its answer when it opens, back to the
+  // button when it closes, so a keyboard user is never dropped at the page top.
+  useEffect(() => {
+    if (confirming) {
+      asked.current = true;
+      confirmRef.current?.focus();
+    } else if (asked.current) {
+      asked.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [confirming]);
+
+  // "Cleared." says so for a moment, then goes.
+  useEffect(() => {
+    if (!done) return;
+    const timer = setTimeout(() => setDone(false), 3000);
+    return () => clearTimeout(timer);
+  }, [done]);
+
+  return (
+    <div className="clear-chat">
+      <p className="muted">
+        World chat keeps its last lines in server memory only. Clearing it empties the lobby chat
+        for everyone.
+      </p>
+      {confirming ? (
+        <div
+          className="clear-chat-confirm"
+          role="group"
+          aria-label="Clear the world chat?"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setConfirming(false);
+          }}
+        >
+          <span>Clear the world chat for everyone?</span>
+          <button
+            ref={confirmRef}
+            className="danger"
+            disabled={!connected}
+            onClick={() => {
+              onClear();
+              setConfirming(false);
+              setDone(true);
+            }}
+          >
+            Clear it
+          </button>
+          <button className="ghost" onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          ref={triggerRef}
+          className="ghost"
+          disabled={!connected}
+          onClick={() => setConfirming(true)}
+        >
+          Clear world chat
+        </button>
+      )}
+      <span className="clear-chat-note" role="status">
+        {done ? 'World chat cleared.' : ''}
+      </span>
     </div>
   );
 }

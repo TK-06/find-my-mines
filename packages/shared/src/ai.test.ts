@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AI_BOARD_SIZES,
+  AI_DENSITIES,
   AI_LEVELS,
+  AI_MODELS,
+  aiBoard,
+  botNickname,
   cellLabel,
   describeHint,
   hintFor,
+  isAiBoardSize,
+  isAiDensity,
   isAiLevel,
+  isAiModel,
   planMove,
   thinkDelayMs,
   type CellRef,
@@ -12,6 +20,7 @@ import {
 } from './ai.js';
 import { createRng, type Rng } from './engine/rng.js';
 import type { ProbabilityGrid } from './engine/solver.js';
+import { validateRoomConfig } from './rooms.js';
 import type { AiLevel } from './types.js';
 
 const at = (grid: ProbabilityGrid, cell: CellRef): number | null => grid[cell.row]![cell.col]!;
@@ -249,7 +258,52 @@ describe('level helpers', () => {
   });
 
   it('accepts only the three levels', () => {
+    expect(AI_LEVELS).toEqual(['easy', 'medium', 'hard']);
     for (const level of AI_LEVELS) expect(isAiLevel(level)).toBe(true);
-    for (const value of ['Hard', 'expert', '', null, 2, undefined]) expect(isAiLevel(value)).toBe(false);
+    for (const value of ['Hard', 'fly', 'expert', '', null, 2, undefined]) expect(isAiLevel(value)).toBe(false);
+  });
+
+  it('knows the three opponents', () => {
+    expect(AI_MODELS).toEqual(['ai', 'fly', 'jev']);
+    for (const model of AI_MODELS) expect(isAiModel(model)).toBe(true);
+    for (const value of ['AI', 'Fly', 'JEV', 'gpt', '', null, 1, undefined]) expect(isAiModel(value)).toBe(false);
+  });
+
+  it('names the bot by opponent and level', () => {
+    expect(botNickname({ level: 'easy', model: 'ai' })).toBe('AI · Easy');
+    expect(botNickname({ level: 'hard', model: 'ai' })).toBe('AI · Hard');
+    expect(botNickname({ level: 'medium', model: 'fly' })).toBe('Fruit Fly · Medium');
+    expect(botNickname({ level: 'hard', model: 'jev' })).toBe('JEV · Hard');
+  });
+});
+
+describe('aiBoard', () => {
+  it('gives the Classic board for the Classic size and density', () => {
+    expect(aiBoard(6, 'classic')).toEqual({ rows: 6, cols: 6, mineCount: 11 });
+  });
+
+  it('scales the mines with the density', () => {
+    expect(aiBoard(10, 'light').mineCount).toBe(20);
+    expect(aiBoard(10, 'classic').mineCount).toBe(31);
+    expect(aiBoard(10, 'heavy').mineCount).toBe(40);
+    expect(aiBoard(16, 'heavy').mineCount).toBe(102);
+  });
+
+  it('makes a valid room for every size and density on offer', () => {
+    for (const size of AI_BOARD_SIZES) {
+      for (const density of AI_DENSITIES) {
+        const board = aiBoard(size, density);
+        expect(board.mineCount).toBeGreaterThanOrEqual(1);
+        expect(board.mineCount).toBeLessThan(size * size);
+        expect(validateRoomConfig({ ...board, maxPlayers: 2, mode: 'casual' })).toEqual([]);
+      }
+    }
+  });
+
+  it('accepts only the sizes and densities on offer', () => {
+    for (const size of AI_BOARD_SIZES) expect(isAiBoardSize(size)).toBe(true);
+    for (const value of [4, 7, 17, '6', 6.5, null, undefined]) expect(isAiBoardSize(value)).toBe(false);
+    for (const density of AI_DENSITIES) expect(isAiDensity(density)).toBe(true);
+    for (const value of ['Classic', 'dense', '', 0.3, null]) expect(isAiDensity(value)).toBe(false);
   });
 });

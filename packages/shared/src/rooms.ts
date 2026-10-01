@@ -5,7 +5,7 @@ import {
   MIN_GRID,
   MIN_PLAYERS_TO_START,
 } from './config.js';
-import type { RoomConfig } from './types.js';
+import type { RoomConfig, RoomSummary } from './types.js';
 
 export type ConfigError = string;
 
@@ -74,7 +74,20 @@ export function coerceRoomConfig(input: Partial<RoomConfig> | undefined): RoomCo
   };
   // Classic keeps the assignment's rules: anyone joins directly.
   if (isClassicConfig(config)) config.joinByRequest = false;
+  // Only a literal true hides a room, and never a Classic one — a grader must
+  // find it in the game list. A listed room carries no flag at all, so a
+  // Classic config stays exactly the shape it has always been.
+  if (input?.private === true && !isClassicConfig(config)) config.private = true;
   return config;
+}
+
+/**
+ * The rooms players see in the game list: every room except private ones,
+ * which people reach with the room code or a share link. The server console
+ * still lists them all.
+ */
+export function listedRooms(rooms: RoomSummary[]): RoomSummary[] {
+  return rooms.filter((room) => room.config.private !== true);
 }
 
 /**
@@ -116,15 +129,35 @@ export function isRoomFull(config: RoomConfig, playerCount: number): boolean {
   return config.maxPlayers !== null && playerCount >= config.maxPlayers;
 }
 
+/** How many characters a room code has. */
+export const ROOM_CODE_LENGTH = 4;
+
 /** Short, unambiguous room code. Excludes easily-confused characters. */
 export function generateRoomId(exists: (id: string) => boolean): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (let attempt = 0; attempt < 1000; attempt++) {
     let id = '';
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
       id += alphabet[Math.floor(Math.random() * alphabet.length)];
     }
     if (!exists(id)) return id;
   }
   throw new Error('Could not allocate a room id');
+}
+
+const CODE = new RegExp(`^[A-Z0-9]{${ROOM_CODE_LENGTH}}$`);
+const LINK_CODE = /\/join\/([^/?#]*)\/?$/i;
+
+/**
+ * A room code as someone typed or pasted it — "abcd", " AB CD ", or a whole
+ * share link ending in /join/abcd — in the capitals the server uses, or null
+ * when it cannot be a code. Letters the server never hands out (I, O, 0, 1)
+ * still pass: a code that does not exist gets the server's own answer.
+ */
+export function parseRoomCode(input: unknown): string | null {
+  if (typeof input !== 'string') return null;
+  const text = input.trim();
+  const fromLink = LINK_CODE.exec(text)?.[1];
+  const code = (fromLink ?? text).replace(/\s+/g, '').toUpperCase();
+  return CODE.test(code) ? code : null;
 }

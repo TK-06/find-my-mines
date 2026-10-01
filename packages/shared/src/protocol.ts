@@ -1,10 +1,14 @@
 import type {
   AdminRoomView,
   AdminState,
+  AiAbout,
+  AiDensity,
   AiHintResult,
   AiLevel,
+  AiModel,
   ChatMessage,
   ForfeitNotice,
+  LobbyMessage,
   FriendInvite,
   JoinRequestOutcome,
   LogLine,
@@ -53,6 +57,14 @@ export interface RoomActionResult {
   errors?: string[];
 }
 
+export interface RoomLookupResult {
+  ok: boolean;
+  /** The room as the game list would show it. Set when ok. */
+  room?: RoomSummary;
+  /** Why not — usually that the room no longer exists. */
+  error?: string;
+}
+
 export interface ClientToServerEvents {
   /** Set a nickname. Sent once, before the lobby is shown. */
   'player:join': (payload: { nickname: string }, ack: (result: JoinResult) => void) => void;
@@ -63,6 +75,12 @@ export interface ClientToServerEvents {
   ) => void;
   'room:join': (payload: { roomId: string }, ack: (result: RoomActionResult) => void) => void;
   'room:spectate': (payload: { roomId: string }, ack: (result: RoomActionResult) => void) => void;
+  /**
+   * One room's summary, by its code — private rooms included, since the code
+   * is what lets you in. A join link or "Join by code" needs it to tell an
+   * ask-to-join room (open the request dialog) from an open one.
+   */
+  'room:lookup': (payload: { roomId: string }, ack: (result: RoomLookupResult) => void) => void;
   'room:leave': () => void;
 
   /**
@@ -100,15 +118,31 @@ export interface ClientToServerEvents {
   ) => void;
 
   /**
-   * Start a game against a computer opponent: a new Classic-sized casual room
-   * with you and the bot seated, started at once. Never rated.
+   * Start a game against a computer opponent: a new casual room with you and
+   * the bot seated, started at once. Never rated. The board is chosen by name
+   * (a size from AI_BOARD_SIZES and a density) and the server works out the
+   * numbers; both default to the Classic 6×6 with 11 mines. A model that is
+   * not playable yet (JEV) is refused.
    */
-  'ai:play': (payload: { level: AiLevel }, ack: (result: RoomActionResult) => void) => void;
+  'ai:play': (
+    payload: { level: AiLevel; model: AiModel; size?: number; density?: AiDensity },
+    ack: (result: RoomActionResult) => void,
+  ) => void;
+  /** Which language model the "AI" opponent uses here, for the lobby's info popup. */
+  'ai:about': (payload: Record<string, never>, ack: (result: AiAbout) => void) => void;
   /**
    * In a game against the computer, on your turn: which covered cell is most
    * likely a mine, and why. A few per match.
    */
   'ai:hint': (payload: Record<string, never>, ack: (result: AiHintResult) => void) => void;
+
+  /** Say something in the lobby's world chat. Anyone who has picked a name. */
+  'lobby:say': (payload: { text: string }, ack: (result: ModerationResult) => void) => void;
+  /**
+   * Post an invite card for the room you are in to the world chat. The card
+   * carries a Join button; joining follows the room's normal rules.
+   */
+  'lobby:invite': (payload: Record<string, never>, ack: (result: ModerationResult) => void) => void;
 
   /** Say something in your room's chat. Players and spectators alike. */
   'room:say': (payload: { text: string }, ack: (result: ModerationResult) => void) => void;
@@ -184,6 +218,13 @@ export interface ServerToClientEvents {
   /** A line in your room's chat, from a player or the computer opponent. */
   'room:message': (message: ChatMessage) => void;
 
+  /** The world chat so far, sent once after you pick a name. Oldest first. */
+  'lobby:history': (messages: LobbyMessage[]) => void;
+  /** A new world-chat line or invite card. */
+  'lobby:message': (message: LobbyMessage) => void;
+  /** An admin cleared the world chat. */
+  'lobby:cleared': () => void;
+
   'error:msg': (payload: { code: string; message: string }) => void;
 }
 
@@ -216,6 +257,8 @@ export interface AdminToServerEvents {
   'admin:watch': (payload: { roomId: string | null }) => void;
   /** The mine toggle for the watched room. */
   'admin:mines': (payload: { show: boolean }) => void;
+  /** Empties the lobby's world chat for everyone. */
+  'admin:clearChat': () => void;
 }
 
 export interface ServerToAdminEvents {

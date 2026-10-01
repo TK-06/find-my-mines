@@ -46,3 +46,16 @@ export const GROQ_API_KEY = process.env.GROQ_API_KEY ?? '';
 
 /** Which Groq model advises the bot. See `npm run ai:eval` for how they compare. */
 export const AI_MODEL = process.env.AI_MODEL?.trim() || 'openai/gpt-oss-20b';
+
+/**
+ * Play vs JEV, TypeSafe AI's model. It chooses among the solver's candidates
+ * (see ai/jev.ts). Only with a key can JEV be played at all: without one the
+ * server refuses it and the lobby shows it as unavailable.
+ *
+ * A SECRET like GROQ_API_KEY: server-only, never logged, never sent to a
+ * client, never given a VITE_ prefix.
+ */
+export const JEV_API_KEY = process.env.JEV_API_KEY ?? '';
+
+/** Which JEV model to ask. */
+export const JEV_MODEL = process.env.JEV_MODEL?.trim() || 'jev-latest';

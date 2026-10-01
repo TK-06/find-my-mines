@@ -38,8 +38,21 @@ function grid<T>(rows: number, cols: number, fill: T): T[][] {
   return Array.from({ length: rows }, () => Array.from({ length: cols }, () => fill));
 }
 
+/**
+ * True for a real cell of the grid. Coordinates come straight off the wire, so
+ * a row like 2.5 is possible: it passes a plain range check yet names no row,
+ * and indexing the grid with it throws. Whole numbers only (which also rules
+ * out NaN and the infinities).
+ */
 export function inBounds(board: Pick<Board, 'rows' | 'cols'>, row: number, col: number): boolean {
-  return row >= 0 && row < board.rows && col >= 0 && col < board.cols;
+  return (
+    Number.isInteger(row) &&
+    Number.isInteger(col) &&
+    row >= 0 &&
+    row < board.rows &&
+    col >= 0 &&
+    col < board.cols
+  );
 }
 
 /**

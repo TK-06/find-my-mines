@@ -3,22 +3,31 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { Server, type Namespace, type Socket } from 'socket.io';
 import {
   ADMIN_NAMESPACE,
+  AI_DEFAULT_DENSITY,
+  AI_DEFAULT_SIZE,
   CLASSIC_PRESET,
   RECONNECT_GRACE_SECONDS,
+  aiBoard,
   botNickname,
   cleanChatText,
   describeHint,
   describeReasons,
   hintFor,
+  isAiBoardSize,
+  isAiDensity,
   isAiLevel,
+  isAiModel,
+  listedRooms,
   mineProbabilities,
   parseRemovalNote,
   presenceOf,
   type AdminState,
   type AdminToServerEvents,
+  type BotSetup,
   type ChatMessage,
   type ClientToServerEvents,
   type FriendInvite,
@@ -38,9 +47,10 @@ import {
 import { attachAdminNamespace } from './admin/adminNamespace.js';
 import { ActivityLog } from './admin/activityLog.js';
 import { createAdvisor } from './ai/advisor.js';
+import { createJevPicker } from './ai/jev.js';
 import { BotController } from './ai/botController.js';
 import { contain, respond, settleWithin } from './safety.js';
-import { ADVERTISED_HOST, AI_MODEL, CORS_ORIGIN, GROQ_API_KEY, HOST, PORT } from './config.js';
+import { ADVERTISED_HOST, AI_MODEL, CORS_ORIGIN, GROQ_API_KEY, HOST, JEV_API_KEY, JEV_MODEL, PORT } from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
 import { areFriends, guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
@@ -48,6 +58,7 @@ import type { FinishedMatch, MatchBroadcaster, MatchManager } from './match/matc
 import { RoomManager } from './rooms/roomManager.js';
 import { ChatLimit } from './state/chatLimit.js';
 import { InviteLimit } from './state/inviteLimit.js';
+import { LobbyChat, inviteLine, inviteRefusal, lobbyInviteLimit, playerLine } from './state/lobbyChat.js';
 import { ClientRegistry } from './state/registry.js';
 import { isSamePlayer } from './state/seatHold.js';
 
@@ -172,10 +183,21 @@ const advisor = createAdvisor({
   warn: (line) => log.add('match', `AI ${line}`),
 });
 
+/**
+ * Null without JEV_API_KEY: JEV then cannot be played (ai:play refuses it).
+ * Same quiet logging as the advisor.
+ */
+const jevPicker = createJevPicker({
+  apiKey: JEV_API_KEY,
+  model: JEV_MODEL,
+  warn: (line) => log.add('match', `AI ${line}`),
+});
+
 /** Plays every bot's turns. Fed by the room broadcasters above; told when rooms close. */
 const bots = new BotController({
   room: (roomId) => rooms.get(roomId),
   advisor,
+  jev: jevPicker,
   say: (roomId, bot, text) => {
     const message: ChatMessage = {
       id: randomUUID(),
@@ -311,6 +333,9 @@ function onlinePlayers(): OnlinePlayer[] {
     const identity = identities.get(client.id);
     if (!identity) return [];
     const room = client.roomId ? rooms.get(client.roomId) : undefined;
+    // A private room's code stays with the people it was shared with: the
+    // list says where someone is ("in a private room") but never which room.
+    const hidden = room?.config.private === true;
     return [
       {
         id: client.id,
@@ -322,15 +347,19 @@ function onlinePlayers(): OnlinePlayer[] {
           seat: client.seat,
           roomStatus: room?.summary().status ?? null,
         }),
-        roomId: client.roomId,
+        roomId: hidden ? null : client.roomId,
+        ...(hidden ? { privateRoom: true } : {}),
         profileId: identity.profileId,
+        // Only accounts with a picture carry one; a guest's row is unchanged.
+        ...(identity.avatarUrl ? { avatarUrl: identity.avatarUrl } : {}),
       },
     ];
   });
 }
 
+/** What players see. Private rooms are left out; the console (adminState) lists every room. */
 function lobbyPayload() {
-  return { rooms: rooms.list(), clientCount: registry.count, online: onlinePlayers() };
+  return { rooms: listedRooms(rooms.list()), clientCount: registry.count, online: onlinePlayers() };
 }
 
 /** Refresh the landing page, the online list and the server console together. */
@@ -466,6 +495,17 @@ const inviteLimit = new InviteLimit();
 
 /** A few chat lines per connection every few seconds, so nobody floods a room. */
 const chatLimit = new ChatLimit();
+
+/**
+ * The lobby's world chat: the last few dozen lines, in memory only. Its own
+ * allowance, so talking in a room does not use up the world chat's, and one
+ * invite card per tab every half minute. Both are keyed by the tab's session id
+ * (the socket id without one) and kept past a disconnect, so a reload does not
+ * reset them; ChatLimit drops a key by itself once its window has passed.
+ */
+const lobbyChat = new LobbyChat();
+const lobbyChatLimit = new ChatLimit();
+const lobbyInvites = lobbyInviteLimit();
 
 /** Every connected socket signed in as this account — one per open tab. */
 function socketsOfProfile(profileId: string): string[] {
@@ -706,6 +746,14 @@ const adminConsole = attachAdminNamespace({
     rooms.reset(roomId);
     pushUpdates();
   },
+
+  // The world chat lives only in this process's memory, so emptying it here
+  // empties it for good; every open lobby is told to empty its copy too.
+  clearChat: () => {
+    const removed = lobbyChat.clear();
+    io.emit('lobby:cleared');
+    log.add('moderation', `admin cleared the world chat — ${removed} line${removed === 1 ? '' : 's'} removed`);
+  },
 });
 
 // ── containing failures ─────────────────────────────────────────────────────
@@ -809,6 +857,8 @@ io.on('connection', contain((socket: GameSocket) => {
     respond(ack, result);
     // After the ack, so the client already knows which room this is for.
     if (resumed) socket.emit('state:sync', resumed.publicState());
+    // The world chat so far, now that they have a name to talk under.
+    socket.emit('lobby:history', lobbyChat.history());
     pushUpdates();
   });
 
@@ -874,6 +924,18 @@ io.on('connection', contain((socket: GameSocket) => {
 
   listen(socket, 'room:join', (payload, ack) => enterRoom(text(payload, 'roomId'), false, ack));
   listen(socket, 'room:spectate', (payload, ack) => enterRoom(text(payload, 'roomId'), true, ack));
+
+  // By code, private rooms included: whoever has the code may join anyway, so
+  // its summary tells them nothing new — it only lets the client choose
+  // between joining and asking the host.
+  listen(socket, 'room:lookup', (payload, ack) => {
+    const room = rooms.get(text(payload, 'roomId').trim().toUpperCase());
+    if (!room) {
+      respond(ack, { ok: false, error: 'That room no longer exists.' });
+      return;
+    }
+    respond(ack, { ok: true, room: room.summary() });
+  });
 
   listen(socket, 'room:leave', () => {
     leaveCurrentRoom(socket);
@@ -1053,20 +1115,28 @@ io.on('connection', contain((socket: GameSocket) => {
     respond(ack, { ok: true });
   });
 
-  // Play vs AI: a fresh Classic-sized casual room with the player seated, then
-  // a computer opponent, started at once. The player joined first, so they
-  // are the host. Never rated; spectators may still watch.
+  // Play vs AI: a fresh casual room on the board the player picked (Classic's
+  // 6x6 and mine density unless they say otherwise) with the player seated,
+  // then a computer opponent, started at once. The player joined first, so
+  // they are the host. Never rated; spectators may still watch.
   listen(socket, 'ai:play', (payload, ack) => {
     const level: unknown = payload?.level;
-    if (!isAiLevel(level)) {
-      respond(ack, { ok: false, errors: ['Pick easy, medium or hard.'] });
-      return;
-    }
+    const model: unknown = payload?.model;
+    const size: unknown = payload?.size ?? AI_DEFAULT_SIZE;
+    const density: unknown = payload?.density ?? AI_DEFAULT_DENSITY;
+    const refuse = (error: string) => respond(ack, { ok: false, errors: [error] });
+
+    if (!isAiLevel(level)) return refuse('Pick easy, medium or hard.');
+    if (!isAiModel(model)) return refuse('Pick AI or the Fruit Fly.');
+    if (model === 'jev' && !jevPicker) return refuse("JEV isn't set up on this server.");
+    if (!isAiBoardSize(size)) return refuse('Pick a board size from 6×6 to 16×16.');
+    if (!isAiDensity(density)) return refuse('Pick light, classic or heavy mines.');
+    const setup: BotSetup = { level, model };
 
     const identity = identityOf(socket.id);
     const created = rooms.create(
-      `${identity.nickname} vs ${botNickname(level)}`,
-      { ...CLASSIC_PRESET, maxPlayers: 2, mode: 'casual' },
+      `${identity.nickname} vs ${botNickname(setup)}`,
+      { ...CLASSIC_PRESET, ...aiBoard(size, density), maxPlayers: 2, mode: 'casual' },
       'ai',
     );
     if (!created.ok || !created.roomId) {
@@ -1085,7 +1155,7 @@ io.on('connection', contain((socket: GameSocket) => {
     registry.setRoom(socket.id, room.roomId);
     registry.setSeat(socket.id, seat);
 
-    if (!rooms.addBot(room.roomId, level)) {
+    if (!rooms.addBot(room.roomId, setup)) {
       // Cannot happen in a fresh two-seat room; if it ever does, leave nothing behind.
       leaveCurrentRoom(socket);
       respond(ack, { ok: false, errors: ['Could not start a game against the computer.'] });
@@ -1101,6 +1171,16 @@ io.on('connection', contain((socket: GameSocket) => {
     io.to(room.roomId).emit('state:sync', room.publicState());
     room.start(socket.id);
     pushUpdates();
+  });
+
+  // What the AI opponent is made of, for the picker's "about" panel: whether a
+  // language model is behind it and which. Only what the server already
+  // advertises in its banner — never the key.
+  listen(socket, 'ai:about', (_payload, ack) => {
+    respond(ack, {
+      llm: advisor ? { provider: 'Groq', model: advisor.model } : null,
+      jev: jevPicker ? { provider: 'TypeSafe AI', model: jevPicker.model } : null,
+    });
   });
 
   // A hint in a game against the computer: the covered cell the solver thinks
@@ -1169,16 +1249,90 @@ io.on('connection', contain((socket: GameSocket) => {
       return;
     }
 
+    const sender = identityOf(socket.id);
     const message: ChatMessage = {
       id: randomUUID(),
       roomId: room.roomId,
       fromId: socket.id,
-      fromName: identityOf(socket.id).nickname,
+      fromName: sender.nickname,
       kind: 'player',
       text: clean,
       at: Date.now(),
+      // From the verified identity, like the name — never from the payload.
+      ...(sender.avatarUrl ? { fromAvatarUrl: sender.avatarUrl } : {}),
     };
     io.to(room.roomId).emit('room:message', message);
+    respond(ack, { ok: true });
+  });
+
+  // The lobby's world chat: anyone who has picked a name, guests included.
+  // Lines go to every connection, and the last few dozen stay in memory for
+  // whoever arrives next. Nothing reaches the database.
+  listen(socket, 'lobby:say', (payload, ack) => {
+    const sender = identities.get(socket.id);
+    if (!sender) {
+      respond(ack, { ok: false, error: 'Pick a name first.' });
+      return;
+    }
+
+    const clean = cleanChatText(payload?.text);
+    if (!clean) {
+      respond(ack, { ok: false, error: 'Type something to send.' });
+      return;
+    }
+
+    const wait = lobbyChatLimit.trySend(sessionId ?? socket.id, Date.now());
+    if (wait > 0) {
+      respond(ack, {
+        ok: false,
+        error: `Slow down — you can send again in ${Math.ceil(wait / 1000)} s.`,
+      });
+      return;
+    }
+
+    const message = playerLine({ id: randomUUID(), fromId: socket.id, sender, at: Date.now() }, clean);
+    lobbyChat.add(message);
+    io.emit('lobby:message', message);
+    respond(ack, { ok: true });
+  });
+
+  // An invite card for the room you are playing in, with a Join button for
+  // everyone in the lobby. Joining from it follows the room's normal rules —
+  // the card is an advert, not a way past ask-to-join or a ban.
+  listen(socket, 'lobby:invite', (_payload, ack) => {
+    const sender = identities.get(socket.id);
+    if (!sender) {
+      respond(ack, { ok: false, error: 'Pick a name first.' });
+      return;
+    }
+
+    const room = rooms.roomOf(socket.id);
+    const refusal = inviteRefusal({
+      room: room ? room.summary() : null,
+      seated: room?.isSeated(socket.id) ?? false,
+      isHost: room?.hostId === socket.id,
+    });
+    if (refusal || !room) {
+      respond(ack, { ok: false, error: refusal ?? 'Join or create a room first.' });
+      return;
+    }
+
+    const wait = lobbyInvites.trySend(sessionId ?? socket.id, Date.now());
+    if (wait > 0) {
+      respond(ack, {
+        ok: false,
+        error: `You just posted an invite — try again in ${Math.ceil(wait / 1000)} s.`,
+      });
+      return;
+    }
+
+    const message = inviteLine(
+      { id: randomUUID(), fromId: socket.id, sender, at: Date.now() },
+      room.summary(),
+    );
+    lobbyChat.add(message);
+    io.emit('lobby:message', message);
+    log.add('room', `${sender.nickname} posted an invite to ${room.roomId} in the world chat`);
     respond(ack, { ok: true });
   });
 
@@ -1236,7 +1390,27 @@ io.on('connection', contain((socket: GameSocket) => {
 
 // ── static client + health ──────────────────────────────────────────────────
 
-app.get('/health', (_req, res) => {
+// A per-address cap on the routes that do work per request: /health and the
+// index.html fallback (a file read for every deep link). Generous, so only a
+// flood ever meets it. The built assets are left out: a page load is a dozen
+// of them, and through a tunnel every visitor arrives from the same local
+// address, so counting them would let one busy minute starve everyone. Socket.IO
+// is not affected: its requests are answered before they reach express.
+//
+// 'trust proxy' stays off on purpose (admin/access.ts refuses forwarded
+// requests), so the address counted is the direct peer. Behind a proxy every
+// visitor then shares the proxy's allowance; the forwarded-header checks are
+// switched off because that is a choice here, not a misconfiguration.
+const httpLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: 'Too many requests. Please wait a minute and try again.',
+  validate: { xForwardedForHeader: false, forwardedHeader: false },
+});
+
+app.get('/health', httpLimit, (_req, res) => {
   res.json({
     ok: true,
     clients: registry.count,
@@ -1249,7 +1423,7 @@ app.get('/health', (_req, res) => {
 // so there is one port to open on EC2 and no CORS to configure.
 const clientDist = path.resolve(__dirname, '../../client/dist');
 app.use(express.static(clientDist));
-app.get('*', (_req, res) => {
+app.get('*', httpLimit, (_req, res) => {
   res.sendFile(path.join(clientDist, 'index.html'), (err) => {
     if (err) res.status(404).send('Client not built. Run `npm run build`, or use `npm run dev`.');
   });
@@ -1282,6 +1456,7 @@ httpServer.listen(PORT, HOST, () => {
   Console →  http://${ADVERTISED_HOST}:${PORT}/admin
   Accounts→  ${supabaseEnabled ? 'Supabase connected' : 'guest-only (no SUPABASE_URL / SERVICE_ROLE_KEY)'}
   AI      →  ${advisor ? `solver + Groq ${advisor.model}` : 'solver only (no GROQ_API_KEY)'}
+  JEV     →  ${jevPicker ? `TypeSafe ${jevPicker.model}` : 'not configured'}
 `);
   printConsole();
 });

@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CLASSIC_PRESET, type PublicMatchState } from '@fmm/shared';
+import { CLASSIC_PRESET, type BotSetup, type PublicMatchState, type Rng } from '@fmm/shared';
 import { MatchManager, type MatchBroadcaster } from '../match/matchManager.js';
-import { BOT_REMATCH_DELAY_MS, BotController, type BotAdvisor } from './botController.js';
+import { BOT_REMATCH_DELAY_MS, BotController, type BotAdvisor, type BotJev } from './botController.js';
+import type { FlyBrain } from './fly/brain.js';
 
 const BOT = 'bot:test0001';
+const FLY: BotSetup = { level: 'hard', model: 'fly' };
+const JEV: BotSetup = { level: 'hard', model: 'jev' };
 const HUMAN = 'human';
 
 /**
@@ -11,7 +14,16 @@ const HUMAN = 'human';
  * broadcaster pings the controller the way index.ts does.
  */
 function setup(
-  options: { advisor?: BotAdvisor | null; onTurn?: (id: string, controller: BotController) => void } = {},
+  options: {
+    advisor?: BotAdvisor | null;
+    jev?: BotJev | null;
+    onTurn?: (id: string, controller: BotController) => void;
+    bot?: BotSetup;
+    /** Random numbers for the controller; 0 forces every deliberate mistake the level allows. */
+    rng?: Rng;
+    /** The Fruit Fly's brain; omitted, the controller loads the real one. */
+    fly?: FlyBrain | null;
+  } = {},
 ) {
   const said: string[] = [];
   const errors: unknown[] = [];
@@ -37,13 +49,16 @@ function setup(
   const controller = new BotController({
     room: (id) => (id === 'R1' ? room : undefined),
     advisor: options.advisor ?? null,
+    ...(options.jev !== undefined ? { jev: options.jev } : {}),
     say: (_roomId, bot, text) => said.push(`${bot.nickname}: ${text}`),
     report: (error) => errors.push(error),
+    ...(options.rng ? { rng: options.rng } : {}),
+    ...(options.fly !== undefined ? { fly: options.fly } : {}),
   });
   holder.controller = controller;
 
   room.addPlayer(HUMAN, { profileId: null, nickname: 'Ann', elo: 800, gamesPlayed: 0, isGuest: true });
-  expect(room.addBot(BOT, 'medium')).toBe(true);
+  expect(room.addBot(BOT, options.bot ?? { level: 'medium', model: 'ai' })).toBe(true);
   controller.adopt('R1');
   room.start(HUMAN);
   return { room, controller, said, errors };
@@ -152,9 +167,197 @@ describe('BotController', () => {
     expect(controller.size).toBe(0);
   });
 
+  it('hands the model the bot’s level and model, and seats it as a setup', async () => {
+    const seen: { level: string; model: string }[] = [];
+    const advisor: BotAdvisor = {
+      choose: async (input) => {
+        seen.push({ level: input.level, model: input.model });
+        return null;
+      },
+    };
+    const { room } = setup({ advisor, bot: { level: 'easy', model: 'ai' } });
+    expect(room.publicState().players.find((p) => p.id === BOT)?.bot).toEqual({ level: 'easy', model: 'ai' });
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(seen[0]).toEqual({ level: 'easy', model: 'ai' });
+  });
+
   it('ignores rooms it was never given', () => {
     const { controller } = setup();
     expect(() => controller.update('NOPE')).not.toThrow();
     expect(controller.size).toBe(1);
+  });
+});
+
+describe('BotController · Fruit Fly', () => {
+  it('plays its own turn through the fly circuit, under its own name', async () => {
+    const { room, said, errors } = setup({ bot: FLY });
+    expect(room.publicState().players.find((p) => p.id === BOT)?.nickname).toBe('Fruit Fly · Hard');
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(botCells(room.publicState()).length).toBeGreaterThan(0);
+    for (const line of said) expect(line.startsWith('Fruit Fly · Hard: ')).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps its own pick whatever the model says; the model only adds a line', async () => {
+    const asked: { cell: { row: number; col: number } }[][] = [];
+    const advisor: BotAdvisor = {
+      choose: async (input) => {
+        asked.push([...input.candidates]);
+        const offered = input.candidates[0]!.cell;
+        // Name some other cell: it must be ignored.
+        return { cell: { row: offered.row === 0 ? 1 : 0, col: offered.col }, say: 'bzz?' };
+      },
+    };
+    const { room, said, errors } = setup({ bot: FLY, advisor });
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    expect(asked.length).toBeGreaterThan(0);
+    // The model is shown one cell — the fly's — so it has nothing to overrule.
+    expect(asked[0]).toHaveLength(1);
+    const first = botCells(room.publicState())[0];
+    expect({ row: first?.row, col: first?.col }).toEqual(asked[0]![0]!.cell);
+    expect(said[0]).toBe('Fruit Fly · Hard: bzz?');
+    expect(errors).toEqual([]);
+  });
+
+  it('on Easy, handed a mistake plan, still opens only covered cells', async () => {
+    // A zero from the generator makes every chance roll succeed: the level's
+    // mistakes come as often as they can, and the circuit picks among them.
+    const { room, errors } = setup({ bot: { level: 'easy', model: 'fly' }, rng: () => 0 });
+    expect(room.publicState().players.find((p) => p.id === BOT)?.nickname).toBe('Fruit Fly · Easy');
+    await untilBotTurn(room);
+    const before = room.publicState().revealed.length;
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    const state = room.publicState();
+    const cells = state.revealed.map((c) => `${c.row}:${c.col}`);
+    expect(new Set(cells).size).toBe(cells.length);
+    expect(state.revealed.slice(before).some((c) => c.byPlayerId === BOT)).toBe(true);
+    for (const c of botCells(state)) {
+      expect(c.row).toBeGreaterThanOrEqual(0);
+      expect(c.row).toBeLessThan(state.rows);
+      expect(c.col).toBeLessThan(state.cols);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  it('still moves with no brain — on the solver’s pick', async () => {
+    const quiet = setup({ bot: FLY, fly: null });
+    await untilBotTurn(quiet.room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(botCells(quiet.room.publicState()).length).toBeGreaterThan(0);
+    expect(quiet.errors).toEqual([]);
+  });
+
+  it('reports a broken brain and plays the solver’s pick instead', async () => {
+    const broken = { score: () => { throw new Error('neuron on fire'); } } as unknown as FlyBrain;
+    const { room, errors } = setup({ bot: FLY, fly: broken });
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(botCells(room.publicState()).length).toBeGreaterThan(0);
+    expect(errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('BotController · JEV', () => {
+  it('plays the cell JEV chose among the solver’s candidates, under its own name', async () => {
+    const asked: { cells: { row: number; col: number }[]; probabilities: number[]; timeoutMs: number }[] = [];
+    const jev: BotJev = {
+      choose: async (input, timeoutMs) => {
+        asked.push({
+          cells: input.candidates.map((c) => c.cell),
+          probabilities: input.candidates.map((c) => c.probability),
+          timeoutMs,
+        });
+        return { cell: input.candidates.at(-1)!.cell, probability: 0.5, confidence: 0.4 };
+      },
+    };
+    const { room, errors } = setup({ bot: JEV, jev });
+    expect(room.publicState().players.find((p) => p.id === BOT)?.nickname).toBe('JEV · Hard');
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked[0]!.probabilities.every((p) => p >= 0 && p <= 1)).toBe(true);
+    expect(asked[0]!.timeoutMs).toBeGreaterThan(0);
+    expect(asked[0]!.timeoutMs).toBeLessThanOrEqual(4_000);
+    const first = botCells(room.publicState())[0];
+    expect({ row: first?.row, col: first?.col }).toEqual(asked[0]!.cells.at(-1));
+    expect(errors).toEqual([]);
+  });
+
+  it('plays the solver’s pick when JEV does not answer, and says nothing', async () => {
+    const jev: BotJev = { choose: async () => null };
+    const { room, said, errors } = setup({ bot: JEV, jev, rng: () => 0 });
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(botCells(room.publicState()).length).toBeGreaterThan(0);
+    expect(said).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it('plays the solver’s pick when no picker is configured', async () => {
+    const { room, said, errors } = setup({ bot: JEV, jev: null });
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(botCells(room.publicState()).length).toBeGreaterThan(0);
+    expect(said).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it('still moves in time when JEV never answers', async () => {
+    const jev: BotJev = { choose: () => new Promise(() => undefined) };
+    const { room } = setup({ bot: JEV, jev });
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(botCells(room.publicState()).length).toBeGreaterThan(0);
+  });
+
+  it('never moves to an open cell, even if JEV names one', async () => {
+    const jev: BotJev = {
+      choose: async (input) => {
+        const open = input.view.revealed[0];
+        return { cell: open ? { row: open.row, col: open.col } : input.candidates[0]!.cell, probability: 0.5, confidence: 0.4 };
+      },
+    };
+    const { room, errors } = setup({ bot: JEV, jev });
+    // Give the board an open cell before the bot's first move.
+    const cell = firstCovered(room.publicState());
+    if (room.publicState().currentPlayerId === HUMAN && cell) room.reveal(HUMAN, cell.row, cell.col);
+    await untilBotTurn(room);
+    const before = new Set(room.publicState().revealed.map((c) => `${c.row}:${c.col}`));
+    await vi.advanceTimersByTimeAsync(9_000);
+    const mine = botCells(room.publicState());
+    expect(mine.length).toBeGreaterThan(0);
+    for (const c of mine) expect(before.has(`${c.row}:${c.col}`)).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('does not use the Groq advisor for JEV', async () => {
+    let asked = 0;
+    const advisor: BotAdvisor = {
+      choose: async () => {
+        asked++;
+        return null;
+      },
+    };
+    const { room } = setup({ bot: JEV, advisor, jev: null });
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(asked).toBe(0);
+  });
+
+  it('sometimes quotes its own odds in the chat after a move it chose', async () => {
+    const jev: BotJev = {
+      choose: async (input) => ({ cell: input.candidates[0]!.cell, probability: 0.64, confidence: 0.4 }),
+    };
+    const { room, said } = setup({ bot: JEV, jev, rng: () => 0 });
+    await untilBotTurn(room);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(said.length).toBeGreaterThan(0);
+    expect(said[0]).toMatch(/^JEV · Hard: JEV: [A-P]\d+ .*64%/);
   });
 });

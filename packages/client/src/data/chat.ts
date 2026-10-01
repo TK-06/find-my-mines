@@ -33,25 +33,37 @@ export function addChatMessage(
   return [...list, message].slice(-limit);
 }
 
+/** What grouping needs from a line. Room chat and world chat lines both have it. */
+export interface GroupableLine {
+  id: string;
+  fromId: string;
+  fromName: string;
+  kind: string;
+  at: number;
+}
+
 /** A run of lines from one sender, shown under one name and time. */
-export interface ChatGroup {
+export interface ChatGroup<M extends GroupableLine = ChatMessage> {
   /** The first line's id — stable while lines are added below it. */
   key: string;
   fromId: string;
   fromName: string;
-  kind: ChatMessage['kind'];
+  kind: M['kind'];
   /** When the first line was sent. */
   at: number;
-  messages: ChatMessage[];
+  messages: M[];
 }
 
 /**
- * Groups consecutive lines like Discord: same sender (a person and the
- * computer never share a header, whatever their ids), within the window of
- * the header's time.
+ * Groups consecutive lines like Discord: same sender and same kind (a person
+ * and the computer never share a header, whatever their ids; nor do a typed
+ * line and an invite card), within the window of the header's time.
  */
-export function groupMessages(list: ChatMessage[], windowMs = GROUP_WINDOW_MS): ChatGroup[] {
-  const groups: ChatGroup[] = [];
+export function groupMessages<M extends GroupableLine>(
+  list: M[],
+  windowMs = GROUP_WINDOW_MS,
+): ChatGroup<M>[] {
+  const groups: ChatGroup<M>[] = [];
   for (const message of list) {
     const last = groups.at(-1);
     const since = last ? message.at - last.at : -1;

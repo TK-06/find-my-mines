@@ -1,5 +1,6 @@
 import type { OnlinePlayer, RoomSummary } from '@fmm/shared';
 import { presenceLabel } from '../data/format.js';
+import { PRIVATE_ROOM_TEXT } from '../data/friendsModel.js';
 
 interface Props {
   online: OnlinePlayer[];
@@ -49,7 +50,10 @@ export function OnlinePanel({ online, myId, rooms, onJoin }: Props) {
                 {player.isGuest && <span className="tag">guest</span>}
               </span>
               <span className="online-where">
-                <span className="muted">{presenceLabel(player)}</span>
+                {/* A private room's code is withheld, so there is nothing to join from here. */}
+                <span className="muted">
+                  {player.privateRoom ? PRIVATE_ROOM_TEXT : presenceLabel(player)}
+                </span>
                 {canJoin && (
                   <button className="ghost small" onClick={() => onJoin(room.id)}>
                     {room.config.joinByRequest ? 'Ask' : 'Join'}

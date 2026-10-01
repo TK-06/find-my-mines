@@ -14,6 +14,7 @@ const KEY = 'gsk_test_secret_value';
 
 const INPUT: PromptInput = {
   level: 'medium',
+  model: 'ai',
   view: { rows: 2, cols: 2, bombCount: 1, revealed: [{ row: 0, col: 0, kind: 'empty', adjacent: 1 }] },
   scores: { you: 0, opponent: 0 },
   candidates: [

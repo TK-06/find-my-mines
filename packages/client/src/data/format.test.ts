@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   deltaTone,
   describeBoard,
+  eloChangeText,
+  eloChangeTone,
   formatDelta,
   mergeLogLines,
   orderSeats,
@@ -41,6 +43,23 @@ describe('signOutAfterRemoval', () => {
   });
 });
 
+describe('eloChangeText / eloChangeTone', () => {
+  it('prefixes a gain with a plus', () => {
+    expect(eloChangeText(14)).toBe('+14');
+    expect(eloChangeTone(14)).toBe('up');
+  });
+
+  it('uses a true minus sign (U+2212) for a loss', () => {
+    expect(eloChangeText(-9)).toBe('−9');
+    expect(eloChangeTone(-9)).toBe('down');
+  });
+
+  it('shows no movement as plus-or-minus zero, in the flat tone', () => {
+    expect(eloChangeText(0)).toBe('±0');
+    expect(eloChangeTone(0)).toBe('flat');
+  });
+});
+
 describe('mergeLogLines', () => {
   const line = (id: number): LogLine => ({ id, at: id, kind: 'room', text: `#${id}` });
   const ids = (lines: LogLine[]) => lines.map((l) => l.id);
@@ -59,8 +78,9 @@ describe('mergeLogLines', () => {
 });
 
 describe('presenceLabel', () => {
+  // Same words as the friends list, so one player never reads two ways.
   it('describes a player on the landing page', () => {
-    expect(presenceLabel({ status: 'lobby', roomId: null })).toBe('In menu');
+    expect(presenceLabel({ status: 'lobby', roomId: null })).toBe('In the menu');
   });
 
   it('describes a player in matchmaking', () => {

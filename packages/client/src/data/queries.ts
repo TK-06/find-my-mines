@@ -1,4 +1,5 @@
 import { supabase } from '../auth/supabase.js';
+import { isMissingColumn } from './avatar.js';
 
 /**
  * Read-only queries for the profile and game-log pages.
@@ -20,6 +21,12 @@ export interface ProfileRow {
   losses: number;
   draws: number;
   created_at: string;
+  /**
+   * The profile picture's place in the avatars bucket, or null for none.
+   * Absent (undefined) when migration 0004 has not been run — the column does
+   * not exist yet, so pictures cannot be set.
+   */
+  avatar_path?: string | null;
 }
 
 export interface MatchPlayerRow {
@@ -55,6 +62,8 @@ export interface LeaderboardRow {
   losses: number;
   draws: number;
   rank: number;
+  /** Absent until migration 0004 adds it to the view. */
+  avatar_path?: string | null;
 }
 
 /** The signed-in user's id, or null when playing as a guest. */
@@ -64,13 +73,21 @@ export async function currentUserId(): Promise<string | null> {
   return data.user?.id ?? null;
 }
 
+const PROFILE_COLUMNS = 'id, username, elo, games_played, wins, losses, draws, created_at';
+
 export async function fetchProfile(userId: string): Promise<ProfileRow | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('profiles')
-    .select('id, username, elo, games_played, wins, losses, draws, created_at')
+    .select(`${PROFILE_COLUMNS}, avatar_path`)
     .eq('id', userId)
     .maybeSingle();
+
+  // Before migration 0004 there is no avatar_path column, and asking for it
+  // fails the whole read. The profile still loads, just without pictures.
+  if (isMissingColumn(error)) {
+    ({ data, error } = await supabase.from('profiles').select(PROFILE_COLUMNS).eq('id', userId).maybeSingle());
+  }
 
   if (error) {
     console.error('[profile] load failed:', error.message);
@@ -136,17 +153,31 @@ export async function fetchRecentMatches(limit = 40): Promise<MatchRow[]> {
   }));
 }
 
-/** The matches one profile took part in, newest first. */
+/**
+ * The newest matches one profile took part in, newest first.
+ *
+ * The ids are picked from `matches` through an inner-joined, filtered
+ * `match_players` embed, ordered on the match's own created_at — the same
+ * shape as fetchProfileHistory. Reading the profile's seats directly has no
+ * date to order by, so a limit there returned an arbitrary set, often the
+ * oldest matches.
+ */
 export async function fetchMatchesForProfile(userId: string, limit = 20): Promise<MatchRow[]> {
   if (!supabase) return [];
 
-  const { data: seats } = await supabase
-    .from('match_players')
-    .select('match_id')
-    .eq('profile_id', userId)
-    .limit(limit * 2);
+  const { data, error } = await supabase
+    .from('matches')
+    .select('id, match_players!inner(profile_id)')
+    .eq('match_players.profile_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
-  const ids = [...new Set((seats ?? []).map((s) => s.match_id as string))].slice(0, limit);
+  if (error) {
+    console.error('[games] own matches load failed:', error.message);
+    return [];
+  }
+
+  const ids = (data ?? []).map((match) => match.id as string);
   return fetchMatchesByIds(ids);
 }
 

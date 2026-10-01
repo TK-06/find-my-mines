@@ -16,6 +16,12 @@ export const INVITE_TTL_MS = 60_000;
 /** Invite popups on screen at once. Older ones make room for newer. */
 export const MAX_INVITES = 3;
 
+/**
+ * Where someone in a private room is, for the friends and online lists. The
+ * server withholds the room's code, so the words cannot name it either.
+ */
+export const PRIVATE_ROOM_TEXT = 'In a private room';
+
 /** A friendship seen from the signed-in player's side. */
 export interface Friendship {
   /** The other person's profile id. */
@@ -136,10 +142,15 @@ function statusText(presence: FriendRow['presence'], roomId: string | null): str
 function actionFor(
   presence: FriendRow['presence'],
   roomId: string | null,
+  privateRoom: boolean,
   rooms: RoomSummary[],
   myRoomId: string | null,
 ): FriendAction | null {
   if (presence === 'offline') return null;
+
+  // In a private room: there is no code to join or watch by, and they are
+  // busy, so no Invite either. The room's link is theirs to share.
+  if (privateRoom) return null;
 
   // Free to come over: only worth asking when there is a room to come to.
   if (roomId === null) return myRoomId ? { kind: 'invite', label: 'Invite' } : null;
@@ -188,14 +199,15 @@ export function friendRows(
       const tab = mostActiveTab(tabsByProfile.get(f.otherId) ?? []);
       const presence = tab?.status ?? 'offline';
       const roomId = tab?.roomId ?? null;
+      const privateRoom = tab?.privateRoom === true;
       return {
         profileId: f.otherId,
         name: f.otherName,
         presence,
         roomId,
         dot: presence === 'offline' ? 'offline' : presence === 'playing' ? 'playing' : 'online',
-        statusText: statusText(presence, roomId),
-        action: actionFor(presence, roomId, rooms, myRoomId),
+        statusText: privateRoom ? PRIVATE_ROOM_TEXT : statusText(presence, roomId),
+        action: actionFor(presence, roomId, privateRoom, rooms, myRoomId),
       };
     });
 

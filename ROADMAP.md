@@ -6,7 +6,21 @@ Update this file whenever a feature lands.
 New to the project? Read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, the rules, and
 how work is split.
 
-**Last updated:** 2026-09-29 — Play vs AI built (hybrid bot: solver + Groq LLM, easy /
+**Last updated:** 2026-10-01 — **v3.2 (unreleased, not yet committed):** **JEV is playable**
+(TypeSafe AI, on servers with a `JEV_API_KEY`); the **Fruit Fly is retrained** to play from
+its own neurons with no solver, with "sleepy" difficulty; **guests are remembered** for 30 days
+by a cookie, with an unofficial Elo and a guest profile; hosting decided: **Cloudflare + AWS**.
+Earlier the same day, **v3.1:** Play vs AI became
+opponent × difficulty × board — AI, Fruit Fly or JEV; Easy / Medium / Hard; square boards 6–16 with light /
+classic / heavy mines, Classic 6×6 with 11 by default — with a logo per opponent and an
+"About this opponent" popup that names the language model in use. Profile pictures get a
+crop dialog (drag, zoom, pinch). Ranked results show the Elo gained or lost. Large boards
+scroll inside their card on phones. Migration 0004 confirmed applied.
+**2026-09-29 — v3.0.0:** puzzle mode (single-player Minesweeper with the AI
+hint), world chat with invite cards, share links and private rooms, profile pictures, the
+experimental Fruit Fly bot, and fixes (whole-number cells only, "Mine"
+game log newest first, online-list wording and colours, HTTP rate limit, bundle split, vitest 5,
+`npm audit` clean). Earlier the same day: Play vs AI (hybrid bot: solver + Groq LLM, easy /
 medium / hard, AI hint, room chat). Build order changed: everything that runs locally first,
 AWS last. On 2026-09-28: friends (requests, live status, invites; needs migration
 0003), the rebuilt profile page (rating chart, activity heatmap), the 8-bit pixel mine, a site
@@ -79,23 +93,29 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | 5 | Landing page | **Done** | Game list, join or spectate |
 | 6 | Spectator | **Done** | Extra clients watch; promoted into free seats next match |
 | 7 | Create new room | **Done** | Classic preset default, Custom panel, Casual/Ranked |
-| 8 | **Play with AI** | **Done 2026-09-29** | Mandatory AI feature, 2 points. Lobby card "Play vs AI" → a casual Classic room against `AI · Easy / Medium / Hard`, started at once, never rated; the bot never hosts; a room left with only the bot closes. **Hybrid bot:** a solver works out each covered cell's mine chance from the numbers on the board (public information only — never the hidden mines); the level (easy / medium / hard) decides how often it makes a deliberate mistake; an LLM on Groq (`openai/gpt-oss-20b` to start, `AI_MODEL` to switch) picks from the shortlist and talks in the room chat. No key, rate limit, slow or bad answer → the solver's own pick, so a turn never stalls. **AI hint** (second AI feature) in games against the bot. See §4 for Jev and Fruit Fly |
+| 8 | **Play with AI** | **Done 2026-09-29; picker 2026-10-01** | Mandatory AI feature, 2 points. Lobby card "Play vs AI": pick the **opponent** (AI, Fruit Fly, or JEV — JEV only on a server with a `JEV_API_KEY`; without one the tile is greyed, says "isn't set up on this server", and the server refuses it too), the **difficulty** (Easy / Medium / Hard) and the **board** (square, 6×6 to 16×16; Light 20% / Classic / Heavy 40% mines; default Classic 6×6 with 11), then Play → a casual room against e.g. `AI · Hard` or `Fruit Fly · Easy`, started at once, never rated. The choice is remembered per browser. Each opponent has a logo (the pixel robot, a pixel fruit fly with red eyes, TypeSafe AI's logo for JEV — owner-supplied, `client/src/assets/typesafe-ai.webp`; check TypeSafe's brand terms before a public launch). **About this opponent** popup for credibility: how each one plays, the fly's data credit, and the models the server actually uses (`ai:about` → e.g. `openai/gpt-oss-20b` via Groq and `jev-latest` via TypeSafe AI, or "none connected") the bot never hosts; a room left with only the bot closes. **Hybrid bot:** a solver works out each covered cell's mine chance from the numbers on the board (public information only — never the hidden mines); the level (easy / medium / hard) decides how often it makes a deliberate mistake; an LLM on Groq (`openai/gpt-oss-20b` to start, `AI_MODEL` to switch) picks from the shortlist and talks in the room chat. No key, rate limit, slow or bad answer → the solver's own pick, so a turn never stalls. **AI hint** (second AI feature) in games against the bot. **JEV** (done 2026-10-01, `server/src/ai/jev.ts`): plays from the same solver plan as the AI (so its levels and deliberate mistakes match), and TypeSafe's `choice` question picks among the shortlist with each cell's odds in the option text; ~30 calls a minute, a pause after 429/529, the solver's pick on any failure; its chat lines quote its own probability ("JEV: D1 at 64%. Taking it."), none when it did not answer. Fruit Fly: see "Also built" |
 | 9 | Matchmaking | **Done** | Casual/Ranked pools, Elo window widens while waiting, auto-start |
 | 10 | Elo | **Done** | Live end to end; verified writing to the database |
-| 11 | Login: guest (800) / registered | **Done** | Guest, email/password and **GitHub** live. Google paused until hosting gives a real domain |
+| 11 | Login: guest (800) / registered | **Done; guests remembered 2026-10-01** | Guest, email/password and **GitHub** live. Google paused until hosting gives a real domain. **Remembered guests:** a first-party cookie `fmm_guest` (30 days from the last visit; name, unofficial rating, ranked W/L/D) gives "Continue as X" / "Not you?" / "Change name" on the name screen; each tab still gets its own seat. The guest's **unofficial Elo** is worked out in the browser with the shared `rateMatch` after ranked results (forfeits too, once per match); the server never sees or trusts it — opponents and matchmaking still rate guests as 800, and it never reaches `/ranks`. Shown on the lobby badge, the result screen ("+20 Elo (unofficial) · 800 → 820") and a guest `/profile` card with "Forget me on this browser". Guest match history now also drops entries older than 30 days. Privacy page updated. Logic in `client/src/data/guestCookie.ts` |
 | 12 | Theme | **Done** | Light/dark toggle, remembered, follows the OS by default |
 | 13 | Leaderboard | **Done** | Live in-match ranking **and** the persistent `/ranks` page |
 | 14 | Leave button | **Done** | Plus host succession and room cleanup |
-| 15 | Private room, invite | **Partly done** | **Ask to join** is built (Custom rooms; the host accepts or declines from a popup). **Friend invites** are built (see 16). Invite cards in world chat and share links come with chat; link testing waits for hosting (§4) |
+| 15 | Private room, invite | **Done 2026-09-29** | **Ask to join** (Custom rooms; host accepts / declines). **Friend invites** (see 16). **Share links:** a Share button in every room bar shows the code, the `/join/CODE` link, Copy link (falls back to selecting the text on plain-http LAN), Share on LINE and the phone's share sheet. Opening `/join/CODE` joins once the player has a name, then the address goes back to `/`. **Join by code** box in the lobby (any case; a pasted link works), with Join and Watch. **Private rooms** (Custom only; Classic, matchmaking and AI rooms are always listed): left out of the game list; the online and friends lists say "In a private room" with no code and no Join/Watch; the console still lists them; anyone with the code joins, watches or asks as usual. New event `room:lookup` lets a link or code open the ask-to-join dialog for an unlisted room. **Invite cards** in the world chat (below). Testing a link from a real phone waits for a public address |
 | 16 | Online, friends | **Done 2026-09-28** | Lobby shows everyone connected and where they are. **Friends:** requests by exact username (accept / decline / cancel / remove with an inline confirm), a friends list on `/profile` with live status — green online, yellow playing, grey offline — and Watch / Join / Ask / Invite. Invites are checked by the server against `public.friendships` with the service role; guests cannot invite; one invite per friend per 10 s; the popup shows on any page outside a room and expires after 60 s. **Needs migration 0003** (§3). (Chain built the same online list independently; the merge kept this one) |
 
 ### Also built (not in the original 14)
 
 | Feature | Status | Notes |
 |---|---|---|
-| User profile page | **Rebuilt 2026-09-28** | `/profile` in two columns: identity card (initial avatar, inline rename, joined date and day streak, Elo with leaderboard rank and top %, sign out) with Friends under it; stat tiles (matches, win rate, mines found, best Elo), a rating line over the last 30 ranked matches, a year-long activity heatmap, and recent matches linking to the game log. Keyboard-usable chart and heatmap. Pure logic in `client/src/data/profileStats.ts`. No profile pictures yet |
+| User profile page | **Rebuilt 2026-09-28** | `/profile` in two columns: identity card (initial avatar, inline rename, joined date and day streak, Elo with leaderboard rank and top %, sign out) with Friends under it; stat tiles (matches, win rate, mines found, best Elo), a rating line over the last 30 ranked matches, a year-long activity heatmap, and recent matches linking to the game log. Keyboard-usable chart and heatmap. Pure logic in `client/src/data/profileStats.ts` |
+| Profile pictures | **Done 2026-09-29; crop dialog 2026-10-01** | Migration 0004 is applied (checked 2026-10-01: `profiles.avatar_path` exists). Signed-in players add, change or remove a picture on `/profile`. Choosing a file opens **Position your picture**: drag (mouse or finger), zoom with the slider, wheel or a pinch, arrow keys and + / −, with round previews at profile and scoreboard size; the circle is what is saved. The browser then crops that square to 256 px, re-encodes it (WebP, JPEG fallback) and uploads it to the public Supabase Storage bucket `avatars` under their own id's folder; `profiles.avatar_path` keeps only that path (a CHECK and `isOwnAvatarPath` in `shared/src/avatar.ts` both hold it to the owner's folder). Shown on the in-game scoreboard, rankings, friends list, room chat and world chat, with the initial as fallback and a pixel robot for the computer. Sign-in keeps working before 0004 is run (the server retries without the column); the profile card then says the update is needed. A new picture reaches other players when they next load the page, like a rename. Deleting an account by email request must also delete `avatars/<uid>/` (storage is not removed by the auth cascade) |
+| Puzzle mode | **Done 2026-09-29** | `/puzzle`: classic single-player Minesweeper, Easy 9×9/10, Medium 16×16/40, Hard 30×16/99. First click and its neighbours always safe, iterative flood fill, flags (right click, long press, F), chording, win auto-flags, loss shows every mine and wrong flags. **AI hint** from the shared solver on the visible board only, 3 per game; games with a hint never set a best time. It also spots a wrong flag the numbers prove safe ("take your flag off it"). Best times in localStorage. Keyboard play on an ARIA grid. Runs entirely in the browser — the one place mines live on a client, fine for single-player — and loads lazily. Engine `shared/src/engine/puzzle.ts`, UI `client/src/components/puzzle/`, state `client/src/data/puzzleStore.ts` |
+| World chat + invite cards | **Done 2026-09-29** | Lobby chat under Online now for any named player, guests included: last 50 lines in server memory only (`server/src/state/lobbyChat.ts`), sent to newcomers, 5 lines per 10 s per tab. **Post invite to world chat** in the room bar (seated players, not in a full room, a private room only from its host, one card per 30 s per tab) posts a card with the room's code, board, players and mode; its button follows the live game list (Join / Join next / Ask / Full / Room closed). The console's **Clear world chat** (inline confirm) empties it for everyone and logs it under moderation. Nothing is stored in the database |
+| Fruit Fly bot (experiment) | **Done 2026-09-29; retrained 2026-10-01** | **Plays from its own neurons, no solver.** For each covered cell (all of them, or the frontier plus a sample when more than 40) it gets 8 public "smells": share of open neighbours, their numbers, found mines nearby, edge, mines left per covered cell, and the max / mean / min "pressure" of its numbered neighbours (mines still needed ÷ covered cells). 16 ON/OFF channels drive 24 olfactory projection neurons → 200 Kenyon cells → 20 MBONs (male fruit fly connectome, male-cns:v1.0 via neuPrint, 9,076 connections, `circuit.json` unchanged, CC BY 4.0 credit on the card and in the About popup); a logistic readout over the MBONs (`readout.json` format 2, which lists its features and is refused if they ever differ from the code) was retrained on 10,000 seeded Classic games (`scripts/fly/train.ts`). **Sleepy difficulty:** Hard opens its top-scoring cell; Medium and Easy sample from softmax(score / T), T = 0.6 and 1.5 (`FLY_TEMPERATURE`, tuned with `scripts/fly/arena.ts`). **Honest numbers** — held-out picks that are mines: fly 48.4%, the same readout with no circuit 46.0% (+2.4 points, about 2 standard errors: a small lift), a random covered cell 21.1%, the solver's best 59.0% (reference only). Arena, 300 Classic matches each: fly-Hard vs the solver bot on Medium 47.7% wins, vs Easy 88.3%, vs Hard 32.7%; fly-Medium vs Medium 31.0%; fly-Easy vs Medium 13.3%; every level beats a random clicker (91–98%). 10×10, 31 mines, 100 matches: fly-Hard vs Medium 36% (trained on 6×6 only). ~12 ms a move on 6×6, ~63 ms on 16×16. The LLM, when connected, still adds the banter |
+| Elo on the result screen | **Done 2026-10-01** | Ranked matches only: under Win / Lost your change in big type ("+14 Elo", green, red, or ±0) with before → after, and each rated player's change beside their score. Forfeit wins show it too. Guests are told they don't keep a rating. Casual results are unchanged |
+| Phone-width boards | **Done 2026-10-01** | Main-game cells now size to the phone's width counting the gaps; a board too wide even at the 24 px minimum (16×16) scrolls sideways inside its own box, so the page never does. Desktop unchanged |
 | Pixel mine | **Done 2026-09-28** | Mines are an 8-bit bomb with a lit fuse (`MineSprite`, sprite data in `client/src/data/mineSprite.ts`). The spark blinks, except under reduced motion. Dark mode adds a light one-pixel outline. The admin's "show mines" view draws covered mines see-through inside the dashed red border, so they never read as found ones |
-| Site footer + contact | **Done 2026-09-28** | Every page: contact, github, terms, security, privacy, the theme toggle (moved from the header) and the version (`client/src/version.ts`, 2.0.0). Contact popup with six mail buttons to Palangtaj@gmail.com, subject filled in |
+| Site footer + contact | **Done 2026-09-28** | Every page: contact, github, terms, security, privacy, the theme toggle (moved from the header) and the version (`client/src/version.ts`, 3.0.0 since 2026-09-29; its link needs the git tag `v3.0.0`). Contact popup with six mail buttons to Palangtaj@gmail.com, subject filled in |
 | Privacy, security, terms | **Done 2026-09-28** | `/privacy`, `/security`, `/terms` — text in `client/src/data/policies.ts`, checked against what the code actually stores and logs. Readable signed out and without Supabase |
 | Game log page | **Done** | `/games` — history, filter by scope and mode |
 | Server dashboard | **Done** | `/admin` — the connection display the assignment asks for |
@@ -116,7 +136,10 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | Casual vs Ranked modes | **Done** | Elo only moves in Ranked |
 | Matchmaking pool on the console | **Done** | `/admin` shows who is queued, their rating, wait and current window |
 | Contributor guide | **Done** | `CONTRIBUTING.md` — setup, rules, work split, gotchas |
-| Security policy + GitHub security | **Done 2026-09-28** | `SECURITY.md` (report privately through the Security tab). Turned on: private vulnerability reporting, Dependabot alerts, CodeQL code scanning; secret scanning and push protection were already on. First Dependabot findings: 5 moderate (express/body-parser/qs — same-major update fixes them; vitest — dev tooling only, major upgrade) |
+| Security policy + GitHub security | **Done 2026-09-28** | `SECURITY.md` (report privately through the Security tab). Turned on: private vulnerability reporting, Dependabot alerts, CodeQL code scanning; secret scanning and push protection were already on. First Dependabot findings: 5 moderate (express/body-parser/qs — same-major update fixes them; vitest — dev tooling only, major upgrade). **Fixed 2026-09-29:** `npm audit fix` (express 4.22.3, body-parser 1.20.8, qs 6.16.0) and vitest 3 → 5.0.2 (still one Vite 7.3.6); `npm audit` reports 0 |
+| HTTP rate limit | **Done 2026-09-29** | `express-rate-limit`: 600 requests a minute per address on `/health` and the `index.html` fallback, standard `RateLimit` headers, plain 429. The built assets are not counted (a page load is a dozen of them, and tunnel visitors all arrive from one local address). `trust proxy` stays off on purpose (`admin/access.ts`), so behind Render's proxy everyone shares one allowance — fine while Render serves only `/health`. Socket.IO is not affected; chat has its own per-tab limits |
+| Bundle split | **Done 2026-09-29** | React, Supabase and socket.io in their own chunks; the admin console and puzzle mode load on first visit, behind a boundary that offers "Reload the page" if a chunk has gone (e.g. after a redeploy) instead of a blank page. Main chunk 528 kB → 131 kB; no chunk over Vite's 500 kB warning |
+| Small fixes 2026-09-29 | **Done** | A fractional cell (`row: 2.5`) was accepted and then threw inside the reveal; `inBounds` now takes whole numbers only (unit + e2e). The game log's "Mine" filter shows the newest matches first. The online list says "In the menu" and uses the friends list's green / yellow dots |
 | Match history schema | **Applied** | `supabase/migrations/0001_accounts_and_elo.sql`, advisors clean |
 
 ---
@@ -142,6 +165,7 @@ checks were run against the live database and all passed:
 | ~~Apply `supabase/migrations/0002_admins.sql`~~ | **Done 2026-09-27.** `public.admins` exists; `test:ranked` confirms a non-admin is refused, an admin is let in, and the public key gets "permission denied". |
 | **Add admins** | Paste `supabase/queries/add-admin.sql` into the SQL Editor and run it — it adds Chain (`chainpong`) and lists every admin; change the username to add someone else. Needed only to open `/admin` from a machine other than the server. |
 | **Apply `supabase/migrations/0003_friends.sql`** | Friends list and invites. Paste the file into the SQL Editor and run it once. Until then `/profile` says the update is needed and invites are refused. |
+| ~~Apply `supabase/migrations/0004_avatars.sql`~~ | **Done** (confirmed 2026-10-01: `profiles.avatar_path` exists; applied outside the migration history, which lists only 0001). Profile pictures (needs 0001). Adds `profiles.avatar_path` with its own-folder CHECK and column grant, the public `avatars` bucket (2 MB; WebP, PNG, JPEG; no SVG), owner-only storage policies, and `avatar_path` on the leaderboard view (still `security_invoker`). Idempotent. Until then the profile card says the update is needed and everything else works without pictures. Afterwards: add, change and remove a picture once while signed in, and check Storage → avatars → your id. |
 | Add Google OAuth | **Paused** until hosting — needs a real domain. See "Social sign-in" below. |
 
 **Fixed 2026-09-28 — one malformed message could crash the server.** Any client sending an
@@ -271,18 +295,21 @@ first, reach an almost-final version, then go live on AWS** only for what needs 
    tokens a minute), pause after a 429; beyond it the bot plays the solver's pick silently.
    Hints: 3 per player per match, your turn only. Room chat: 5 lines per 10 s, not stored. AI
    matches are recorded like any casual match (the bot as a guest seat).
-7. **Puzzle mode** — classic single-player Minesweeper (first click safe, flood-fill, flags),
-   as its own mode, **with the AI hint**. Reuses the engine and the solver.
-8. **World chat + invite cards** — lobby chat, invite cards posted into it. Room chat and
-   friend-to-friend invites already exist by then.
-9. **Share invite links** — copy link, LINE, phone share sheet; optional private rooms
-   (item 15). Built and tested locally; the full test waits for a public address.
-10. **Fruit Fly bot (experiment)** — a computer level driven by a small circuit from the male
-    fruit fly connectome (MaleCNS, CC BY 4.0), CPU-only like the browser fly tic-tac-toe, with a
-    trained readout choosing among the solver's candidate cells. Be honest in the demo: as in the
-    viral fly-game clips, the trained readout does most of the work. The full-brain version
-    (~166k neurons) needs an NVIDIA GPU — a friend's machine or a cloud GPU later.
-11. **AWS hosting** — last, once the feature set is frozen (EC2, CloudWatch, ELB).
+7. ~~**Puzzle mode**~~ — **done 2026-09-29**, with the AI hint (§2 "Also built").
+8. ~~**World chat + invite cards**~~ — **done 2026-09-29**.
+9. ~~**Share invite links**~~ — **done 2026-09-29**, with private rooms (item 15). Tested
+   locally over sockets; the test from a real phone waits for a public address.
+10. ~~**Fruit Fly bot (experiment)**~~ — **done 2026-09-29**, CPU-only on a 244-neuron circuit.
+    Retrained 2026-10-01 to play without the solver (numbers in §2). The
+    full-brain version (~166k neurons) needs an NVIDIA GPU — a friend's machine or a cloud GPU
+    later. Also done that day: profile pictures (migration 0004), the fixes batch and v3.0.0.
+11. **Hosting — decided 2026-10-01: Cloudflare + AWS.** Cloudflare for the domain, DNS and
+    HTTPS (and the static client on Cloudflare Pages); the game server as one Docker container
+    on AWS EC2 (the existing `Dockerfile`), with CloudWatch for the console stats. One server
+    instance on purpose: every room lives in one process's memory, so it scales by instance
+    size; several instances would need sticky sessions plus Redis for the lobby, chat and
+    matchmaking. Kubernetes was weighed and left out (EKS's control plane alone is ~$73 a month
+    and gives nothing while the server is single-instance). Commit everything just before this.
     **Get a real domain as part of this.** It unblocks Google OAuth and fixes sign-up emails
     that return to localhost (Supabase Site URL). Optional here: AWS Bedrock as the model
     provider, a GPU for the full-brain fly. Vercel was ruled out for the game server: its
@@ -293,11 +320,11 @@ first, reach an almost-final version, then go live on AWS** only for what needs 
 12. **Resume Google OAuth** — after the domain exists: add the three consent-screen links,
     set the authorized domain, publish, then set `VITE_OAUTH_PROVIDERS=google,github`.
 
-**Reminder — Jev (TypeSafe):** the owner had trouble getting an API key (2026-09-29). Once
-`TYPESAFE_API_KEY` works, add Jev as a second move picker: `POST https://api.typesafe.ai/v1/systemone`
-with a `choice` question whose options are the candidate cells (it returns the choice plus a
-probability per option, 70–500 ms). It does not write text, so a Jev bot uses stock lines in
-the chat. Add it to `ai:eval` next to the Groq models.
+**JEV (TypeSafe AI) — playable since 2026-10-01** (see row 8). A probe before building it: on
+three seeded Classic boards, given the solver's odds in each option it picked a best-rated cell
+3 of 3 times; given the board alone it picked one of the best, one lucky 40% mine and one 2%
+empty cell — so it is always offered the odds. Answers in 250–400 ms (`jev-1.13.0`). Still to
+do: add it to `ai:eval` next to the Groq models.
 
 ### Parked until the game is online
 
@@ -311,12 +338,14 @@ Decided 2026-09-27. Each of these needs a public server, so revisit them once ho
 
 ### v1.0.0 MVP
 
-Everything scoped for v1.0.0 is built **except the AI bot**, which is on hold pending the
-team discussion. Remaining before hosting: that bot, and optionally puzzle mode.
+Everything scoped for v1.0.0 is built, and since 2026-09-29 so are the AI bot and puzzle mode
+(v3.0.0). Remaining before hosting: nothing that runs locally, apart from the owner items
+(committing v3.1 + v3.2 and the `v3.0.0` tag — migration 0004 is applied). Next: hosting.
 
 **Extra-points estimate (rubric: AI feature 2, non-AI 1, cap 10, at least one AI feature
 required):** AI opponent 2 + AI hint 2 + six of the many non-AI extras already built = 10.
-Chat, share links and puzzle mode add demo value, not marks.
+Chat, share links, puzzle mode, profile pictures and the Fruit Fly add demo value, not marks
+(the puzzle's hint is the same AI hint feature).
 
 ---
 
@@ -340,15 +369,20 @@ Every claim of "done" above is backed by a command that can be re-run.
 
 ```
 npm run typecheck   # clean across all three packages
-npm test            # 516 unit tests: engine, turn order, room config, Elo, matchmaking,
+npm test            # 866 unit tests: engine, turn order, room config, Elo, matchmaking,
                     #   moderation, join requests, presence, admin access check (incl.
                     #   ADMIN_TOKEN), activity log, handler safety, seat-hold identity,
                     #   session handling, guest history, formatting, friends (status,
                     #   actions, request plan, invite rate limit), profile stats, pixel
                     #   mine sprite, routes, policy text, mine-probability solver (checked
                     #   against brute force), AI levels, hints, Groq advisor (fake fetch),
-                    #   bot controller, chat rules and limits
-npm run test:e2e    # 191 socket assertions — needs a running server; ~30 s of it is the
+                    #   bot controller, chat rules and limits, puzzle rules and hint,
+                    #   puzzle store, room codes and share links, private-room presence,
+                    #   world chat and invite cards, avatar paths and image rules,
+                    #   Fruit Fly circuit / features / sleepy picks / readout format,
+                    #   JEV picker (fake fetch), guest cookie and unofficial Elo,
+                    #   whole-number cells, newest-first "Mine" query
+npm run test:e2e    # 241 socket assertions (with a JEV key; the no-key run checks the refusal) — needs a running server; ~30 s of it is the
                     #   reconnect grace period running out. FMM_URL=http://localhost:3100
                     #   points it at a test server on another port
 npm run test:ranked # 40 assertions against the real database — needs a server + credentials
@@ -364,8 +398,13 @@ only), the terminal log, remote console connections being refused with `ADMIN_ON
 without a guessed token when none is set), the online list carrying each row's account id (null
 for guests), friend invites refused for guests, Play vs AI (a bot seat that plays its turns from
 public state, hints on your turn only and counting down, room chat reaching every member with its
-limits, the room closing when the player leaves), and garbage payloads on every game and console
-event leaving the server running. The signed-in invite path needs two real accounts that are
+limits, the room closing when the player leaves), the Fruit Fly seating and moving with no bot
+errors (checks a fresh server — the fly loads its circuit once per process), private rooms
+(absent from another player's list but on the console, online rows without the code, join /
+watch / ask by code, `room:lookup`, Classic-shaped and garbage values listed), world chat (a line
+reaches others, history for newcomers, the sixth line in 10 s refused, invite rules, the console
+clearing it), HTTP (`/health` with a `RateLimit` header), a fractional cell refused as a bad move,
+and garbage payloads on every game and console event leaving the server running. The signed-in invite path needs two real accounts that are
 friends, so it is not in the e2e suite yet.
 
 `test:ranked` creates two confirmed accounts, plays a ranked match and a casual one, then two

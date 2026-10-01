@@ -4,12 +4,15 @@ import { createBoard } from './engine/board.js';
 import { createRng } from './engine/rng.js';
 import {
   coerceRoomConfig,
+  generateRoomId,
   isClassicConfig,
   isRoomFull,
   joinRequestError,
+  listedRooms,
+  parseRoomCode,
   validateRoomConfig,
 } from './rooms.js';
-import type { RoomConfig } from './types.js';
+import type { RoomConfig, RoomSummary } from './types.js';
 
 const classic = (): RoomConfig => ({ ...CLASSIC_PRESET });
 
@@ -175,6 +178,104 @@ describe('join by request', () => {
 
   it('forces Classic open, whatever the client sent — Classic is the original rules', () => {
     expect(coerceRoomConfig({ ...classic(), joinByRequest: true }).joinByRequest).toBe(false);
+  });
+});
+
+describe('private rooms', () => {
+  const custom = { rows: 8, cols: 8, mineCount: 10 };
+
+  it('is listed by default, so existing callers keep appearing in the game list', () => {
+    expect(coerceRoomConfig(custom).private).toBeUndefined();
+    expect(coerceRoomConfig(undefined).private).toBeUndefined();
+  });
+
+  it('keeps a Custom room private when asked', () => {
+    expect(coerceRoomConfig({ ...custom, private: true }).private).toBe(true);
+  });
+
+  it('forces Classic listed, whatever the client sent — Classic is the original rules', () => {
+    expect(coerceRoomConfig({ ...classic(), private: true }).private).toBeUndefined();
+    expect(coerceRoomConfig({ ...classic(), mode: 'ranked', private: true }).private).toBeUndefined();
+  });
+
+  it('treats anything but a literal true as listed', () => {
+    for (const value of ['yes', 'true', 1, {}, [], null, false]) {
+      expect(coerceRoomConfig({ ...custom, private: value } as never).private).toBeUndefined();
+    }
+  });
+
+  it('keeps private and ask-to-join independent of each other', () => {
+    expect(coerceRoomConfig({ ...custom, private: true, joinByRequest: true })).toMatchObject({
+      private: true,
+      joinByRequest: true,
+    });
+    expect(coerceRoomConfig({ ...custom, private: true, joinByRequest: false })).toMatchObject({
+      private: true,
+      joinByRequest: false,
+    });
+  });
+
+  it('passes validation — being private is not a board setting', () => {
+    expect(validateRoomConfig(coerceRoomConfig({ ...custom, private: true }))).toEqual([]);
+  });
+});
+
+describe('listedRooms', () => {
+  const summary = (id: string, config: Partial<RoomConfig> = {}): RoomSummary => ({
+    id,
+    name: `Room ${id}`,
+    hostNickname: 'Host',
+    config: { ...classic(), ...config },
+    playerCount: 1,
+    spectatorCount: 0,
+    status: 'waiting',
+    createdAt: 0,
+    joinable: true,
+  });
+
+  it('leaves private rooms out of the game list', () => {
+    const list = [summary('OPEN'), summary('HIDE', { rows: 8, private: true }), summary('ASKS', { joinByRequest: true })];
+    expect(listedRooms(list).map((r) => r.id)).toEqual(['OPEN', 'ASKS']);
+  });
+
+  it('keeps every room that is not explicitly private, in order', () => {
+    const list = [summary('B'), summary('A', { private: false })];
+    expect(listedRooms(list).map((r) => r.id)).toEqual(['B', 'A']);
+  });
+});
+
+describe('parseRoomCode', () => {
+  it('upper-cases a typed code — codes are case-insensitive', () => {
+    expect(parseRoomCode('abcd')).toBe('ABCD');
+    expect(parseRoomCode('Ab3D')).toBe('AB3D');
+  });
+
+  it('ignores spaces around and inside the code', () => {
+    expect(parseRoomCode('  ABCD ')).toBe('ABCD');
+    expect(parseRoomCode('AB CD')).toBe('ABCD');
+  });
+
+  it('takes the code out of a pasted share link', () => {
+    expect(parseRoomCode('https://findmymines.example/join/abcd')).toBe('ABCD');
+    expect(parseRoomCode('http://localhost:5173/join/WXYZ/')).toBe('WXYZ');
+    expect(parseRoomCode('/join/q7k2')).toBe('Q7K2');
+  });
+
+  it('refuses anything that cannot be a room code', () => {
+    for (const input of ['', '   ', 'ABC', 'ABCDE', 'AB-D', 'AB_D', 'ÄBCD', '/join/', '/join/ABCDE']) {
+      expect(parseRoomCode(input)).toBeNull();
+    }
+  });
+
+  it('refuses a value that is not text at all', () => {
+    for (const input of [undefined, null, 1234, {}, []]) expect(parseRoomCode(input)).toBeNull();
+  });
+
+  it('accepts every code the server hands out', () => {
+    for (let i = 0; i < 50; i++) {
+      const id = generateRoomId(() => false);
+      expect(parseRoomCode(id.toLowerCase())).toBe(id);
+    }
   });
 });
 

@@ -4,10 +4,17 @@ import {
   planMove,
   thinkDelayMs,
   type AiLevel,
+  type BotSetup,
+  type CellRef,
+  type MovePlan,
   type PublicMatchState,
   type Rng,
 } from '@fmm/shared';
 import { contain, settleWithin } from '../safety.js';
+import type { FlyBrain } from './fly/brain.js';
+import { loadFlyBrain } from './fly/load.js';
+import { FLY_CHAT_CHANCE, flyLine, flyMove } from './fly/play.js';
+import { JEV_CHAT_CHANCE, jevLine, type JevChoice, type JevInput } from './jev.js';
 import type { Advice, PromptInput } from './prompt.js';
 
 /** A model call needs this much of the turn left; otherwise the bot plays the solver's pick. */
@@ -38,14 +45,26 @@ export interface BotAdvisor {
   choose(input: PromptInput, timeoutMs: number): Promise<Advice | null>;
 }
 
+/** What the controller needs from JEV. `JevPicker` fits this shape. */
+export interface BotJev {
+  choose(input: JevInput, timeoutMs: number): Promise<JevChoice | null>;
+}
+
 export interface BotControllerDeps {
   room(roomId: string): BotRoom | undefined;
   /** Null without a Groq key: the bot plays on the solver alone. */
   advisor: BotAdvisor | null;
+  /** Null without a JEV key: a JEV bot (which the server then does not seat) plays the solver's pick. */
+  jev?: BotJev | null;
   /** Posts the bot's line to the room chat. */
   say(roomId: string, bot: { id: string; nickname: string }, text: string): void;
   rng?: Rng;
   report?(error: unknown): void;
+  /**
+   * The Fruit Fly's brain. Omitted: loaded from its files on first use.
+   * Null: the fly plays the solver's pick.
+   */
+  fly?: FlyBrain | null;
 }
 
 interface RoomTask {
@@ -74,10 +93,13 @@ export class BotController {
   private readonly tasks = new Map<string, RoomTask>();
   private readonly rng: Rng;
   private readonly report: (error: unknown) => void;
+  /** Undefined until the first Fruit Fly move needs it. */
+  private flyBrain: FlyBrain | null | undefined;
 
   constructor(private readonly deps: BotControllerDeps) {
     this.rng = deps.rng ?? createRng();
     this.report = deps.report ?? ((error) => console.error('[bot] a computer move failed:', error));
+    this.flyBrain = deps.fly;
   }
 
   /** Start driving the bots in this room. */
@@ -156,12 +178,12 @@ export class BotController {
       const key = `move|${bot.id}|${state.revealed.length}`;
       if (task.key === key) return;
 
-      const level = bot.bot;
+      const setup = bot.bot;
       const think = Math.min(
-        thinkDelayMs(level, this.rng),
+        thinkDelayMs(setup.level, this.rng),
         Math.max(MIN_THINK_MS, turnMsLeft(state) - THINK_TURN_MARGIN_MS),
       );
-      this.schedule(roomId, task, key, think, () => this.move(roomId, task, bot.id, level, key));
+      this.schedule(roomId, task, key, think, () => this.move(roomId, task, bot.id, setup, key));
       return;
     }
 
@@ -192,7 +214,7 @@ export class BotController {
     return key === `move|${botId}|${state.revealed.length}` ? room : null;
   }
 
-  private async move(roomId: string, task: RoomTask, botId: string, level: AiLevel, key: string): Promise<void> {
+  private async move(roomId: string, task: RoomTask, botId: string, setup: BotSetup, key: string): Promise<void> {
     task.busy = true;
     try {
       const room = this.stillItsMove(roomId, task, botId, key);
@@ -205,21 +227,47 @@ export class BotController {
         mineCount: state.bombCount,
         revealed: state.revealed,
       });
-      const plan = planMove(grid, level, this.rng);
+      const plan = planMove(grid, setup.level, this.rng);
       if (!plan) return;
 
-      let pick = plan.pick;
+      const isFly = setup.model === 'fly';
+      const isJev = setup.model === 'jev';
+      // The fly decides with its own neurons, from the open board alone: no
+      // solver odds, no solver shortlist. The level only sets how sleepy it is.
+      // The plan is used only if its brain cannot be loaded.
+      let pick = isFly ? this.flyPick(state, setup.level, plan) : plan.pick;
       let say: string | null = null;
       const leftMs = turnMsLeft(state);
+      // The fly's circuit decides its move. The model is shown only that one
+      // cell, for a line of banter, and its choice of cell is ignored anyway.
+      const offered = isFly ? [pick] : plan.candidates;
 
-      if (this.deps.advisor && plan.candidates.length > 0 && leftMs >= ADVISOR_MIN_TURN_MS) {
+      // JEV chooses among the plan's candidates (its cell and its own odds);
+      // the Groq advisor is not involved, and JEV writes no banter.
+      let jevChoice: JevChoice | null = null;
+      if (isJev && this.deps.jev && offered.length > 0 && leftMs >= ADVISOR_MIN_TURN_MS) {
+        const input: JevInput = {
+          view: state,
+          candidates: offered.map((cell) => ({ cell, probability: grid[cell.row]?.[cell.col] ?? 0 })),
+        };
+        const waitMs = Math.min(ADVISOR_MAX_WAIT_MS, leftMs - ADVISOR_TURN_MARGIN_MS);
+        jevChoice = await settleWithin(this.deps.jev.choose(input, waitMs), waitMs + 250, null);
+        if (!this.stillItsMove(roomId, task, botId, key)) return;
+        // Only ever one of the cells it was offered, and still covered.
+        const open = new Set(state.revealed.map((c) => `${c.row}:${c.col}`));
+        if (jevChoice && open.has(`${jevChoice.cell.row}:${jevChoice.cell.col}`)) jevChoice = null;
+        if (jevChoice) pick = jevChoice.cell;
+      }
+
+      if (!isJev && this.deps.advisor && offered.length > 0 && leftMs >= ADVISOR_MIN_TURN_MS) {
         const me = state.players.find((p) => p.id === botId);
         const others = state.players.filter((p) => p.id !== botId).map((p) => p.score);
         const input: PromptInput = {
-          level,
+          level: setup.level,
+          model: setup.model,
           view: state,
           scores: { you: me?.score ?? 0, opponent: Math.max(0, ...others) },
-          candidates: plan.candidates.map((cell) => ({
+          candidates: offered.map((cell) => ({
             cell,
             probability: grid[cell.row]?.[cell.col] ?? 0,
           })),
@@ -232,18 +280,52 @@ export class BotController {
         // out, the player left, an admin reset the room.
         if (!this.stillItsMove(roomId, task, botId, key)) return;
         if (advice) {
-          pick = advice.cell;
+          if (!isFly) pick = advice.cell;
           say = advice.say;
         }
       }
 
       const nickname = state.players.find((p) => p.id === botId)?.nickname ?? 'AI';
       room.reveal(botId, pick.row, pick.col);
+      if (!say && isFly && this.rng() < FLY_CHAT_CHANCE) {
+        const opened = room.publicState().revealed.find((c) => c.row === pick.row && c.col === pick.col);
+        if (opened) say = flyLine(pick, opened.kind === 'bomb', this.rng);
+      }
+      // JEV's line quotes its own odds, so there is none when it did not answer.
+      if (!say && jevChoice && this.rng() < JEV_CHAT_CHANCE) {
+        const opened = room.publicState().revealed.find((c) => c.row === pick.row && c.col === pick.col);
+        if (opened) say = jevLine(pick, jevChoice.probability, opened.kind === 'bomb', this.rng);
+      }
       if (say) this.deps.say(roomId, { id: botId, nickname }, say);
     } finally {
       task.busy = false;
       // Whatever happened meanwhile — a kept turn, a finished match — look again.
       if (this.tasks.get(roomId) === task) this.update(roomId);
+    }
+  }
+
+  /**
+   * The Fruit Fly's own pick: every covered cell (or the frontier and a sample
+   * of the rest) runs through its circuit, and its level sets how loosely it
+   * follows the readout. Public board only. Without a working brain it plays
+   * the solver's pick, so the match always goes on.
+   */
+  private flyPick(state: PublicMatchState, level: AiLevel, plan: MovePlan): CellRef {
+    if (this.flyBrain === undefined) {
+      try {
+        this.flyBrain = loadFlyBrain();
+      } catch (error) {
+        this.report(error);
+        this.flyBrain = null;
+      }
+    }
+    if (!this.flyBrain) return plan.pick;
+    try {
+      const view = { rows: state.rows, cols: state.cols, mineCount: state.bombCount, revealed: state.revealed };
+      return flyMove(this.flyBrain, view, level, this.rng)?.pick ?? plan.pick;
+    } catch (error) {
+      this.report(error);
+      return plan.pick;
     }
   }
 }

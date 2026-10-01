@@ -16,8 +16,39 @@ export type RoomMode = 'casual' | 'ranked';
  */
 export type RoomOrigin = 'created' | 'matchmaking' | 'ai';
 
-/** How hard a computer opponent plays. */
+/** How hard a computer opponent plays: how often it makes a deliberate mistake. */
 export type AiLevel = 'easy' | 'medium' | 'hard';
+
+/**
+ * What picks a computer opponent's moves.
+ *   ai   the solver, with a language model choosing from its shortlist and chatting
+ *   fly  the experimental Fruit Fly: a small circuit from the fruit fly connectome
+ *   jev  TypeSafe AI's JEV, choosing from the solver's shortlist — playable
+ *        only on a server with a JEV key (see AiAbout)
+ */
+export type AiModel = 'ai' | 'fly' | 'jev';
+
+/** How crowded a game against the computer is with mines. 'classic' is 11 on 6×6. */
+export type AiDensity = 'light' | 'classic' | 'heavy';
+
+/** A computer opponent: who picks its moves, and how hard it plays. */
+export interface BotSetup {
+  level: AiLevel;
+  model: AiModel;
+}
+
+/**
+ * What this server's computer opponents run on, for the lobby card and the
+ * info popup.
+ *   llm  the language model the "AI" opponent uses. Null when none is
+ *        configured: the bot then plays on the solver alone.
+ *   jev  TypeSafe AI's model. Null when the server has no JEV key: JEV then
+ *        cannot be played here, and the card shows it greyed out.
+ */
+export interface AiAbout {
+  llm: { provider: string; model: string } | null;
+  jev: { provider: string; model: string } | null;
+}
 
 /**
  * Per-room settings, chosen when the room is created.
@@ -34,6 +65,11 @@ export interface RoomConfig {
    * rooms only — a Classic room is always open. Absent means open.
    */
   joinByRequest?: boolean;
+  /**
+   * Hidden from the game list and the online list; people get in with the
+   * room code or a share link. Custom rooms only. Absent means listed.
+   */
+  private?: boolean;
 }
 
 export interface PlayerPublic {
@@ -50,8 +86,10 @@ export interface PlayerPublic {
   isGuest: boolean;
   /** Set for the duration of the end-of-match screen after a ranked game. */
   eloDelta?: number;
-  /** Set on a computer opponent's seat: how hard it plays. */
-  bot?: AiLevel;
+  /** Set on a computer opponent's seat: what picks its moves and how hard it plays. */
+  bot?: BotSetup;
+  /** The player's profile picture, when their account has one. */
+  avatarUrl?: string | null;
 }
 
 /** One line in a room's chat. Not stored anywhere — it lives as long as the room. */
@@ -62,6 +100,41 @@ export interface ChatMessage {
   fromName: string;
   kind: 'player' | 'bot';
   text: string;
+  /** Server time, epoch milliseconds. */
+  at: number;
+  /** The sender's profile picture, when their account has one. */
+  fromAvatarUrl?: string | null;
+}
+
+/** A room advertised in the world chat by someone in it. */
+export interface LobbyInvite {
+  roomId: string;
+  roomName: string;
+  rows: number;
+  cols: number;
+  mineCount: number;
+  playerCount: number;
+  maxPlayers: number | null;
+  mode: RoomMode;
+  joinByRequest: boolean;
+  /**
+   * The host shared a private room's code. Such a room is never in the game
+   * list, so the card cannot read "closed" from its absence there.
+   */
+  private?: boolean;
+}
+
+/** One line in the lobby's world chat. Kept in server memory only, last few dozen. */
+export interface LobbyMessage {
+  id: string;
+  fromId: string;
+  fromName: string;
+  isGuest: boolean;
+  fromAvatarUrl?: string | null;
+  /** 'invite' carries a room card with a Join button. */
+  kind: 'player' | 'invite';
+  text: string;
+  invite?: LobbyInvite;
   /** Server time, epoch milliseconds. */
   at: number;
 }
@@ -88,6 +161,8 @@ export interface Identity {
   elo: number;
   gamesPlayed: number;
   isGuest: boolean;
+  /** Public URL of the account's profile picture, if it has one. */
+  avatarUrl?: string | null;
 }
 
 /** A connected client as shown in the server console's client list. */
@@ -125,6 +200,13 @@ export interface OnlinePlayer {
    * friends in the list.
    */
   profileId: string | null;
+  /**
+   * They are in a private room: `roomId` is withheld (null) so the code does
+   * not leak, and nobody is offered Join or Watch from the list.
+   */
+  privateRoom?: boolean;
+  /** Their profile picture, when their account has one. */
+  avatarUrl?: string | null;
 }
 
 /** A friend asked you to join the room they are in. */

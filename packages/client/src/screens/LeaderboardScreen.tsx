@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { authEnabled } from '../auth/supabase.js';
+import { Avatar } from '../components/Avatar.js';
+import { pictureUrl } from '../data/avatar.js';
 import { winRate } from '../data/format.js';
 import { currentUserId, fetchLeaderboard, type LeaderboardRow } from '../data/queries.js';
 
@@ -75,6 +77,7 @@ export function LeaderboardScreen() {
                 <li key={row.id} className={isMe ? 'is-me' : undefined}>
                   <span className="rank-cell">
                     <span className="rank-number">{row.rank}</span>
+                    <Avatar name={row.username} url={pictureUrl(row.id, row.avatar_path)} size={32} />
                     <span className="who">
                       {row.username}
                       {isMe && <span className="tag me">you</span>}

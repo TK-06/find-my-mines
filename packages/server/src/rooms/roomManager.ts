@@ -3,7 +3,7 @@ import {
   coerceRoomConfig,
   generateRoomId,
   validateRoomConfig,
-  type AiLevel,
+  type BotSetup,
   type RoomConfig,
   type RoomOrigin,
   type RoomSummary,
@@ -54,7 +54,12 @@ export class RoomManager {
     rawConfig: Partial<RoomConfig> | undefined,
     origin: RoomOrigin = 'created',
   ): CreateResult {
-    const config = coerceRoomConfig(rawConfig);
+    // Only a room a player created can be private. Matchmaking and AI rooms
+    // are Classic-shaped, which already keeps them listed; this keeps it so
+    // even if their board ever changes.
+    const config = coerceRoomConfig(
+      origin === 'created' ? rawConfig : { ...rawConfig, private: false },
+    );
     const errors = validateRoomConfig(config);
     if (errors.length > 0) return { ok: false, errors };
 
@@ -89,12 +94,12 @@ export class RoomManager {
    * never appear among connected clients and anything emitted to them goes
    * nowhere.
    */
-  addBot(roomId: string, level: AiLevel): string | null {
+  addBot(roomId: string, setup: BotSetup): string | null {
     const room = this.rooms.get(roomId);
     if (!room) return null;
 
     const id = `bot:${randomUUID().replace(/-/g, '').slice(0, 8)}`;
-    if (!room.addBot(id, level)) return null;
+    if (!room.addBot(id, setup)) return null;
     this.memberRoom.set(id, roomId);
     return id;
   }

@@ -7,6 +7,7 @@ import { IdentityCard } from '../components/profile/IdentityCard.js';
 import { RatingChart } from '../components/profile/RatingChart.js';
 import { RecentMatches } from '../components/profile/RecentMatches.js';
 import { winRate } from '../data/format.js';
+import type { GuestProfile } from '../data/guestCookie.js';
 import {
   bestElo,
   dayStreak,
@@ -40,15 +41,19 @@ export interface ProfileScreenProps {
   onWatch: (roomId: string) => void;
   onInvite: (profileId: string) => Promise<ModerationResult>;
   onOpenGameLog: () => void;
+  /** The guest this browser remembers, unofficial rating and all; null for anyone else. */
+  guest: GuestProfile | null;
+  /** "Forget me": the cookie and the guest match history go. */
+  onForgetGuest: () => void;
 }
 
 /**
  * The signed-in player's page: who they are and their friends on the left;
  * their numbers, rating line, year of activity and recent matches on the right.
  *
- * Guests have no profile by design (their ratings are never persisted), so
- * they get an explanation rather than an error — and without Supabase at all
- * the page says so instead of crashing.
+ * Guests have no profile by design (the server never persists their ratings), so
+ * they get a small card of what this browser remembers — plainly unofficial —
+ * and without Supabase at all the page says so instead of crashing.
  */
 export function ProfileScreen({
   online,
@@ -58,6 +63,8 @@ export function ProfileScreen({
   onWatch,
   onInvite,
   onOpenGameLog,
+  guest,
+  onForgetGuest,
 }: ProfileScreenProps) {
   const [userId, setUserId] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
@@ -78,8 +85,8 @@ export function ProfileScreen({
         fetchRank(id),
       ]);
       // The history is newest first, so its first ids are the latest matches.
-      // Fetched by id rather than with fetchMatchesForProfile, whose seat
-      // lookup has no order and so is not guaranteed to return the newest.
+      // Reusing it (and fetching those matches by id) saves the extra lookup
+      // fetchMatchesForProfile would make.
       const recentIds = [...new Set(seats.map((seat) => seat.match_id))].slice(0, RECENT_MATCHES);
       const matches = await fetchMatchesByIds(recentIds);
 
@@ -133,10 +140,11 @@ export function ProfileScreen({
   if (loading) return <EmptyState title="Loading your profile…" />;
 
   if (!userId) {
+    if (guest) return <GuestCard guest={guest} onOpenGameLog={onOpenGameLog} onForget={onForgetGuest} />;
     return (
       <EmptyState
         title="You’re playing as a guest"
-        detail="Guest ratings aren’t saved between visits. Sign in from the home page to keep a profile, a rating and a match history."
+        detail="Guests have no official rating. Sign in from the home page to keep a profile, a rating and a match history."
       />
     );
   }
@@ -197,6 +205,74 @@ export function ProfileScreen({
         <RecentMatches matches={recent} userId={userId} onOpenGameLog={onOpenGameLog} />
       </div>
     </div>
+  );
+}
+
+/**
+ * What this browser remembers of a guest: name, the unofficial rating it
+ * worked out, and the ranked record. Everything is labelled unofficial because
+ * the server never saw it. "Forget me" asks first, inline.
+ */
+function GuestCard({
+  guest,
+  onOpenGameLog,
+  onForget,
+}: {
+  guest: GuestProfile;
+  onOpenGameLog: () => void;
+  onForget: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <section className="card guest-card" aria-labelledby="guest-card-title">
+      <p className="muted guest-card-kicker">Guest · remembered in this browser for 30 days</p>
+      <h2 id="guest-card-title" className="profile-name">
+        {guest.name}
+      </h2>
+
+      <dl className="profile-tiles">
+        <Tile label="Elo (unofficial)" value={String(guest.rating)} detail="worked out by this browser" />
+        <Tile
+          label="Ranked games"
+          value={guest.games.toLocaleString('en-US')}
+          detail={`${winRate(guest.wins, guest.games)}% won`}
+        />
+        <Tile label="Record" value={`${guest.wins}–${guest.losses}–${guest.draws}`} detail="wins · losses · draws" />
+      </dl>
+
+      <p className="muted">
+        Only this browser knows this rating; the server rates every guest as {STARTING_ELO}. Sign in to keep a
+        real rating.
+      </p>
+
+      <div className="guest-card-actions">
+        <button type="button" className="ghost" onClick={onOpenGameLog}>
+          Open my game log
+        </button>
+        {!confirming && (
+          <button type="button" className="ghost" onClick={() => setConfirming(true)}>
+            Forget me on this browser
+          </button>
+        )}
+      </div>
+
+      {confirming && (
+        <div className="guest-forget" role="group" aria-label="Confirm forgetting this guest">
+          <p>
+            Forget {guest.name}? The name, the unofficial rating, the record and the list of matches this browser
+            keeps for the game log are deleted. Matches already played stay in the public log.
+          </p>
+          <div className="guest-card-actions">
+            <button type="button" onClick={onForget}>
+              Yes, forget me
+            </button>
+            <button type="button" className="ghost" autoFocus onClick={() => setConfirming(false)}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

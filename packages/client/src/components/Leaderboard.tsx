@@ -1,5 +1,6 @@
 import { TURN_SECONDS, nextInTurn, type PublicMatchState } from '@fmm/shared';
 import { isBotSeat } from '../data/aiPlay.js';
+import { Avatar } from './Avatar.js';
 
 /** Kick and ban buttons, present only when this viewer is allowed to moderate. */
 export interface ModerationControls {
@@ -110,6 +111,7 @@ export function Leaderboard({ state, myId, moderation }: Props) {
               >
                 <span className="rank">{rank}</span>
                 <span className="who">
+                  <Avatar name={player.nickname} url={player.avatarUrl} bot={player.bot?.model ?? false} size={24} />
                   {player.nickname}
                   {isBot && <span className="tag bot">bot</span>}
                   {isMe && <span className="tag me">you</span>}

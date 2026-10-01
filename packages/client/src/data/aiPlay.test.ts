@@ -1,12 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { AI_LEVELS, type PlayerPublic, type PublicMatchState, type RevealedCell } from '@fmm/shared';
+import { AI_LEVELS, AI_MODELS, type PlayerPublic, type PublicMatchState, type RevealedCell } from '@fmm/shared';
 import {
+  AI_DENSITY_LABEL,
   AI_LEVEL_COPY,
+  AI_MODEL_COPY,
+  DEFAULT_AI_SETUP,
+  FLY_CREDIT,
+  FLY_EXPLAINER,
+  JEV_UNAVAILABLE,
+  JEV_UNAVAILABLE_NOTE,
+  boardSummary,
   canAskHint,
+  densityPercent,
   hintButtonLabel,
   hintVisible,
+  isModelAvailable,
   isNewMatch,
   isBotSeat,
+  opponentNote,
+  parseAiSetup,
+  playLabel,
+  playableModel,
+  type AboutState,
 } from './aiPlay.js';
 
 const ME = 'me';
@@ -43,7 +58,7 @@ const aiState = (over: Partial<PublicMatchState> = {}): PublicMatchState => ({
   cols: 6,
   bombCount: 11,
   bombsFound: 0,
-  players: [player(ME), player(BOT, { nickname: 'AI · Hard', bot: 'hard' })],
+  players: [player(ME), player(BOT, { nickname: 'AI · Hard', bot: { level: 'hard', model: 'ai' } })],
   spectatorCount: 0,
   spectators: [],
   joinRequests: [],
@@ -55,6 +70,9 @@ const aiState = (over: Partial<PublicMatchState> = {}): PublicMatchState => ({
   ...over,
 });
 
+const jevHere: AboutState = { llm: null, jev: { provider: 'typesafe', model: 'jev-1' } };
+const noJev: AboutState = { llm: null, jev: null };
+
 describe('AI_LEVEL_COPY', () => {
   it('names and describes every level, easiest first', () => {
     expect(AI_LEVELS.map((level) => AI_LEVEL_COPY[level].label)).toEqual(['Easy', 'Medium', 'Hard']);
@@ -62,9 +80,134 @@ describe('AI_LEVEL_COPY', () => {
   });
 });
 
+describe('opponent copy', () => {
+  it('has a note for every opponent, and JEV’s changes when the server cannot play it', () => {
+    for (const model of AI_MODELS) expect(AI_MODEL_COPY[model].note.length).toBeGreaterThan(0);
+    expect(JEV_UNAVAILABLE).toBe('JEV isn’t set up on this server.');
+    expect(opponentNote('jev', jevHere)).toBe(AI_MODEL_COPY.jev.note);
+    expect(opponentNote('jev', noJev)).toBe(JEV_UNAVAILABLE_NOTE);
+    expect(opponentNote('fly', noJev)).toBe(AI_MODEL_COPY.fly.note);
+  });
+
+  it('labels the densities with their share of the cells', () => {
+    expect(AI_DENSITY_LABEL.classic).toBe('Classic');
+    expect(densityPercent('light')).toBe('20%');
+    expect(densityPercent('classic')).toBe('31%');
+    expect(densityPercent('heavy')).toBe('40%');
+  });
+});
+
+describe('Fruit Fly copy', () => {
+  it('says the fly reads the open board itself, with no solver, through a trained readout', () => {
+    expect(FLY_EXPLAINER).toMatch(/fly/i);
+    expect(FLY_EXPLAINER).toMatch(/no solver/i);
+    expect(FLY_EXPLAINER).toMatch(/trained readout/i);
+    expect(FLY_EXPLAINER).not.toMatch(/solver’s odds/i);
+  });
+
+  it('explains difficulty as how sleepy the fly is, not as handed-in mistakes', () => {
+    expect(FLY_EXPLAINER).not.toMatch(/as well as Hard/i);
+    expect(FLY_EXPLAINER).toMatch(/sleepier/i);
+    expect(FLY_EXPLAINER).not.toMatch(/difficulty works as it does for the AI/i);
+  });
+
+  it('credits the connectome’s creators under CC BY 4.0 and links to the data and the licence', () => {
+    expect(FLY_CREDIT.text).toBe(
+      'Brain wiring: male fruit fly connectome (MaleCNS) — Janelia FlyEM, University of Cambridge, MRC LMB and Google Research',
+    );
+    expect(FLY_CREDIT.href).toBe('https://male-cns.janelia.org');
+    expect(FLY_CREDIT.license).toBe('CC BY 4.0');
+    expect(FLY_CREDIT.licenseHref).toBe('https://creativecommons.org/licenses/by/4.0/');
+  });
+});
+
+describe('boardSummary', () => {
+  it('gives the side and the mine count', () => {
+    expect(boardSummary(10, 'heavy')).toBe('10×10 · 40 mines');
+    expect(boardSummary(16, 'light')).toBe('16×16 · 51 mines');
+    expect(boardSummary(6, 'heavy')).toBe('6×6 · 14 mines');
+  });
+
+  it('says where the default board comes from', () => {
+    expect(boardSummary(6, 'classic')).toBe('6×6 · 11 mines — the Classic board from the assignment');
+    // Only that exact board is the assignment's.
+    expect(boardSummary(8, 'classic')).not.toMatch(/assignment/);
+  });
+});
+
+describe('playLabel', () => {
+  it('names the opponent and the level', () => {
+    expect(playLabel('ai', 'medium')).toBe('Play AI · Medium');
+    expect(playLabel('fly', 'hard')).toBe('Play Fruit Fly · Hard');
+  });
+});
+
+describe('parseAiSetup', () => {
+  it('starts on the AI, Medium, the Classic 6×6 board', () => {
+    expect(DEFAULT_AI_SETUP).toEqual({ level: 'medium', model: 'ai', size: 6, density: 'classic' });
+    expect(parseAiSetup(null)).toEqual(DEFAULT_AI_SETUP);
+  });
+
+  it('reads back what was stored', () => {
+    const setup = { level: 'hard', model: 'fly', size: 12, density: 'heavy' };
+    expect(parseAiSetup(JSON.stringify(setup))).toEqual(setup);
+  });
+
+  it('falls back per field, keeping the valid ones', () => {
+    const raw = JSON.stringify({ level: 'fly', model: 'fly', size: 7, density: 'heavy' });
+    expect(parseAiSetup(raw)).toEqual({ level: 'medium', model: 'fly', size: 6, density: 'heavy' });
+  });
+
+  it('restores JEV like any opponent, and nothing that is not one', () => {
+    expect(parseAiSetup(JSON.stringify({ model: 'jev' })).model).toBe('jev');
+    expect(parseAiSetup(JSON.stringify({ level: 'hard', model: 'jev', size: 8, density: 'light' }))).toEqual({
+      level: 'hard',
+      model: 'jev',
+      size: 8,
+      density: 'light',
+    });
+    for (const model of ['nope', 'JEV', '', 3, null]) {
+      expect(parseAiSetup(JSON.stringify({ model })).model).toBe('ai');
+    }
+  });
+
+  it('shrugs off anything that is not a stored setup', () => {
+    for (const raw of ['', '{', 'null', '[]', '"hard"', '42']) {
+      expect(parseAiSetup(raw)).toEqual(DEFAULT_AI_SETUP);
+    }
+  });
+});
+
+describe('JEV availability', () => {
+  it('is playable only once the server has said it has a JEV key', () => {
+    expect(isModelAvailable('jev', jevHere)).toBe(true);
+    expect(isModelAvailable('jev', noJev)).toBe(false);
+  });
+
+  it('stays unavailable while checking and when the check failed', () => {
+    expect(isModelAvailable('jev', 'checking')).toBe(false);
+    expect(isModelAvailable('jev', null)).toBe(false);
+  });
+
+  it('never depends on the server for the AI or the Fruit Fly', () => {
+    for (const state of ['checking', null, noJev, jevHere] as AboutState[]) {
+      expect(isModelAvailable('ai', state)).toBe(true);
+      expect(isModelAvailable('fly', state)).toBe(true);
+    }
+  });
+
+  it('plays the AI instead of a remembered JEV that cannot be played here', () => {
+    expect(playableModel('jev', 'checking')).toBe('ai');
+    expect(playableModel('jev', null)).toBe('ai');
+    expect(playableModel('jev', noJev)).toBe('ai');
+    expect(playableModel('jev', jevHere)).toBe('jev');
+    expect(playableModel('fly', noJev)).toBe('fly');
+  });
+});
+
 describe('isBotSeat', () => {
   it('is true only for a seat the server marked as a computer', () => {
-    expect(isBotSeat(player(BOT, { bot: 'easy' }))).toBe(true);
+    expect(isBotSeat(player(BOT, { bot: { level: 'easy', model: 'fly' } }))).toBe(true);
     expect(isBotSeat(player(ME))).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { STARTING_ELO, type Identity } from '@fmm/shared';
+import { STARTING_ELO, avatarUrlFor, isOwnAvatarPath, type Identity } from '@fmm/shared';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 /**
@@ -110,19 +110,49 @@ export async function identityFromToken(
   const { data, error } = await admin.auth.getUser(accessToken);
   if (error || !data.user) return guestIdentity(fallbackNickname);
 
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('id, username, elo, games_played')
-    .eq('id', data.user.id)
-    .single();
-
+  const profile = await loadProfile(admin, data.user.id);
   if (!profile) return guestIdentity(fallbackNickname);
 
+  const profileId = profile.id as string;
+  // Only a picture in the account's own folder becomes an address; the
+  // database enforces the same rule, this keeps the server from relying on it.
+  const path = isOwnAvatarPath(profileId, profile.avatar_path) ? profile.avatar_path : null;
+
   return {
-    profileId: profile.id as string,
+    profileId,
     nickname: (profile.username as string) ?? fallbackNickname,
     elo: (profile.elo as number) ?? STARTING_ELO,
     gamesPlayed: (profile.games_played as number) ?? 0,
     isGuest: false,
+    avatarUrl: avatarUrlFor(url, path),
   };
+}
+
+/**
+ * The profile row behind a verified account, picture included when the
+ * database has one.
+ *
+ * Until migration 0004 is run the avatar_path column does not exist and asking
+ * for it fails the whole query. That must not turn a signed-in player into a
+ * guest, so the query is asked again without it — no picture, same account.
+ */
+async function loadProfile(
+  client: SupabaseClient,
+  id: string,
+): Promise<Record<string, unknown> | null> {
+  const withPicture = await client
+    .from('profiles')
+    .select('id, username, elo, games_played, avatar_path')
+    .eq('id', id)
+    .single();
+  if (withPicture.data) return withPicture.data as Record<string, unknown>;
+  // PGRST116: no row at all — asking again would not find one either.
+  if (!withPicture.error || withPicture.error.code === 'PGRST116') return null;
+
+  const without = await client
+    .from('profiles')
+    .select('id, username, elo, games_played')
+    .eq('id', id)
+    .single();
+  return (without.data as Record<string, unknown> | null) ?? null;
 }

@@ -23,5 +23,21 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Libraries in their own chunks: the app chunk stays under Vite's
+        // 500 kB warning, and a release that only changes game code leaves
+        // these cached in the browser.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'react';
+          if (/[\\/]node_modules[\\/]@supabase[\\/]/.test(id)) return 'supabase';
+          if (/[\\/]node_modules[\\/](socket\.io-client|socket\.io-parser|engine\.io-client|engine\.io-parser|@socket\.io)[\\/]/.test(id)) {
+            return 'socket';
+          }
+          return undefined;
+        },
+      },
+    },
   },
 });

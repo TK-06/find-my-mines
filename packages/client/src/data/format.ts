@@ -7,7 +7,7 @@ import type { LogLine, OnlinePlayer, RemovalNotice } from '@fmm/shared';
  * browser, a database, or a clock.
  */
 
-/** Where someone is, as the lobby's online list says it. */
+/** Where someone is, as the lobby's online list says it — in the friends list's words. */
 export function presenceLabel(player: Pick<OnlinePlayer, 'status' | 'roomId'>): string {
   switch (player.status) {
     case 'queue':
@@ -19,7 +19,7 @@ export function presenceLabel(player: Pick<OnlinePlayer, 'status' | 'roomId'>): 
     case 'watching':
       return `Watching ${player.roomId}`;
     default:
-      return 'In menu';
+      return 'In the menu';
   }
 }
 
@@ -63,6 +63,22 @@ export function deltaTone(delta: number): 'up' | 'down' | 'flat' {
   if (delta > 0) return 'up';
   if (delta < 0) return 'down';
   return 'flat';
+}
+
+/**
+ * A rating change as the result screen words it: "+14", "−9" (a true minus
+ * sign, so it lines up with the plus), or "±0" — a draw between equals moves
+ * nobody, and "0" alone reads like missing data.
+ */
+export function eloChangeText(delta: number): string {
+  if (delta > 0) return `+${delta}`;
+  if (delta < 0) return `−${Math.abs(delta)}`;
+  return '±0';
+}
+
+/** Which colour class a result-screen rating change should render with. */
+export function eloChangeTone(delta: number): 'up' | 'down' | 'flat' {
+  return deltaTone(delta);
 }
 
 /** Compact board description, e.g. "6×6 · 11 mines". */
