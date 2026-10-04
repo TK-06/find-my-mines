@@ -11,10 +11,15 @@ import {
   type FoundProfile,
   type SearchResult,
 } from '../data/playerSearch.js';
+import { PlayerLink } from '../router.js';
 import { Avatar } from './Avatar.js';
 
 export interface FriendSearchProps {
-  userId: string;
+  /**
+   * The signed-in player's profile id. Null for a guest, who can look people up
+   * but not befriend them: their rows offer View, never Add.
+   */
+  userId: string | null;
   friendships: Friendship[];
   online: OnlinePlayer[];
   /** Each friend's row as the list draws it, for their live button (Invite / Join / Watch). */
@@ -28,7 +33,16 @@ export interface FriendSearchProps {
   /** They asked first: says yes. */
   onAccept: (result: SearchResult) => Promise<boolean>;
   onFriendAction: (row: FriendRow, action: FriendAction) => void;
-  onClose: () => void;
+  /** Opens someone's public profile: their name in every row is a link to it. */
+  onViewProfile: (username: string) => void;
+  /** Esc in an empty box. Left out where the box is always there and has nothing to close. */
+  onClose?: () => void;
+  /**
+   * Put the cursor in the box when it appears. On by default: the Friends card
+   * opens it on purpose. The lobby's is always on the page, and grabbing focus
+   * there would pop the keyboard up on a phone.
+   */
+  autoFocus?: boolean;
 }
 
 type Search =
@@ -40,7 +54,11 @@ type Search =
  * Find a player by typing part of their username: a dropdown of matches with
  * friends first, the letters typed highlighted, and each row's one action —
  * Add, Accept, or a friend's live Invite / Join / Watch. Arrow keys move, Enter
- * does the highlighted row's action, Esc clears and then closes.
+ * does the highlighted row's action, Esc clears and then (if there is anything
+ * to close) closes.
+ *
+ * Each name is a link to that player's public profile, for the mouse; the
+ * keyboard has no use for it here, so it stays out of the Tab order.
  */
 export function FriendSearch({
   userId,
@@ -52,7 +70,9 @@ export function FriendSearch({
   onAdd,
   onAccept,
   onFriendAction,
+  onViewProfile,
   onClose,
+  autoFocus = true,
 }: FriendSearchProps) {
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState<Search>({ status: 'idle', found: [], query: '' });
@@ -68,8 +88,8 @@ export function FriendSearch({
   const clean = normalizeQuery(query);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
 
   useEffect(() => {
     const mine = ++seq.current;
@@ -102,6 +122,11 @@ export function FriendSearch({
 
   async function perform(result: SearchResult) {
     if (busy.has(result.id)) return;
+    // A guest can only look: the one thing a row does is open the profile.
+    if (userId === null) {
+      onViewProfile(result.username);
+      return;
+    }
     if (result.relation === 'none') {
       if (await onAdd(result)) setQuery('');
     } else if (result.relation === 'incoming') {
@@ -125,7 +150,7 @@ export function FriendSearch({
     } else if (event.key === 'Escape') {
       event.preventDefault();
       if (query) setQuery('');
-      else onClose();
+      else onClose?.();
     }
   }
 
@@ -163,6 +188,8 @@ export function FriendSearch({
         )}
       </div>
 
+      {userId === null && showList && <p className="muted search-guest-note">Sign in to add friends.</p>}
+
       {showList && (
         <div className="search-results">
           {results.length > 0 ? (
@@ -173,12 +200,14 @@ export function FriendSearch({
                   id={optionId(baseId, result.id)}
                   result={result}
                   query={search.query}
+                  guest={userId === null}
                   active={index === active}
                   busy={busy.has(result.id)}
                   friendRow={friendRows.get(result.id)}
                   note={inviteNotes.get(result.id)}
                   onHover={() => setActive(index)}
                   onAct={() => void perform(result)}
+                  onViewProfile={onViewProfile}
                 />
               ))}
             </ul>
@@ -207,7 +236,7 @@ export function FriendSearch({
                 <kbd>Enter</kbd> act
               </span>
               <span>
-                <kbd>Esc</kbd> close
+                <kbd>Esc</kbd> {onClose ? 'close' : 'clear'}
               </span>
             </div>
           )}
@@ -225,22 +254,27 @@ function ResultRow({
   id,
   result,
   query,
+  guest,
   active,
   busy,
   friendRow,
   note,
   onHover,
   onAct,
+  onViewProfile,
 }: {
   id: string;
   result: SearchResult;
   query: string;
+  /** The viewer is a guest: no Add, only View. */
+  guest: boolean;
   active: boolean;
   busy: boolean;
   friendRow: FriendRow | undefined;
   note: { text: string; failed: boolean } | undefined;
   onHover: () => void;
   onAct: () => void;
+  onViewProfile: (username: string) => void;
 }) {
   const dot = result.presence === 'offline' ? 'offline' : result.presence === 'playing' ? 'playing' : 'online';
   const where = presenceText(result.presence);
@@ -262,7 +296,12 @@ function ResultRow({
       {label}
     </button>
   );
-  switch (result.relation) {
+  switch (guest ? 'guest' : result.relation) {
+    case 'guest':
+      // No friendships to make: the one thing to do with a result is look.
+      action = button('View', active);
+      hint = 'Enter opens their profile.';
+      break;
     case 'none':
       action = button(busy ? 'Sending…' : 'Add', active);
       hint = 'Enter sends a friend request.';
@@ -300,11 +339,15 @@ function ResultRow({
       <Avatar className="friend-avatar" name={result.username} url={result.avatarUrl} />
       <span className="search-main" aria-hidden>
         <strong className="search-name">
-          <Highlight name={result.username} query={query} />
+          <PlayerLink name={result.username} onOpen={onViewProfile} tabIndex={-1}>
+            <Highlight name={result.username} query={query} />
+          </PlayerLink>
         </strong>
         <span className="search-meta">
           <span className={`friend-dot ${dot}`} />
-          {elo} Elo · {where}
+          <span className="search-meta-text">
+            {elo} Elo · {where}
+          </span>
         </span>
       </span>
       <span className="search-action">{action}</span>

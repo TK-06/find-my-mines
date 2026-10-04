@@ -152,6 +152,7 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | Player cards + public profiles | **Done 2026-10-03** | Every name in Online now is a button: yours opens your profile, anyone else's a card — a popover beside the list, a bottom sheet on phones. Accounts: Elo and rank, ranked win rate and games, last 5 results, **View profile** and **Add friend** (Accept / Requested / Friends; "Sign in to add friends" for guests). Guests: name and where they are. ⋯ holds Copy username and **Report player…**. **`/u/<username>`** is a read-only public profile (tiles, rating line, heatmap, recent matches, friend button). `PlayerCard.tsx`, `screens/PlayerProfileScreen.tsx`, router `pathForPlayer` / `playerNameFromPath` |
 | Player reports | **Done 2026-10-03** | Anyone named — guests too — reports from a player card: reason (offensive name or picture, harassment, cheating, spam, something else) and optional details. New events `player:report`, `admin:report`, `admin:reports`, and an optional `guestId` on `player:join`. The server fills in both sides from its own records: name, account id, the `fmm_guest` cookie's random id, tab id, IP address, room. Limits: the same player once per 10 min, 5 reports per 10 min, no self-reports. Admins get a **Player reports** card on `/admin` (Resolve / Dismiss / Reopen; Kick and Ban while the player is still connected), every change logged under moderation. Kept in memory and — **after migration 0005** — in `public.reports` (service role only), deleted after 90 days. Privacy and terms pages updated. Rules `shared/src/reports.ts`; server `state/reportStore.ts`, `state/reportLimit.ts`, `persistence/reportRecorder.ts` |
 | Real addresses behind the tunnel | **Done 2026-10-03** | Through Cloudflare Tunnel every peer was `127.0.0.1`. `clientAddress()` (`admin/access.ts`) now takes `CF-Connecting-IP` (then the first `X-Forwarded-For`) **only when the peer is loopback**, so the console and reports show the visitor's own address. Admin access is unchanged: forwarded requests still never count as the server machine |
+| Find a player in the lobby | **Done 2026-10-04 (v3.3.0)** | The Online now card leads with the number online in big type, then "Find a player": the Friends card's type-ahead, always open, from the first letter. Signed in: Add / Accept / requested / a friend's Join or Watch. Guests: View only, with "Sign in to add friends". Friendship loading and actions moved into `data/useFriendships.ts`, shared by the lobby (`LobbyFriendSearch.tsx`) and the Friends card, whose names (and every search result's) now link to `/u/<name>` (`PlayerLink` in `router.tsx`). The online list below is unchanged — it is the graded roster. Also fixed: the picked option in Play vs AI went near-black and unreadable on hover and after a tap on phones |
 | Logo + favicon | **Done 2026-10-03** | The pixel bomb on a signal-orange tile. Sources in `brand/` (SVG, 512 and 120 px PNG for GitHub and Google); `favicon.svg`, `favicon-32.png` and `apple-touch-icon.png` in `client/public/` and linked from `index.html` |
 
 ---
@@ -378,15 +379,15 @@ tagged (CONTRIBUTING.md §5). Built in this order; pushed and deployed together 
 |---|---|---|
 | v3.1.0 | Logo and favicon (tag added after the fact) | **Done** |
 | v3.2.0 | Friend search, player cards, `/u/<username>`, player reports, real IPs behind the tunnel, README two-computer fix | **Done** — migration 0005 applied |
-| v3.2.1 | Fix: the picked option in Play vs AI (difficulty / size / mines) unreadable on phones — the last-tapped option keeps `:hover`, whose near-black background hides its text | Planned |
-| v3.3.0 | Link preview cards: Open Graph / Twitter tags, a 1200×630 image, per-link titles for `/join/CODE` and `/u/<name>` filled in by the server | Planned |
-| v3.4.0 | Sound effects (8-bit, synthesized, quiet, on by default, mute toggle) and vibration when your turn comes | Planned |
-| v3.5.0 | Daily challenge in Puzzle: the same board for everyone each day, same safe opening, streak, share text | Planned |
-| v3.6.0 | "Why?" on hints: the number that forces the cell, or the share of layouts; reworded by the LLM when connected | Planned |
-| v3.7.0 | Game review after a match: each move rated against the solver, accuracy per player, key moments | Planned |
-| v3.8.0 | Fruit Fly brain view: the 244 neurons light up (real wiring, real positions from neuPrint) as the fly decides | Planned |
-| v3.9.0 | Server stats on `/admin`: live CPU / memory / load from the server, service health and uptime, CloudWatch CPU, CPU credits and network (needs an IAM role on the instance) | Planned |
-| v3.10.0 | CI on GitHub Actions and automatic deploy: the server pulls `main` when its CI is green | Planned |
+| v3.3.0 | **Find a player in the lobby**: the Online now card leads with a big online count, then the same type-ahead as `/profile` (guests can look people up, signed-in players add them); search starts at the **first letter**; every name in the Friends card and in search results links to `/u/<name>`. Fix: the picked option in Play vs AI stays readable on hover and after a tap on phones (the ghost hover swapped its fill to near-black and hid the label) | **Done** |
+| v3.4.0 | Link preview cards: Open Graph / Twitter tags, a 1200×630 image, per-link titles for `/join/CODE` and `/u/<name>` filled in by the server | Planned |
+| v3.5.0 | Sound effects (8-bit, synthesized, quiet, on by default, mute toggle) and vibration when your turn comes | Planned |
+| v3.6.0 | Daily challenge in Puzzle: the same board for everyone each day, same safe opening, streak, share text | Planned |
+| v3.7.0 | "Why?" on hints: the number that forces the cell, or the share of layouts; reworded by the LLM when connected | Planned |
+| v3.8.0 | Game review after a match: each move rated against the solver, accuracy per player, key moments | Planned |
+| v3.9.0 | Fruit Fly brain view: the 244 neurons light up (real wiring, real positions from neuPrint) as the fly decides | Planned |
+| v3.10.0 | Server stats on `/admin`: live CPU / memory / load from the server, service health and uptime, CloudWatch CPU, CPU credits and network (needs an IAM role on the instance) | Planned |
+| v3.11.0 | CI on GitHub Actions and automatic deploy: the server pulls `main` when its CI is green | Planned |
 | — | Verify on prod: real visitor IPs on `/admin` (the live server still shows 127.0.0.1 until v3.2.0 is deployed) | After deploy |
 
 **Known issue, not scheduled:** during a network blip in an e2e run, a JEV game made no move for a

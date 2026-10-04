@@ -250,6 +250,7 @@ export function App() {
             void spectateRoom(roomId);
           }}
           onInvite={inviteFriend}
+          onViewProfile={(name) => navigate('player', pathForPlayer(name))}
           onOpenGameLog={() => navigate('games')}
           guest={guestProfile}
           onForgetGuest={forgetGuestData}
@@ -388,6 +389,7 @@ export function App() {
                 myId={playerId}
                 rooms={rooms}
                 onJoin={handleJoin}
+                onWatch={(roomId) => void spectateRoom(roomId)}
                 onViewProfile={(name) => navigate('player', pathForPlayer(name))}
                 onOpenOwnProfile={() => navigate('profile')}
                 onReport={reportPlayer}

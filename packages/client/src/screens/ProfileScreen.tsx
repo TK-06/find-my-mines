@@ -40,6 +40,8 @@ export interface ProfileScreenProps {
   onJoin: (roomId: string) => void;
   onWatch: (roomId: string) => void;
   onInvite: (profileId: string) => Promise<ModerationResult>;
+  /** Someone else's public profile, from a name in the Friends card. */
+  onViewProfile: (username: string) => void;
   onOpenGameLog: () => void;
   /** The guest this browser remembers, unofficial rating and all; null for anyone else. */
   guest: GuestProfile | null;
@@ -62,6 +64,7 @@ export function ProfileScreen({
   onJoin,
   onWatch,
   onInvite,
+  onViewProfile,
   onOpenGameLog,
   guest,
   onForgetGuest,
@@ -173,6 +176,7 @@ export function ProfileScreen({
           onJoin={onJoin}
           onWatch={onWatch}
           onInvite={onInvite}
+          onViewProfile={onViewProfile}
         />
       </div>
 

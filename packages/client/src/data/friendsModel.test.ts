@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FriendInvite, OnlinePlayer, PresenceStatus, RoomSummary } from '@fmm/shared';
 import {
   cardFriendButton,
+  changeNotice,
   INVITE_TTL_MS,
   MAX_INVITES,
   PRIVATE_ROOM_TEXT,
@@ -10,8 +11,10 @@ import {
   groupFriendships,
   initialOf,
   isMissingTable,
+  requestNotice,
   requestPlan,
   toFriendships,
+  withBusy,
   type Friendship,
 } from './friendsModel.js';
 
@@ -402,5 +405,64 @@ describe('cardFriendButton', () => {
     expect(
       cardFriendButton(true, { otherId: 'x', otherName: 'x', status: 'accepted', direction: 'outgoing' }),
     ).toMatchObject({ label: 'Friends', does: 'none', primary: false });
+  });
+});
+
+describe('withBusy', () => {
+  it('adds and removes a person without touching the set it was given', () => {
+    const none: ReadonlySet<string> = new Set();
+    const one = withBusy(none, 'ann', true);
+    expect([...one]).toEqual(['ann']);
+    expect([...none]).toEqual([]);
+    expect([...withBusy(one, 'bob', true)]).toEqual(['ann', 'bob']);
+    expect([...withBusy(one, 'ann', false)]).toEqual([]);
+  });
+
+  it('leaves the others alone, and takes away someone who is not there without fuss', () => {
+    const both = withBusy(withBusy(new Set(), 'ann', true), 'bob', true);
+    expect([...withBusy(both, 'ann', false)]).toEqual(['bob']);
+    expect([...withBusy(both, 'cy', false)]).toEqual(['ann', 'bob']);
+  });
+});
+
+describe('requestNotice', () => {
+  it('says the request went out when nothing more was said', () => {
+    expect(requestNotice({ ok: true }, 'Ann')).toEqual({ text: 'Request sent to Ann.', failed: false });
+  });
+
+  it('prefers what the call said, success or not', () => {
+    expect(requestNotice({ ok: true, message: 'Ann had already asked you — you’re friends now.' }, 'Ann')).toEqual({
+      text: 'Ann had already asked you — you’re friends now.',
+      failed: false,
+    });
+    expect(requestNotice({ ok: false, message: 'You already asked Ann.' }, 'Ann')).toEqual({
+      text: 'You already asked Ann.',
+      failed: true,
+    });
+  });
+
+  it('has a plain line for a failure that gave no reason', () => {
+    expect(requestNotice({ ok: false }, 'Ann')).toEqual({ text: 'That did not work.', failed: true });
+  });
+});
+
+describe('changeNotice', () => {
+  it('reports a failure, with its reason when it has one', () => {
+    expect(changeNotice({ ok: false, message: 'That request is no longer there.' })).toEqual({
+      text: 'That request is no longer there.',
+      failed: true,
+    });
+    expect(changeNotice({ ok: false }, 'You and Ann are friends now.')).toEqual({
+      text: 'That did not work.',
+      failed: true,
+    });
+  });
+
+  it('says the good news when there is some, and nothing when there is not', () => {
+    expect(changeNotice({ ok: true }, 'You and Ann are friends now.')).toEqual({
+      text: 'You and Ann are friends now.',
+      failed: false,
+    });
+    expect(changeNotice({ ok: true })).toBeNull();
   });
 });

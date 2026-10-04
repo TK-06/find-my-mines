@@ -151,6 +151,40 @@ export function RouteLink({
 }
 
 /**
+ * A player's name as a real link to their public profile (/u/<name>). A plain
+ * click opens it without a page reload; a new tab, a middle click and "copy
+ * link" are the browser's, and get the same address.
+ */
+export function PlayerLink({
+  name,
+  onOpen,
+  tabIndex,
+  children,
+}: {
+  name: string;
+  onOpen: (name: string) => void;
+  /** -1 where the surrounding widget handles the keyboard itself (the search dropdown). */
+  tabIndex?: number;
+  /** What the link says; the name itself when left out. */
+  children?: ReactNode;
+}) {
+  return (
+    <a
+      href={pathForPlayer(name)}
+      className="player-link"
+      tabIndex={tabIndex}
+      onClick={(event) => {
+        if (!isPlainLeftClick(event)) return;
+        event.preventDefault();
+        onOpen(name);
+      }}
+    >
+      {children ?? name}
+    </a>
+  );
+}
+
+/**
  * The current screen, a way to change it, and the path itself — which a
  * screen with a parameter (/u/<name>) reads, and which changes even when the
  * route does not (one player's page to another's).
