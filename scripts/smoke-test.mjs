@@ -116,6 +116,11 @@ const admin = io(URL + ADMIN_NS, {
 // The terminal backfill also arrives on connect, so collect it from the start.
 const adminLog = [];
 admin.on('admin:log', (lines) => adminLog.push(...lines));
+// Player reports arrive on connect too, and again whenever one changes.
+let firstReports = null;
+admin.once('admin:reports', (list) => {
+  firstReports = list;
+});
 const firstAdminState = await new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error('timeout waiting for admin:state')), 6000);
   admin.once('admin:state', (state) => {
@@ -129,6 +134,9 @@ const firstAdminState = await new Promise((resolve, reject) => {
 });
 check('admin console receives state on connect', Boolean(firstAdminState));
 check('admin state exposes a room list', Array.isArray(firstAdminState.rooms));
+await sleep(50);
+check('admin console receives the player reports on connect', Array.isArray(firstReports),
+  firstReports === null ? 'no admin:reports' : `${firstReports.length} report(s)`);
 
 // Keep the newest snapshot around. Waiting for a *fresh* push is unreliable at
 // the end of the run, when nothing is changing any more.
@@ -1960,6 +1968,86 @@ section('world chat');
   await sleep(200);
 }
 
+// ── player reports ──────────────────────────────────────────────────────────
+section('player reports');
+
+// Anyone named may report anyone else online; guests too. The server fills in
+// who and where from its own records, rate-limits, and tells every console.
+{
+  const GID_A = 'a'.repeat(32);
+  const GID_B = 'b'.repeat(32);
+  const rena = await connect();
+  const renaJoin = await emitAck(rena, 'player:join', { nickname: 'Rena', guestId: GID_A });
+  const sol = await connect();
+  const solJoin = await emitAck(sol, 'player:join', { nickname: 'Sol', guestId: GID_B });
+  const nobody = await connect();
+
+  const arrives = waitFor(admin, 'admin:reports', 3000).catch(() => null);
+  const sent = await emitAck(rena, 'player:report', {
+    targetId: solJoin.playerId,
+    reason: 'harassment',
+    details: '  kept \n  spamming  ',
+  });
+  const list = await arrives;
+  const mine = Array.isArray(list) ? list.find((r) => r.reporter?.nickname === 'Rena' && r.target?.nickname === 'Sol') : null;
+  check('a guest can report another player, and the console gets it at once',
+    sent.ok === true && mine?.reason === 'harassment' && mine.details === 'kept spamming' && mine.status === 'open',
+    JSON.stringify(mine ?? sent));
+  check('the report carries what the server knows: guest ids, address, the live connection',
+    mine?.reporter.guestId === GID_A && mine?.target.guestId === GID_B &&
+      mine?.target.clientId === solJoin.playerId && typeof mine?.reporter.address === 'string' &&
+      mine.reporter.isGuest === true && mine.reporter.profileId === null,
+    JSON.stringify(mine?.reporter));
+  await sleep(100);
+  check('a report is logged under moderation',
+    adminLog.some((l) => l.kind === 'moderation' && /Rena reported Sol/.test(l.text)));
+
+  const again = await emitAck(rena, 'player:report', { targetId: solJoin.playerId, reason: 'spam' });
+  check('reporting the same player again inside ten minutes is refused',
+    again.ok === false && /already reported/i.test(again.error ?? ''), JSON.stringify(again));
+  const self = await emitAck(rena, 'player:report', { targetId: renaJoin.playerId, reason: 'cheating' });
+  check('you cannot report yourself', self.ok === false && /yourself/i.test(self.error ?? ''), JSON.stringify(self));
+  const gone = await emitAck(rena, 'player:report', { targetId: 'no-such-socket', reason: 'cheating' });
+  check('a player who is not online cannot be reported',
+    gone.ok === false && /no longer online/i.test(gone.error ?? ''), JSON.stringify(gone));
+  const badReason = await emitAck(sol, 'player:report', { targetId: renaJoin.playerId, reason: 'afk' });
+  const vague = await emitAck(sol, 'player:report', { targetId: renaJoin.playerId, reason: 'other' });
+  const long = await emitAck(sol, 'player:report', { targetId: renaJoin.playerId, reason: 'spam', details: 'x'.repeat(301) });
+  check('a report needs a known reason, words for "something else", and short details',
+    badReason.ok === false && vague.ok === false && long.ok === false,
+    [badReason, vague, long].map((r) => r.error).join(' | '));
+  const anon = await emitAck(nobody, 'player:report', { targetId: solJoin.playerId, reason: 'spam' });
+  check('a client with no name cannot report',
+    anon.ok === false && !String(anon.error ?? '').startsWith('no ack'), JSON.stringify(anon));
+
+  const resolvedArrives = waitFor(admin, 'admin:reports', 3000).catch(() => null);
+  const resolved = await emitAck(admin, 'admin:report', { id: mine?.id, status: 'resolved' });
+  const after = await resolvedArrives;
+  const handled = Array.isArray(after) ? after.find((r) => r.id === mine?.id) : null;
+  check('the console resolves a report, and every console hears',
+    resolved.ok === true && handled?.status === 'resolved' && typeof handled.handledAt === 'number',
+    JSON.stringify(handled ?? resolved));
+  const badStatus = await emitAck(admin, 'admin:report', { id: mine?.id, status: 'deleted' });
+  const missing = await emitAck(admin, 'admin:report', { id: 'nope', status: 'dismissed' });
+  check('the console refuses an unknown status or report',
+    badStatus.ok === false && missing.ok === false, `${badStatus.error} | ${missing.error}`);
+
+  // An id that does not look like the browser's is dropped, not stored.
+  const odd = await connect();
+  const oddJoin = await emitAck(odd, 'player:join', { nickname: 'Odd', guestId: '<script>' });
+  const oddArrives = waitFor(admin, 'admin:reports', 3000).catch(() => null);
+  await emitAck(odd, 'player:report', { targetId: solJoin.playerId, reason: 'spam' });
+  const oddList = await oddArrives;
+  const oddRow = Array.isArray(oddList) ? oddList.find((r) => r.reporter?.nickname === 'Odd') : null;
+  check('a malformed guest id is not kept',
+    oddJoin.welcome === 'Welcome, Odd.' && oddRow?.reporter.guestId === null, JSON.stringify(oddRow?.reporter));
+  // Leave nothing of ours open on a shared server's console.
+  if (oddRow) await emitAck(admin, 'admin:report', { id: oddRow.id, status: 'dismissed' });
+
+  for (const socket of [rena, sol, nobody, odd]) socket.close();
+  await sleep(150);
+}
+
 // ── malformed messages never take the server down ───────────────────────────
 section('malformed messages');
 
@@ -1968,13 +2056,13 @@ section('malformed messages');
 const CLIENT_EVENTS = [
   'player:join', 'room:create', 'room:join', 'room:spectate', 'room:lookup', 'room:leave',
   'room:requestJoin', 'room:cancelRequest', 'room:answerRequest', 'room:kick',
-  'friend:invite', 'ai:play', 'ai:about', 'ai:hint', 'room:say', 'lobby:say', 'lobby:invite',
+  'friend:invite', 'ai:play', 'ai:about', 'ai:hint', 'room:say', 'lobby:say', 'lobby:invite', 'player:report',
   'queue:join', 'queue:leave', 'game:start', 'game:reveal', 'game:rematch',
 ];
-const ADMIN_EVENTS = ['admin:kick', 'admin:ban', 'admin:closeRoom', 'admin:watch', 'admin:mines', 'admin:clearChat'];
+const ADMIN_EVENTS = ['admin:kick', 'admin:ban', 'admin:closeRoom', 'admin:watch', 'admin:mines', 'admin:clearChat', 'admin:report'];
 const BAD_ARGS = [
   [], [undefined], [null], [42], ['text'], [[]], [{}],
-  [{ roomId: {}, nickname: {}, name: [], config: 'x', mode: 7, row: 'a', col: null, targetId: [], note: 'x', level: {}, text: [] }],
+  [{ roomId: {}, nickname: {}, name: [], config: 'x', mode: 7, row: 'a', col: null, targetId: [], note: 'x', level: {}, text: [], reason: {}, details: [], guestId: 7, id: {}, status: [] }],
   [{}, 5], [null, 'not a function'],
 ];
 

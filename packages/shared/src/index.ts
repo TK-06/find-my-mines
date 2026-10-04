@@ -5,6 +5,7 @@ export * from './rooms.js';
 export * from './elo.js';
 export * from './matchmaking.js';
 export * from './moderation.js';
+export * from './reports.js';
 export * from './presence.js';
 export * from './ai.js';
 export * from './chat.js';

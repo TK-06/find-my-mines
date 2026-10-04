@@ -182,6 +182,30 @@ export async function sendFriendRequest(myId: string, username: string): Promise
   }
 }
 
+/**
+ * What is between me and one other player, for their player card: the
+ * friendship from my side, null for nothing yet, or 'unknown' when it could
+ * not be read (no table, no connection) — the card then offers no button.
+ */
+export async function friendshipWith(myId: string, otherId: string): Promise<Friendship | null | 'unknown'> {
+  if (!supabase || myId === otherId) return 'unknown';
+  try {
+    const { data, error } = await supabase
+      .from('friendships')
+      .select(COLUMNS)
+      .in('requester_id', [myId, otherId])
+      .in('addressee_id', [myId, otherId]);
+    if (error) {
+      failed(error, 'Could not check your friends list.');
+      return 'unknown';
+    }
+    return toFriendships((data ?? []) as FriendshipRecord[], myId, new Map())[0] ?? null;
+  } catch (error) {
+    console.error('[friends] could not check a friendship:', error);
+    return 'unknown';
+  }
+}
+
 /** Accepts a request `fromId` sent me. Only the person asked may do this. */
 export async function acceptFriendRequest(myId: string, fromId: string): Promise<FriendsResult> {
   if (!supabase) return { ok: false, message: 'Accounts are not configured.' };

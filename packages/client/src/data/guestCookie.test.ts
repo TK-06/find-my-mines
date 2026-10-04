@@ -9,6 +9,7 @@ import {
   forfeitResultApplies,
   forfeitSeats,
   isGuestName,
+  newGuestId,
   newGuestProfile,
   parseGuestCookie,
   publicRatingBefore,
@@ -23,8 +24,11 @@ import {
 
 const NOW = 1_800_000_000_000;
 
+const ID = '0123456789abcdef0123456789abcdef';
+
 const profile = (over: Partial<GuestProfile> = {}): GuestProfile => ({
   v: 1,
+  id: ID,
   name: 'Alice',
   rating: 812,
   games: 3,
@@ -161,10 +165,37 @@ describe('parseGuestCookie', () => {
   });
 });
 
+describe('the guest id', () => {
+  it('is made fresh: 32 hex characters', () => {
+    expect(newGuestId()).toMatch(/^[0-9a-f]{32}$/);
+    expect(newGuestId()).not.toBe(newGuestId());
+  });
+
+  it('survives a round trip through the cookie', () => {
+    const text = serializeGuestCookie(profile(), false);
+    const value = text.slice(GUEST_COOKIE.length + 1, text.indexOf(';'));
+    expect(parseGuestCookie(value, NOW)?.id).toBe(ID);
+  });
+
+  it('is given to a cookie written before ids existed, or holding a bad one', () => {
+    const { id: _dropped, ...old } = profile();
+    expect(parseGuestCookie(valueOf(old), NOW, () => 'f'.repeat(32))?.id).toBe('f'.repeat(32));
+    expect(parseGuestCookie(valueOf({ ...profile(), id: 'not-an-id' }), NOW, () => 'e'.repeat(32))?.id).toBe(
+      'e'.repeat(32),
+    );
+  });
+
+  it('stays with the record through a rename; a new record gets the id it is handed', () => {
+    expect(withGuestName(profile(), 'Alicia', NOW + 5).id).toBe(ID);
+    expect(withGuestName(null, 'Bob', NOW, 'a'.repeat(32)).id).toBe('a'.repeat(32));
+  });
+});
+
 describe('keeping the record', () => {
   it('starts a new guest at 800 with nothing played', () => {
-    expect(newGuestProfile('Bob', NOW)).toEqual({
+    expect(newGuestProfile('Bob', NOW, ID)).toEqual({
       v: 1,
+      id: ID,
       name: 'Bob',
       rating: 800,
       games: 0,

@@ -53,16 +53,40 @@ Then the game is at `http://localhost:3000` and the console at `http://localhost
 
 ## Playing across two computers
 
-The assignment requires one machine running *server + client* and another running *client only*.
+The assignment requires one machine running *server + client* and another running *client only*,
+which connects straight to the server. Nobody types an IP or a port: the second machine's client
+reads the server's address from source code, as the spec requires.
 
-1. Find the server machine's LAN IP (`ipconfig` on Windows).
-2. Set `SERVER_HOST` in **`packages/shared/src/config.ts`** to that IP.
-3. `npm run build && npm start` on the server machine.
-4. On the second machine, open `http://<that-ip>:3000`.
+**Computer A — server and client**
 
-Players never type an address — the client reads it from source, as the spec requires.
+1. Run `ipconfig` and note the Wi-Fi adapter's IPv4 address, e.g. `192.168.1.20`.
+2. `npm run build && npm start`
+3. Open `http://localhost:3000`. This client connects to the server on the same machine.
+4. The server's display is the terminal (client count and list, reprinted on every change) and
+   `http://localhost:3000/admin`, which has the **Reset** button and opens without a login on
+   this machine.
 
-> If the second machine can't connect, allow port 3000 through the server machine's firewall.
+**Computer B — client only**
+
+1. Clone the repo and run `npm install`. No `.env` is needed; without one the client plays as a
+   guest, which is all the demo needs.
+2. In **`packages/shared/src/config.ts`**, set `SERVER_HOST` to computer A's IP. This is the
+   server address the spec says must be set in source code.
+3. `npm run dev:client`
+4. Open `http://localhost:5173`. The client connects to `http://<A's IP>:3000` from that
+   constant; the player only enters a nickname.
+
+**Before the demo**
+
+- Put both machines on the same network. Campus Wi-Fi often blocks traffic between devices; test
+  in the room beforehand and keep a phone hotspot as the fallback.
+- Allow Node.js through Windows Firewall on computer A (private networks) — Windows asks the
+  first time `npm start` runs. Keep `CORS_ORIGIN` unset or `*` in A's `.env`.
+- Check from computer B: `curl http://<A's IP>:3000/health` answers `{"ok":true,…}`.
+
+> Opening `http://<A's IP>:3000` in computer B's browser also works, but then the player types
+> the address and `SERVER_HOST` is not used: a built client connects to whichever address served
+> it. Fine for casual play; use the steps above for the graded setup.
 
 ---
 
@@ -73,7 +97,7 @@ Players never type an address — the client reads it from source, as the spec r
 | `npm run dev` | Server + client with hot reload |
 | `npm run build` | Bundle the client to `packages/client/dist` |
 | `npm start` | Run the server, serving the built client |
-| `npm test` | Engine and room-config unit tests (42 tests) |
+| `npm test` | Unit tests (866) |
 | `npm run test:e2e` | Full lobby + match flow over real sockets — **needs the server running** |
 | `npm run typecheck` | TypeScript across all three packages |
 

@@ -1,5 +1,6 @@
 import {
   STARTING_ELO,
+  isGuestId,
   rateMatch,
   type ForfeitNotice,
   type PlayerPublic,
@@ -13,8 +14,11 @@ import {
  * their own change away — and it must go on doing that: nothing a client says
  * about its rating is ever trusted. This cookie is only for the guest's own
  * benefit. It holds a name and a rating the browser worked out for itself, and
- * the page always calls that rating unofficial. Nothing here is sent anywhere
- * on purpose, though a browser does attach cookies to requests for this site.
+ * the page always calls that rating unofficial.
+ *
+ * It also holds a random id. That one is sent: with the name when the guest
+ * joins, so a report sent by or about this guest can say "the same browser as
+ * last time". The server keeps it in memory, and in a report when there is one.
  *
  * Everything in this file is pure, bar the three small functions at the end
  * that touch `document.cookie`.
@@ -36,6 +40,8 @@ const COUNT_MAX = 1_000_000;
 
 export interface GuestProfile {
   v: 1;
+  /** Random, made by this browser (see newGuestId). Only ever used to label reports. */
+  id: string;
   name: string;
   rating: number;
   games: number;
@@ -54,6 +60,11 @@ export function isGuestName(value: unknown): value is string {
   return typeof value === 'string' && value === value.trim() && value.length >= 1 && value.length <= GUEST_NAME_MAX;
 }
 
+/** 16 random bytes in hex: what isGuestId accepts. */
+export function newGuestId(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= COUNT_MAX;
 }
@@ -63,7 +74,11 @@ function isCount(value: unknown): value is number {
  * wrote — bad encoding, bad JSON, a wrong version, out-of-range numbers, a
  * name the game would refuse, a copy older than 30 days — is no cookie at all.
  */
-export function parseGuestCookie(value: string | null | undefined, now = Date.now()): GuestProfile | null {
+export function parseGuestCookie(
+  value: string | null | undefined,
+  now = Date.now(),
+  makeId: () => string = newGuestId,
+): GuestProfile | null {
   if (!value) return null;
   let data: Record<string, unknown>;
   try {
@@ -74,7 +89,7 @@ export function parseGuestCookie(value: string | null | undefined, now = Date.no
     return null;
   }
 
-  const { v, name, rating, games, wins, losses, draws, updated } = data;
+  const { v, id, name, rating, games, wins, losses, draws, updated } = data;
   if (v !== 1 || !isGuestName(name)) return null;
   if (
     typeof rating !== 'number' ||
@@ -88,7 +103,8 @@ export function parseGuestCookie(value: string | null | undefined, now = Date.no
   if (typeof updated !== 'number' || !Number.isFinite(updated) || updated <= 0) return null;
   if (now - updated > GUEST_KEEP_MS) return null;
 
-  return { v: 1, name, rating, games, wins, losses, draws, updated };
+  // Cookies written before the id existed get one now; it is saved with the next write.
+  return { v: 1, id: isGuestId(id) ? id : makeId(), name, rating, games, wins, losses, draws, updated };
 }
 
 /** The whole `name=value; attributes` string to assign to `document.cookie`. */
@@ -96,6 +112,7 @@ export function serializeGuestCookie(profile: GuestProfile, secure: boolean): st
   const body = encodeURIComponent(
     JSON.stringify({
       v: 1,
+      id: profile.id,
       name: profile.name,
       rating: profile.rating,
       games: profile.games,
@@ -123,17 +140,22 @@ export function readCookieValue(header: string, name: string): string | null {
   return null;
 }
 
-/** A first-time guest: the starting rating and an empty record. */
-export function newGuestProfile(name: string, now: number): GuestProfile {
-  return { v: 1, name, rating: STARTING_ELO, games: 0, wins: 0, losses: 0, draws: 0, updated: now };
+/** A first-time guest: the starting rating, an empty record and a fresh id. */
+export function newGuestProfile(name: string, now: number, id: string = newGuestId()): GuestProfile {
+  return { v: 1, id, name, rating: STARTING_ELO, games: 0, wins: 0, losses: 0, draws: 0, updated: now };
 }
 
 /**
  * Joining, or renaming, as a guest. The same person on this browser keeps
  * their record under a new name; only "Not you?" starts over.
  */
-export function withGuestName(profile: GuestProfile | null, name: string, now: number): GuestProfile {
-  return profile ? { ...profile, name, updated: now } : newGuestProfile(name, now);
+export function withGuestName(
+  profile: GuestProfile | null,
+  name: string,
+  now: number,
+  idIfNew: string = newGuestId(),
+): GuestProfile {
+  return profile ? { ...profile, name, updated: now } : newGuestProfile(name, now, idIfNew);
 }
 
 /** The same record, seen again today: another 30 days. */

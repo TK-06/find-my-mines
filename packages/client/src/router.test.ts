@@ -4,6 +4,8 @@ import {
   joinCodeFromPath,
   joinPathFor,
   pathFor,
+  pathForPlayer,
+  playerNameFromPath,
   routeFromPath,
   type Route,
 } from './router.js';
@@ -85,5 +87,26 @@ describe('isPlainLeftClick', () => {
 
   it('stays out of the way when another handler already took the click', () => {
     expect(isPlainLeftClick({ ...plain, defaultPrevented: true })).toBe(false);
+  });
+});
+
+describe('player profiles: /u/<username>', () => {
+  it('opens the player page for a username path', () => {
+    expect(routeFromPath('/u/tamago')).toBe('player');
+    expect(routeFromPath('/u/tamago/')).toBe('player');
+    expect(playerNameFromPath('/u/tamago')).toBe('tamago');
+  });
+
+  it('round-trips names with spaces, underscores and other scripts', () => {
+    for (const name of ['mine_hunter', 'Bob Smith', 'ปาล์ม', 'a/b?c#d']) {
+      expect(playerNameFromPath(pathForPlayer(name))).toBe(name);
+    }
+  });
+
+  it('names nobody for a bare /u, an extra segment, a broken escape or an overlong name', () => {
+    for (const path of ['/u', '/u/', '/u/a/b', '/u/%E0%A4%A', `/u/${'x'.repeat(21)}`, '/profile']) {
+      expect(playerNameFromPath(path)).toBeNull();
+    }
+    expect(routeFromPath('/u')).toBe('game');
   });
 });

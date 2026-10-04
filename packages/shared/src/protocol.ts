@@ -24,6 +24,7 @@ import type {
   RoomSummary,
   Seat,
 } from './types.js';
+import type { PlayerReport, ReportReason, ReportStatus } from './reports.js';
 
 /**
  * The socket contract between client and server.
@@ -66,8 +67,26 @@ export interface RoomLookupResult {
 }
 
 export interface ClientToServerEvents {
-  /** Set a nickname. Sent once, before the lobby is shown. */
-  'player:join': (payload: { nickname: string }, ack: (result: JoinResult) => void) => void;
+  /**
+   * Set a nickname. Sent once, before the lobby is shown. A guest also sends
+   * the random id from its fmm_guest cookie: the server keeps it in memory and
+   * uses it only to label a report (sent by or about this guest).
+   */
+  'player:join': (
+    payload: { nickname: string; guestId?: string },
+    ack: (result: JoinResult) => void,
+  ) => void;
+
+  /**
+   * Report someone in the online list to the server's admins. Guests may too.
+   * Who sent it, and from where, is filled in by the server from its own
+   * records of both connections — nothing here is taken on trust but the
+   * reason and the details.
+   */
+  'player:report': (
+    payload: { targetId: string; reason: ReportReason; details?: string },
+    ack: (result: ModerationResult) => void,
+  ) => void;
 
   'room:create': (
     payload: { name: string; config: RoomConfig },
@@ -259,6 +278,11 @@ export interface AdminToServerEvents {
   'admin:mines': (payload: { show: boolean }) => void;
   /** Empties the lobby's world chat for everyone. */
   'admin:clearChat': () => void;
+  /** Marks a player report resolved or dismissed (or open again). */
+  'admin:report': (
+    payload: { id: string; status: ReportStatus },
+    ack: (result: ModerationResult) => void,
+  ) => void;
 }
 
 export interface ServerToAdminEvents {
@@ -267,4 +291,10 @@ export interface ServerToAdminEvents {
   'admin:log': (lines: LogLine[]) => void;
   /** The watched room. null once it closes or watching stops. */
   'admin:room': (view: AdminRoomView | null) => void;
+  /**
+   * Player reports from the last 90 days, newest first. Sent on connect and
+   * whenever one arrives or changes status — separate from admin:state, which
+   * goes out on every lobby change.
+   */
+  'admin:reports': (reports: PlayerReport[]) => void;
 }

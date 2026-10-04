@@ -1,6 +1,9 @@
-import type { OnlinePlayer, RoomSummary } from '@fmm/shared';
+import type { ModerationResult, OnlinePlayer, ReportReason, RoomSummary } from '@fmm/shared';
+import { useEffect, useRef, useState } from 'react';
 import { presenceLabel } from '../data/format.js';
 import { PRIVATE_ROOM_TEXT } from '../data/friendsModel.js';
+import { PlayerCard } from './PlayerCard.js';
+import { ReportDialog } from './ReportDialog.js';
 
 interface Props {
   online: OnlinePlayer[];
@@ -9,6 +12,11 @@ interface Props {
   rooms: RoomSummary[];
   /** Same action as the game list's Join — an ask-to-join room opens the request. */
   onJoin: (roomId: string) => void;
+  /** Someone else's public profile page. */
+  onViewProfile: (username: string) => void;
+  /** Your own name goes straight to your profile. */
+  onOpenOwnProfile: () => void;
+  onReport: (targetId: string, reason: ReportReason, details: string) => Promise<ModerationResult>;
 }
 
 /**
@@ -17,11 +25,35 @@ interface Props {
  * Spec: "When a client is on the network, a client would connect to the
  * server first. Then, the server will provide information about the other
  * connected client." The server pushes this list on every change.
+ *
+ * Each name opens that player's card (stats, View profile, Add friend, and
+ * Report behind ⋯); your own name opens your profile.
  */
-export function OnlinePanel({ online, myId, rooms, onJoin }: Props) {
+export function OnlinePanel({ online, myId, rooms, onJoin, onViewProfile, onOpenOwnProfile, onReport }: Props) {
   // Yourself first, then everyone else in the order they connected.
   const ordered = [...online].sort((a, b) => Number(b.id === myId) - Number(a.id === myId));
   const roomsById = new Map(rooms.map((room) => [room.id, room]));
+  const viewerProfileId = online.find((p) => p.id === myId)?.profileId ?? null;
+
+  /** The connection whose card is open. */
+  const [openId, setOpenId] = useState<string | null>(null);
+  /** Who the report dialog is about. Kept as a copy, so it stays put if they leave meanwhile. */
+  const [reporting, setReporting] = useState<OnlinePlayer | null>(null);
+  const triggers = useRef(new Map<string, HTMLButtonElement>());
+
+  const openPlayer = openId ? online.find((p) => p.id === openId) : undefined;
+
+  // They left: there is nobody to show.
+  useEffect(() => {
+    if (openId && !openPlayer) setOpenId(null);
+  }, [openId, openPlayer]);
+
+  /** Close the card and put focus back on the name that opened it. */
+  const closeCard = () => {
+    const id = openId;
+    setOpenId(null);
+    if (id) triggers.current.get(id)?.focus();
+  };
 
   return (
     <aside className="card online-panel">
@@ -39,14 +71,33 @@ export function OnlinePanel({ online, myId, rooms, onJoin }: Props) {
       <ul className="list online-list">
         {ordered.map((player) => {
           const room = player.roomId ? roomsById.get(player.roomId) : undefined;
-          const canJoin = player.id !== myId && room !== undefined && room.joinable;
+          const isMe = player.id === myId;
+          const canJoin = !isMe && room !== undefined && room.joinable;
+          const open = openId === player.id;
 
           return (
-            <li key={player.id}>
+            <li key={player.id} className={open ? 'card-open' : undefined}>
               <span className="online-who">
                 <span className={`presence-dot ${player.status}`} aria-hidden />
-                <strong>{player.nickname}</strong>
-                {player.id === myId && <span className="tag me">you</span>}
+                <button
+                  ref={(node) => {
+                    if (node) triggers.current.set(player.id, node);
+                    else triggers.current.delete(player.id);
+                  }}
+                  type="button"
+                  className="online-name"
+                  data-player-trigger
+                  aria-haspopup={isMe ? undefined : 'dialog'}
+                  aria-expanded={isMe ? undefined : open}
+                  title={isMe ? 'Your profile' : `${player.nickname}'s card`}
+                  onClick={() => {
+                    if (isMe) onOpenOwnProfile();
+                    else setOpenId(open ? null : player.id);
+                  }}
+                >
+                  {player.nickname}
+                </button>
+                {isMe && <span className="tag me">you</span>}
                 {player.isGuest && <span className="tag">guest</span>}
               </span>
               <span className="online-where">
@@ -60,10 +111,41 @@ export function OnlinePanel({ online, myId, rooms, onJoin }: Props) {
                   </button>
                 )}
               </span>
+
+              {open && openPlayer && (
+                <PlayerCard
+                  // A fresh card per player, so one player's numbers never flash on another's.
+                  key={openPlayer.id}
+                  player={openPlayer}
+                  viewerProfileId={viewerProfileId}
+                  onViewProfile={(name) => {
+                    setOpenId(null);
+                    onViewProfile(name);
+                  }}
+                  onReport={(target) => {
+                    setOpenId(null);
+                    setReporting(target);
+                  }}
+                  onClose={closeCard}
+                />
+              )}
             </li>
           );
         })}
       </ul>
+
+      {reporting && (
+        <ReportDialog
+          targetId={reporting.id}
+          targetName={reporting.nickname}
+          onSend={(reason, details) => onReport(reporting.id, reason, details)}
+          onClose={() => {
+            const id = reporting.id;
+            setReporting(null);
+            triggers.current.get(id)?.focus();
+          }}
+        />
+      )}
     </aside>
   );
 }

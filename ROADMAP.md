@@ -6,7 +6,14 @@ Update this file whenever a feature lands.
 New to the project? Read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, the rules, and
 how work is split.
 
-**Last updated:** 2026-10-01 — **v3.2 (unreleased, not yet committed):** **JEV is playable**
+**Last updated:** 2026-10-03 — **Live at https://findmymines.app** (AWS EC2 in Sydney behind a
+Cloudflare Tunnel; see build order item 11). New since: **find friends by typing a few letters**
+(friends first), **player cards** from the Online now list (stats, View profile, Add friend,
+Report behind ⋯), public profiles at **`/u/<username>`**, **player reports** to the server console
+(guests too; needs migration 0005 to survive restarts), real visitor addresses behind the tunnel,
+the **logo and favicon**, and a README fix so the graded two-computer setup never has anyone type
+an IP. Spec: `docs/specs/2026-10-03-friend-search-player-cards-reports.md`.
+**2026-10-01 — v3.2 (committed and released since):** **JEV is playable**
 (TypeSafe AI, on servers with a `JEV_API_KEY`); the **Fruit Fly is retrained** to play from
 its own neurons with no solver, with "sleepy" difficulty; **guests are remembered** for 30 days
 by a cookie, with an unofficial Elo and a guest profile; hosting decided: **Cloudflare + AWS**.
@@ -141,6 +148,11 @@ fundamentals are incomplete, so the fundamentals stay protected.
 | Bundle split | **Done 2026-09-29** | React, Supabase and socket.io in their own chunks; the admin console and puzzle mode load on first visit, behind a boundary that offers "Reload the page" if a chunk has gone (e.g. after a redeploy) instead of a blank page. Main chunk 528 kB → 131 kB; no chunk over Vite's 500 kB warning |
 | Small fixes 2026-09-29 | **Done** | A fractional cell (`row: 2.5`) was accepted and then threw inside the reveal; `inBounds` now takes whole numbers only (unit + e2e). The game log's "Mine" filter shows the newest matches first. The online list says "In the menu" and uses the friends list's green / yellow dots |
 | Match history schema | **Applied** | `supabase/migrations/0001_accounts_and_elo.sql`, advisors clean |
+| Find friends by typing | **Done 2026-10-03** | `+ Add friend` on `/profile` is a type-ahead now, not an exact-username form. From 2 letters (200 ms pause) it searches public profiles with `ILIKE '%text%'` (`%`, `_`, `\` escaped — checked against the real table), friends searched separately so they are never crowded out. **Friends first**, then online people, then names that start with the text. Each row: Add / Accept / requested / a friend's live Invite-Join-Watch. Arrow keys, Enter, Esc; an ARIA combobox. `client/src/data/playerSearch.ts`, `components/FriendSearch.tsx` |
+| Player cards + public profiles | **Done 2026-10-03** | Every name in Online now is a button: yours opens your profile, anyone else's a card — a popover beside the list, a bottom sheet on phones. Accounts: Elo and rank, ranked win rate and games, last 5 results, **View profile** and **Add friend** (Accept / Requested / Friends; "Sign in to add friends" for guests). Guests: name and where they are. ⋯ holds Copy username and **Report player…**. **`/u/<username>`** is a read-only public profile (tiles, rating line, heatmap, recent matches, friend button). `PlayerCard.tsx`, `screens/PlayerProfileScreen.tsx`, router `pathForPlayer` / `playerNameFromPath` |
+| Player reports | **Done 2026-10-03** | Anyone named — guests too — reports from a player card: reason (offensive name or picture, harassment, cheating, spam, something else) and optional details. New events `player:report`, `admin:report`, `admin:reports`, and an optional `guestId` on `player:join`. The server fills in both sides from its own records: name, account id, the `fmm_guest` cookie's random id, tab id, IP address, room. Limits: the same player once per 10 min, 5 reports per 10 min, no self-reports. Admins get a **Player reports** card on `/admin` (Resolve / Dismiss / Reopen; Kick and Ban while the player is still connected), every change logged under moderation. Kept in memory and — **after migration 0005** — in `public.reports` (service role only), deleted after 90 days. Privacy and terms pages updated. Rules `shared/src/reports.ts`; server `state/reportStore.ts`, `state/reportLimit.ts`, `persistence/reportRecorder.ts` |
+| Real addresses behind the tunnel | **Done 2026-10-03** | Through Cloudflare Tunnel every peer was `127.0.0.1`. `clientAddress()` (`admin/access.ts`) now takes `CF-Connecting-IP` (then the first `X-Forwarded-For`) **only when the peer is loopback**, so the console and reports show the visitor's own address. Admin access is unchanged: forwarded requests still never count as the server machine |
+| Logo + favicon | **Done 2026-10-03** | The pixel bomb on a signal-orange tile. Sources in `brand/` (SVG, 512 and 120 px PNG for GitHub and Google); `favicon.svg`, `favicon-32.png` and `apple-touch-icon.png` in `client/public/` and linked from `index.html` |
 
 ---
 
@@ -166,7 +178,8 @@ checks were run against the live database and all passed:
 | **Add admins** | Paste `supabase/queries/add-admin.sql` into the SQL Editor and run it — it adds Chain (`chainpong`) and lists every admin; change the username to add someone else. Needed only to open `/admin` from a machine other than the server. |
 | **Apply `supabase/migrations/0003_friends.sql`** | Friends list and invites. Paste the file into the SQL Editor and run it once. Until then `/profile` says the update is needed and invites are refused. |
 | ~~Apply `supabase/migrations/0004_avatars.sql`~~ | **Done** (confirmed 2026-10-01: `profiles.avatar_path` exists; applied outside the migration history, which lists only 0001). Profile pictures (needs 0001). Adds `profiles.avatar_path` with its own-folder CHECK and column grant, the public `avatars` bucket (2 MB; WebP, PNG, JPEG; no SVG), owner-only storage policies, and `avatar_path` on the leaderboard view (still `security_invoker`). Idempotent. Until then the profile card says the update is needed and everything else works without pictures. Afterwards: add, change and remove a picture once while signed in, and check Storage → avatars → your id. |
-| Add Google OAuth | **Paused** until hosting — needs a real domain. See "Social sign-in" below. |
+| Add Google OAuth | **In progress 2026-10-03** — the domain exists now (`findmymines.app`). Consent screen, OAuth client and Supabase provider are being set up; then `VITE_OAUTH_PROVIDERS=google,github` on the server and rebuild. See "Social sign-in" below. |
+| **Apply `supabase/migrations/0005_reports.sql`** | Player reports. Paste it into the SQL Editor and run it once. Until then reports reach the console from memory only and are lost on a restart; the server logs "no reports table yet" once. |
 
 **Fixed 2026-09-28 — one malformed message could crash the server.** Any client sending an
 event with a missing or odd payload (e.g. `room:join` with nothing) threw inside a Socket.IO
@@ -303,7 +316,14 @@ first, reach an almost-final version, then go live on AWS** only for what needs 
     Retrained 2026-10-01 to play without the solver (numbers in §2). The
     full-brain version (~166k neurons) needs an NVIDIA GPU — a friend's machine or a cloud GPU
     later. Also done that day: profile pictures (migration 0004), the fixes batch and v3.0.0.
-11. **Hosting — decided 2026-10-01: Cloudflare + AWS.** Cloudflare for the domain, DNS and
+11. ~~**Hosting**~~ — **live 2026-10-03 at https://findmymines.app.** What was built differs from
+    the plan below: one EC2 `t4g.small` (Arm, Ubuntu 24.04) in **Sydney** (`ap-southeast-2`, the AWS
+    project's fixed Region), the game run by a systemd service (`findmymines`, `npm run start`, no
+    Docker), the built client served by the same server (no Cloudflare Pages), and a **Cloudflare
+    Tunnel** (`cloudflared` service) in front — no inbound web ports; SSH from the owner's IP plus
+    EC2 Instance Connect. Supabase Site URL and redirect URLs point at the domain; GitHub sign-in
+    works there. Update: `git pull && npm run build && sudo systemctl restart findmymines` on the
+    server. The original decision, for the record: **Cloudflare + AWS.** Cloudflare for the domain, DNS and
     HTTPS (and the static client on Cloudflare Pages); the game server as one Docker container
     on AWS EC2 (the existing `Dockerfile`), with CloudWatch for the console stats. One server
     instance on purpose: every room lives in one process's memory, so it scales by instance
@@ -328,24 +348,49 @@ do: add it to `ai:eval` next to the Groq models.
 
 ### Parked until the game is online
 
-Decided 2026-09-27. Each of these needs a public server, so revisit them once hosting is done.
+Decided 2026-09-27. Each of these needed a public server — **unblocked since 2026-10-03**, when the game went live.
 
 | Item | Why it waits |
 |---|---|
-| **AWS stats on the server console** — CPU, memory and network from CloudWatch, shown alongside the socket stats | Needs the EC2 instance to exist |
-| **Test invite links end to end** — copy link, LINE share, phone share sheet | A link only works when the server has a public address |
+| **AWS stats on the server console** — CPU, memory and network from CloudWatch, shown alongside the socket stats | Can be built now: the instance exists |
+| **Test invite links end to end** — copy link, LINE share, phone share sheet | Can be tested now at https://findmymines.app |
 | ~~**Admin password** as another way into `/admin`~~ | **Done** — Chain's `ADMIN_TOKEN` (see "Admin token" above) |
 
 ### v1.0.0 MVP
 
 Everything scoped for v1.0.0 is built, and since 2026-09-29 so are the AI bot and puzzle mode
-(v3.0.0). Remaining before hosting: nothing that runs locally, apart from the owner items
-(committing v3.1 + v3.2 and the `v3.0.0` tag — migration 0004 is applied). Next: hosting.
+(v3.0.0). Hosted since 2026-10-03. Owner items left: apply migration 0005 (reports) and finish
+Google sign-in. (The Cloudflare tunnel token was refreshed on 2026-10-03.)
 
 **Extra-points estimate (rubric: AI feature 2, non-AI 1, cap 10, at least one AI feature
 required):** AI opponent 2 + AI hint 2 + six of the many non-AI extras already built = 10.
 Chat, share links, puzzle mode, profile pictures and the Fruit Fly add demo value, not marks
 (the puzzle's hint is the same AI hint feature).
+
+---
+
+## 4a. v3.x plan (agreed 2026-10-03)
+
+One feature per branch, one commit `v3.x.x feat: …`, merged onto `main` with a merge commit and
+tagged (CONTRIBUTING.md §5). Built in this order; pushed and deployed together at the end.
+
+| Version | What | Status |
+|---|---|---|
+| v3.1.0 | Logo and favicon (tag added after the fact) | **Done** |
+| v3.2.0 | Friend search, player cards, `/u/<username>`, player reports, real IPs behind the tunnel, README two-computer fix | **Done** — migration 0005 applied |
+| v3.2.1 | Fix: the picked option in Play vs AI (difficulty / size / mines) unreadable on phones — the last-tapped option keeps `:hover`, whose near-black background hides its text | Planned |
+| v3.3.0 | Link preview cards: Open Graph / Twitter tags, a 1200×630 image, per-link titles for `/join/CODE` and `/u/<name>` filled in by the server | Planned |
+| v3.4.0 | Sound effects (8-bit, synthesized, quiet, on by default, mute toggle) and vibration when your turn comes | Planned |
+| v3.5.0 | Daily challenge in Puzzle: the same board for everyone each day, same safe opening, streak, share text | Planned |
+| v3.6.0 | "Why?" on hints: the number that forces the cell, or the share of layouts; reworded by the LLM when connected | Planned |
+| v3.7.0 | Game review after a match: each move rated against the solver, accuracy per player, key moments | Planned |
+| v3.8.0 | Fruit Fly brain view: the 244 neurons light up (real wiring, real positions from neuPrint) as the fly decides | Planned |
+| v3.9.0 | Server stats on `/admin`: live CPU / memory / load from the server, service health and uptime, CloudWatch CPU, CPU credits and network (needs an IAM role on the instance) | Planned |
+| v3.10.0 | CI on GitHub Actions and automatic deploy: the server pulls `main` when its CI is green | Planned |
+| — | Verify on prod: real visitor IPs on `/admin` (the live server still shows 127.0.0.1 until v3.2.0 is deployed) | After deploy |
+
+**Known issue, not scheduled:** during a network blip in an e2e run, a JEV game made no move for a
+whole 40 s window, although JEV is meant to fall back to the solver's pick on any failure.
 
 ---
 
@@ -369,7 +414,7 @@ Every claim of "done" above is backed by a command that can be re-run.
 
 ```
 npm run typecheck   # clean across all three packages
-npm test            # 866 unit tests: engine, turn order, room config, Elo, matchmaking,
+npm test            # 920 unit tests: engine, turn order, room config, Elo, matchmaking,
                     #   moderation, join requests, presence, admin access check (incl.
                     #   ADMIN_TOKEN), activity log, handler safety, seat-hold identity,
                     #   session handling, guest history, formatting, friends (status,
@@ -381,8 +426,10 @@ npm test            # 866 unit tests: engine, turn order, room config, Elo, matc
                     #   world chat and invite cards, avatar paths and image rules,
                     #   Fruit Fly circuit / features / sleepy picks / readout format,
                     #   JEV picker (fake fetch), guest cookie and unofficial Elo,
-                    #   whole-number cells, newest-first "Mine" query
-npm run test:e2e    # 241 socket assertions (with a JEV key; the no-key run checks the refusal) — needs a running server; ~30 s of it is the
+                    #   whole-number cells, newest-first "Mine" query, report rules and
+                    #   limits and store, real-address check, player search ranking,
+                    #   the card's friend button, the guest id, /u/<name> routes
+npm run test:e2e    # 253 socket assertions (with a JEV key; the no-key run checks the refusal) — needs a running server; ~30 s of it is the
                     #   reconnect grace period running out. FMM_URL=http://localhost:3100
                     #   points it at a test server on another port
 npm run test:ranked # 40 assertions against the real database — needs a server + credentials
@@ -404,7 +451,10 @@ errors (checks a fresh server — the fly loads its circuit once per process), p
 watch / ask by code, `room:lookup`, Classic-shaped and garbage values listed), world chat (a line
 reaches others, history for newcomers, the sixth line in 10 s refused, invite rules, the console
 clearing it), HTTP (`/health` with a `RateLimit` header), a fractional cell refused as a bad move,
-and garbage payloads on every game and console event leaving the server running. The signed-in invite path needs two real accounts that are
+player reports (a guest reporting a guest reaches the console with both guest ids, address and
+connection; repeats inside 10 minutes, self-reports, offline targets and bad payloads refused; the
+console resolves; a malformed guest id is not kept), and garbage payloads on every game and console
+event leaving the server running. The signed-in invite path needs two real accounts that are
 friends, so it is not in the e2e suite yet.
 
 `test:ranked` creates two confirmed accounts, plays a ranked match and a casual one, then two

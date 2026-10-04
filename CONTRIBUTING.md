@@ -115,23 +115,36 @@ These are not style preferences — breaking them causes real bugs.
 
 ---
 
-## 5. Branching and commits
+## 5. Branching, commits, versions
 
-```bash
-git checkout -b feat/short-description
+**Agreed 2026-10-03.** One feature (or fix) at a time, each on its own branch, one commit, merged
+onto `main` with a merge commit, and tagged with its version.
+
+1. **Branch** named after the thing being built: `feat/<thing>` or `fix/<thing>`.
+2. **Bump the version** in the same commit: `APP_VERSION` in `packages/client/src/version.ts` (the
+   footer shows it and links to its tag) and `"version"` in the root `package.json`. A feature bumps
+   the minor number (3.4.0 → 3.5.0); a fix bumps the patch (3.4.0 → 3.4.1). Add a line to
+   `ROADMAP.md` in the same commit.
+3. **Commit** as `v<version> feat: <what>` or `v<version> fix: <what>`.
+4. **Merge** onto `main` with a merge commit, never a fast-forward, so each feature stays one
+   visible unit in the history.
+5. **Tag** the merge commit `v<version>` (annotated).
+6. **Push** `main` with its tags when a batch is ready. Once automatic deploy lands (v3.10.0),
+   pushing `main` puts it live, so only push what passed all four checks above.
+
+```powershell
+git switch -c feat/daily-challenge
+# ...work, then the four checks in §2...
+git add -A
+git commit -m "v3.5.0 feat: daily challenge in Puzzle"
+git switch main
+git merge --no-ff feat/daily-challenge -m "Merge feat/daily-challenge (v3.5.0)"
+git tag -a v3.5.0 -m "v3.5.0: daily challenge in Puzzle"
+git push origin main --follow-tags
 ```
 
-Conventional Commits:
-
-```
-feat(client): add spectator chat
-fix(server): stop turn timer leaking after a room closes
-test(shared): cover Elo K-factor tiers
-docs: update roadmap
-```
-
-Open a PR rather than pushing to `main` — the protocol contract means one person's change can
-break everyone, and a review catches that early.
+Changing `shared/src/protocol.ts` still needs a word with the group first: one person's change to
+the contract breaks everyone at once.
 
 ---
 

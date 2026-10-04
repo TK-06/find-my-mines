@@ -2,6 +2,7 @@ import type { ModerationResult, RemovalNote } from '@fmm/shared';
 import { useEffect, useRef, useState } from 'react';
 import { ReasonDialog } from '../components/ReasonDialog.js';
 import { GameViewer } from './GameViewer.js';
+import { ReportsPanel } from './ReportsPanel.js';
 import { TerminalPanel } from './TerminalPanel.js';
 import { useAdmin } from './useAdmin.js';
 
@@ -113,6 +114,15 @@ export function AdminConsole() {
             <p className="muted">No clients connected.</p>
           )}
         </div>
+
+        <ReportsPanel
+          reports={admin.reports}
+          connected={connected}
+          liveClientIds={new Set(state?.clients.map((client) => client.id) ?? [])}
+          onStatus={admin.setReportStatus}
+          onKick={(clientId, nickname) => setPending({ kind: 'kick', clientId, label: nickname })}
+          onBan={(clientId, nickname) => setPending({ kind: 'ban', clientId, label: nickname })}
+        />
 
         <div className="card">
           <h3>Rooms</h3>

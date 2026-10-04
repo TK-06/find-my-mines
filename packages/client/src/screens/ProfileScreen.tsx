@@ -276,7 +276,7 @@ function GuestCard({
   );
 }
 
-function Tile({ label, value, detail }: { label: string; value: string; detail: string }) {
+export function Tile({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <div className="profile-tile">
       <dt>{label}</dt>
@@ -286,7 +286,7 @@ function Tile({ label, value, detail }: { label: string; value: string; detail: 
   );
 }
 
-function EmptyState({ title, detail }: { title: string; detail?: string }) {
+export function EmptyState({ title, detail }: { title: string; detail?: string }) {
   return (
     <div className="card empty-state">
       <p style={{ margin: 0, fontWeight: 600 }}>{title}</p>
