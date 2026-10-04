@@ -190,6 +190,7 @@ const privacy: Policy = {
         [
           'your theme, light or dark;',
           'whether game sounds and vibration are on or off, set with the speaker button at the top of every page (both start on);',
+          'in Puzzle mode, your fastest time on each level and, for the Daily puzzle, how your first try of each day went (won or lost, the time and the hints used, for about the last 13 months), your streak, your best Daily time, how many Dailies you have played, and — until you finish it — the Daily game you have started, so a refresh does not lose it. It stays in your browser and is never sent to the game server;',
           'your sign-in session, if you sign in, so you stay signed in (managed by Supabase);',
           'as a guest, the name you chose — for this tab only, so a refresh does not sign you out;',
           'a random id for this tab, so if your connection drops the server can give your seat back within 30 seconds;',
