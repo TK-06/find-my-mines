@@ -1,0 +1,161 @@
+<!-- Regenerate packages/client/public/og-image.png (1200x630): msedge --headless=new --disable-gpu --hide-scrollbars --window-size=1200,630 --virtual-time-budget=4000 --screenshot=<repo>/packages/client/public/og-image.png file:///<repo>/brand/og-image.html -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Find My Mines - link preview image</title>
+<style>
+  /* The app's own fonts, straight from node_modules (run npm install first). */
+  @font-face {
+    font-family: 'Archivo Variable';
+    font-weight: 100 900;
+    font-stretch: 62% 125%;
+    src: url(../node_modules/@fontsource-variable/archivo/files/archivo-latin-wdth-normal.woff2) format('woff2-variations');
+  }
+  @font-face {
+    font-family: 'JetBrains Mono Variable';
+    font-weight: 100 800;
+    src: url(../node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2) format('woff2-variations');
+  }
+
+  /* The palette of packages/client/src/styles.css. */
+  :root {
+    --ink: #16181b;
+    --paper: #eef0f2;
+    --signal: #ff5a1f;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: var(--ink); }
+
+  .card { position: relative; width: 1200px; height: 630px; overflow: hidden; background: var(--ink); color: var(--paper); }
+
+  /* The board behind everything: 19 x 10 slots, the way a game of it looks half way through. */
+  .board { position: absolute; left: 1.5px; top: 0; width: 1197px; height: 630px; display: grid; grid-template-columns: repeat(19, 63px); grid-template-rows: repeat(10, 63px); }
+  .slot { margin: 3px; position: relative; }
+  .slot.covered {
+    background: #252a30;
+    border-top: 4px solid #343a42;
+    border-left: 4px solid #343a42;
+    border-bottom: 4px solid #121416;
+    border-right: 4px solid #121416;
+  }
+  .slot.open { background: #1b1e22; display: flex; align-items: center; justify-content: center; font: 800 30px/1 'JetBrains Mono Variable', monospace; }
+  .slot.open.n1 { color: #5b7fd6; }
+  .slot.open.n2 { color: #4aa876; }
+  .slot.open.n3 { color: #e0604f; }
+  .slot.mine { background: var(--signal); display: flex; align-items: center; justify-content: center; }
+  .slot.mine svg { width: 40px; height: 40px; }
+
+  .stack { position: absolute; left: 0; right: 0; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+
+  .tile { width: 112px; height: 112px; margin-bottom: 18px; }
+
+  h1 {
+    margin: 0;
+    font-family: 'Archivo Variable', sans-serif;
+    font-stretch: 125%;
+    font-weight: 800;
+    font-size: 110px;
+    line-height: 0.92;
+    letter-spacing: -0.015em;
+    text-transform: uppercase;
+    color: var(--paper);
+  }
+  h1 em { font-style: normal; color: var(--signal); }
+
+  .tagline {
+    margin: 20px 0 0;
+    font-family: 'Archivo Variable', sans-serif;
+    font-stretch: 100%;
+    font-weight: 700;
+    font-size: 40px;
+    line-height: 1.22;
+    color: var(--paper);
+  }
+  .tagline span { display: block; color: #aab1b9; font-weight: 600; }
+
+  .url {
+    margin-top: 22px;
+    padding: 8px 22px 9px;
+    font-family: 'JetBrains Mono Variable', monospace;
+    font-weight: 800;
+    font-size: 32px;
+    line-height: 1;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    background: var(--paper);
+    border-radius: 6px;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <!-- The logo's pixel bomb (brand/find-my-mines-logo.svg), on a 16 x 16 grid. -->
+      <symbol id="bomb" viewBox="0 0 16 16" shape-rendering="crispEdges">
+        <path fill="#ffc93c" d="M10 0h1v1h-1zM13 0h1v1h-1zM10 2h1v1h-1zM13 2h1v1h-1z"/>
+        <path fill="#ffffff" d="M11 1h2v1h-2zM11 2h2v1h-2zM11 3h2v1h-2z"/>
+        <path fill="#16181b" d="M10 4h1v1h-1zM9 5h1v1h-1zM9 6h1v1h-1z"/>
+        <path fill="#16181b" d="M5 6h3v1h-3zM3 7h8v1h-8zM2 8h2v1h-2zM6 8h6v1h-6zM2 9h1v1h-1zM5 9h7v1h-7zM1 10h2v1h-2zM4 10h9v1h-9zM1 11h12v1h-12zM1 12h10v1h-10zM12 12h1v1h-1zM2 13h8v1h-8zM11 13h1v1h-1zM3 14h8v1h-8zM5 15h4v1h-4z"/>
+        <path fill="#3a3f46" d="M8 6h1v1h-1zM11 12h1v1h-1zM10 13h1v1h-1z"/>
+        <path fill="#ffffff" d="M4 8h2v1h-2zM3 9h2v1h-2zM3 10h1v1h-1z"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="board" id="board"></div>
+
+  <div class="stack">
+    <svg class="tile" viewBox="0 0 512 512" aria-hidden="true">
+      <rect width="512" height="512" rx="112" fill="#ff5a1f"/>
+      <use href="#bomb" x="76" y="64" width="384" height="384"/>
+    </svg>
+    <h1>Find My<br /><em>Mines</em></h1>
+    <p class="tagline">Multiplayer Minesweeper<span>find the mines, win the round</span></p>
+    <div class="url">findmymines.app</div>
+  </div>
+</div>
+
+<script>
+  // The same board every time: a fixed seed and a hand-placed handful of mines.
+  const COLS = 19, ROWS = 10;
+  let seed = 20261004;
+  const rand = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  // The board fades out toward the middle in flat steps, like unexplored ground, so the words read.
+  const fog = (col, row) => {
+    const d = (Math.abs((col - 9) / 6.6) ** 3 + Math.abs((row - 4.5) / 5.4) ** 3) ** (1 / 3);
+    return d < 0.8 ? 0.03 : d < 0.95 ? 0.25 : d < 1.1 ? 0.55 : d < 1.25 ? 0.8 : 1;
+  };
+
+  const mines = new Set(['1,1', '3,7', '0,4', '17,1', '15,6', '18,8', '14,0', '4,9']);
+  const board = document.getElementById('board');
+
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      const slot = document.createElement('div');
+      const roll = rand();
+      if (mines.has(`${col},${row}`)) {
+        slot.className = 'slot mine';
+        slot.innerHTML = '<svg viewBox="0 0 16 16"><use href="#bomb"/></svg>';
+      } else if (roll < 0.3) {
+        const n = rand() < 0.55 ? 1 : rand() < 0.7 ? 2 : 3;
+        slot.className = `slot open n${n}`;
+        slot.textContent = rand() < 0.2 ? '' : String(n);
+      } else {
+        slot.className = 'slot covered';
+      }
+      slot.style.opacity = fog(col, row);
+      board.appendChild(slot);
+    }
+  }
+</script>
+</body>
+</html>

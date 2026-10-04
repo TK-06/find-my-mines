@@ -4,8 +4,9 @@
  * Connects clients to a RUNNING server and exercises the full flow: nickname,
  * lobby, the online list, room creation, host start, a complete match,
  * rematch, leaving, forfeits, the reconnect grace period, host succession,
- * room cleanup, host and admin moderation, and the admin console (viewer,
- * mine toggle, terminal log, access check).
+ * room cleanup, host and admin moderation, the admin console (viewer,
+ * mine toggle, terminal log, access check), and the link-preview cards a
+ * pasted /join or /u link unfurls into (needs the built client).
  *
  * The unit tests cover the engine and room-config rules; this covers the wire
  * protocol and everything stateful the server does.
@@ -190,6 +191,125 @@ check('creator is the host', aliceView.state?.hostId === aliceJoin.playerId);
 check('board is 6x6', aliceView.state?.rows === 6 && aliceView.state?.cols === 6);
 check('board declares 11 mines', aliceView.state?.bombCount === 11);
 check('all slots start covered', aliceView.state?.revealed.length === 0);
+
+// ── link previews ───────────────────────────────────────────────────────────
+section('link previews');
+
+// A chat app fetches a pasted link and draws its card from the page's <meta>
+// tags. For /join/CODE and /u/NAME the server writes the room's or the
+// player's own text into them; every other path goes out as built. Names are
+// typed by people, so they must come out escaped. This reads the page the
+// server really sends, which is the BUILT client: run `npm run build` first.
+{
+  const getPage = async (path) => {
+    const res = await fetch(`${URL}${path}`);
+    return { res, html: await res.text() };
+  };
+  const metaOf = (html, key) =>
+    new RegExp(`<meta\\s+(?:name|property)="${key}"\\s+content="([^"]*)"`).exec(html)?.[1] ?? '';
+  const unescapeHtml = (text) =>
+    text
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
+  const metaCount = (html) => (html.match(/<meta /g) ?? []).length;
+
+  const home = await getPage('/');
+  const defaultTitle = metaOf(home.html, 'og:title');
+  const defaultDescription = metaOf(home.html, 'og:description');
+  check('the home page carries the default link card',
+    home.res.status === 200 && Boolean(defaultTitle) && Boolean(defaultDescription) &&
+      /\/og-image\.png$/.test(metaOf(home.html, 'og:image')) &&
+      metaOf(home.html, 'twitter:card') === 'summary_large_image',
+    `${home.res.status} "${defaultTitle}"`);
+
+  const image = await fetch(`${URL}/og-image.png`);
+  const png = Buffer.from(await image.arrayBuffer());
+  check('/og-image.png is served as a 1200x630 PNG',
+    image.status === 200 && /^image\/png/.test(image.headers.get('content-type') ?? '') &&
+      png.length > 24 && png.readUInt32BE(16) === 1200 && png.readUInt32BE(20) === 630,
+    `${image.status} ${image.headers.get('content-type')} ${png.length > 24 ? `${png.readUInt32BE(16)}x${png.readUInt32BE(20)}` : 'too short'}`);
+
+  const room = await getPage(`/join/${roomId}`);
+  const roomTitle = unescapeHtml(metaOf(room.html, 'og:title'));
+  const roomText = unescapeHtml(metaOf(room.html, 'og:description'));
+  check('/join/CODE answers as HTML that is never cached',
+    room.res.status === 200 && /^text\/html; charset=utf-8$/i.test(room.res.headers.get('content-type') ?? '') &&
+      room.res.headers.get('cache-control') === 'no-cache',
+    `${room.res.status} ${room.res.headers.get('content-type')} / ${room.res.headers.get('cache-control')}`);
+  check('/join/CODE names the room in the card title', roomTitle === 'Join "Classic Room" · Find My Mines', roomTitle);
+  check('/join/CODE says what kind of game it is',
+    ["Alice's room", '6×6 board, 11 mines', '1 of 2 players', 'waiting to start'].every((part) => roomText.includes(part)),
+    roomText);
+  check('the page title, link and Twitter card follow the room',
+    room.html.includes('<title>Join &quot;Classic Room&quot; · Find My Mines</title>') &&
+      metaOf(room.html, 'og:url').endsWith(`/join/${roomId}`) &&
+      unescapeHtml(metaOf(room.html, 'twitter:title')) === roomTitle &&
+      unescapeHtml(metaOf(room.html, 'twitter:description')) === roomText,
+    metaOf(room.html, 'og:url'));
+  check('the room card still carries the app and the shared image',
+    room.html.includes('<div id="root">') && metaOf(room.html, 'og:image') === metaOf(home.html, 'og:image') &&
+      metaCount(room.html) === metaCount(home.html));
+
+  const lower = await getPage(`/join/${roomId.toLowerCase()}`);
+  check('a lowercase room code works, and the link is the canonical one',
+    lower.res.status === 200 && unescapeHtml(metaOf(lower.html, 'og:title')) === roomTitle &&
+      metaOf(lower.html, 'og:url').endsWith(`/join/${roomId}`),
+    unescapeHtml(metaOf(lower.html, 'og:title')));
+
+  const gone = await getPage('/join/ZZZZ');
+  const goneTitle = unescapeHtml(metaOf(gone.html, 'og:title'));
+  check('a room that does not exist gets the generic invitation',
+    gone.res.status === 200 && /invited/i.test(goneTitle) && !goneTitle.includes('Classic Room'), goneTitle);
+
+  const ghost = `nobody-${Date.now().toString(36)}`;
+  const unknown = await getPage(`/u/${ghost}`);
+  check('a player who does not exist gets the default card, without their name in it',
+    unknown.res.status === 200 && metaOf(unknown.html, 'og:title') === defaultTitle &&
+      metaOf(unknown.html, 'og:description') === defaultDescription && !unknown.html.includes(ghost),
+    metaOf(unknown.html, 'og:title'));
+
+  // A name typed by a person: markup, quotes and an ampersand. Eve makes the
+  // rooms (a separate guest, so Alice stays in hers) and leaves them again.
+  const eve = await connect();
+  await setName(eve, 'Eve');
+  const hostileName = `"><script>alert(1)</script>&'`;
+  const hostileRoom = await emitAck(eve, 'room:create', { name: hostileName, config: CLASSIC });
+  const hostile = hostileRoom.ok ? await getPage(`/join/${hostileRoom.roomId}`) : { res: { status: 0 }, html: '' };
+  check('a room named with <script>, quotes and & is escaped in the card',
+    hostileRoom.ok === true && hostile.res.status === 200 &&
+      !hostile.html.includes('<script>alert(1)') &&
+      hostile.html.includes('&lt;script&gt;alert(1)&lt;/script&gt;') &&
+      unescapeHtml(metaOf(hostile.html, 'og:title')) === `Join "${hostileName}" · Find My Mines`,
+    metaOf(hostile.html, 'og:title') || JSON.stringify(hostileRoom));
+  check('the escaped card keeps every tag whole', metaCount(hostile.html) === metaCount(home.html),
+    `${metaCount(hostile.html)} tags, home has ${metaCount(home.html)}`);
+
+  // Creating another room leaves the first, which closes it: nobody is left in it.
+  const hiddenRoom = await emitAck(eve, 'room:create', {
+    name: 'Hidden lair',
+    config: { rows: 5, cols: 5, mineCount: 4, maxPlayers: 3, mode: 'casual', private: true },
+  });
+  const hidden = hiddenRoom.ok ? await getPage(`/join/${hiddenRoom.roomId}`) : { res: { status: 0 }, html: '' };
+  const hiddenTitle = unescapeHtml(metaOf(hidden.html, 'og:title'));
+  check('a private room gets the generic invitation, with none of its details',
+    hiddenRoom.ok === true && hidden.res.status === 200 && /invited/i.test(hiddenTitle) &&
+      !hidden.html.includes('Hidden lair') && !hidden.html.includes('5×5'),
+    hiddenTitle || JSON.stringify(hiddenRoom));
+
+  const closed = hostileRoom.ok ? await getPage(`/join/${hostileRoom.roomId}`) : { res: { status: 0 }, html: '' };
+  check('a room that has closed goes back to the generic invitation',
+    closed.res.status === 200 && /invited/i.test(unescapeHtml(metaOf(closed.html, 'og:title'))) &&
+      !closed.html.includes('script&gt;alert'),
+    unescapeHtml(metaOf(closed.html, 'og:title')));
+
+  // Leave nothing behind for the sections that follow.
+  eve.emit('room:leave');
+  await sleep(100);
+  eve.close();
+}
 
 // ── second player joins, host starts ────────────────────────────────────────
 section('joining and starting');
