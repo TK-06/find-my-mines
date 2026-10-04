@@ -16,7 +16,7 @@ import { APP_VERSION, REPO_URL } from '../version.js';
 /** The one address people should write to (the owner asked for just this one). */
 export const CONTACT_EMAIL = 'Palangtaj@gmail.com';
 
-export const POLICY_UPDATED = '3 October 2026';
+export const POLICY_UPDATED = '4 October 2026';
 
 /** A `mailto:` link to the contact address with the subject already filled in. */
 export function contactMailto(topic: string): string {
@@ -189,6 +189,7 @@ const privacy: Policy = {
         'The game uses your browser’s local storage and session storage, and sets one cookie, only for guests (the last item). It keeps:',
         [
           'your theme, light or dark;',
+          'whether game sounds and vibration are on or off, set with the speaker button at the top of every page (both start on);',
           'your sign-in session, if you sign in, so you stay signed in (managed by Supabase);',
           'as a guest, the name you chose — for this tab only, so a refresh does not sign you out;',
           'a random id for this tab, so if your connection drops the server can give your seat back within 30 seconds;',

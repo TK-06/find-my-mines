@@ -18,6 +18,7 @@ import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
 import { RoomChat } from './components/RoomChat.js';
 import { ShareRoom } from './components/ShareRoom.js';
 import { SiteFooter } from './components/SiteFooter.js';
+import { SoundControl } from './components/SoundControl.js';
 import { PostInviteButton, WorldChat } from './components/WorldChat.js';
 import { isPolicy } from './data/policies.js';
 import { NavBar, joinCodeFromPath, pathFor, pathForPlayer, playerNameFromPath, useRoute, type Route } from './router.js';
@@ -29,6 +30,8 @@ import { PlayerProfileScreen } from './screens/PlayerProfileScreen.js';
 import { PolicyScreen } from './screens/PolicyScreen.js';
 import { ProfileScreen } from './screens/ProfileScreen.js';
 import { RemovedScreen } from './screens/RemovedScreen.js';
+import { useSoundSettings } from './sound/settings.js';
+import { useGameSounds } from './sound/useGameSounds.js';
 import { useTheme } from './theme.js';
 import { forgetStoredGuest, storedGuestName, useGame } from './useGame.js';
 
@@ -91,6 +94,11 @@ export function App() {
   // Up here with the other hooks, before any early return. Inert outside a
   // game against the computer.
   const hint = useAiHint(state, playerId, askHint);
+
+  // The game's sounds and the buzz on your turn. They follow the room whatever
+  // page is open, so a turn is heard from the profile page too. The admin
+  // console never mounts App, so it stays silent.
+  useGameSounds(state, playerId, forfeit, useSoundSettings());
 
   const [signedIn, setSignedIn] = useState(false);
   const [ready, setReady] = useState(!authEnabled);
@@ -655,6 +663,7 @@ function Shell({
           <span className={`conn ${connected ? 'online' : 'offline'}`}>
             {connected ? 'Online' : 'Offline'}
           </span>
+          <SoundControl />
         </div>
       </header>
 

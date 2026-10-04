@@ -12,6 +12,8 @@ import {
   saveBestTimes,
   startSession,
 } from '../data/puzzleStore.js';
+import { useSoundSettings } from '../sound/settings.js';
+import { usePuzzleSounds } from '../sound/useGameSounds.js';
 
 /** A fresh seed with every move; only the first click's is used, to lay the mines. */
 const newSeed = () => Math.floor(Math.random() * 0x1_0000_0000);
@@ -27,6 +29,9 @@ const newSeed = () => Math.floor(Math.random() * 0x1_0000_0000);
 export function PuzzleScreen() {
   const [session, dispatch] = useReducer(puzzleReducer, undefined, () => startSession('easy', loadBestTimes()));
   const { game } = session;
+
+  // The explosion when a mine goes off, the fanfare on a win.
+  usePuzzleSounds(game.status, useSoundSettings());
 
   // Saved only when a record is set, merged with what is stored, so another
   // tab's record is never overwritten by this one's older view.
