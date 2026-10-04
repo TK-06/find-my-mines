@@ -1,21 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { createRng } from './rng.js';
 import {
+  DAILY_FIRST_KEY,
+  DAILY_PRESET,
   PUZZLE_HINTS_PER_GAME,
   PUZZLE_LEVELS,
   PUZZLE_PRESETS,
   countsForBest,
+  dailyKey,
+  dailyNumber,
+  dailyOpening,
+  dailyPuzzle,
+  dailySeed,
   describePuzzleHint,
   flagPuzzleCell,
+  isDailyKey,
   isPuzzleLevel,
+  msUntilNextDaily,
   newPuzzle,
   playPuzzleCell,
   puzzleCellLabel,
   puzzleCellState,
+  puzzleClearedPercent,
   puzzleFromMines,
   puzzleHint,
   puzzleMinesLeft,
   puzzleView,
+  shiftDailyKey,
   takePuzzleHint,
   type PuzzleGame,
 } from './puzzle.js';
@@ -375,5 +386,230 @@ describe('puzzleCellLabel', () => {
     expect(puzzleCellLabel({ row: 15, col: 25 })).toBe('Z16');
     expect(puzzleCellLabel({ row: 0, col: 26 })).toBe('AA1');
     expect(puzzleCellLabel({ row: 15, col: 29 })).toBe('AD16');
+  });
+});
+
+describe('puzzleClearedPercent', () => {
+  it('is the share of safe cells opened, as a whole percent', () => {
+    expect(puzzleClearedPercent(fromMap(['..*..', '..*..', '..*..']))).toBe(0);
+    // 15 cells, 3 mines: 12 safe, and opening the left side opens 6 of them.
+    const half = playPuzzleCell(fromMap(['..*..', '..*..', '..*..']), 1, 0, createRng(1));
+    expect(puzzleClearedPercent(half)).toBe(50);
+  });
+
+  it('is 100 for a win, and never more than 99 for a loss', () => {
+    const won = playPuzzleCell(fromMap(['*..', '...', '...']), 2, 2, createRng(1));
+    expect(puzzleClearedPercent(won)).toBe(100);
+    // Every safe cell open and a mine set off in the same chord: still a loss.
+    const base = fromMap(['*..', '...', '...']);
+    const lost: PuzzleGame = { ...base, status: 'lost', exploded: [0], open: base.mines.map((mine) => !mine) };
+    expect(puzzleClearedPercent(lost)).toBe(99);
+  });
+});
+
+describe('dailyKey', () => {
+  it('is the Bangkok date: UTC plus seven hours', () => {
+    expect(dailyKey(Date.UTC(2026, 9, 4, 12, 0, 0))).toBe('2026-10-04');
+    // 02:00 in Bangkok on the 5th is still the 4th in UTC.
+    expect(dailyKey(Date.UTC(2026, 9, 4, 19, 0, 0))).toBe('2026-10-05');
+  });
+
+  it('turns over at 17:00:00 UTC, not a moment before', () => {
+    expect(dailyKey(Date.UTC(2026, 9, 4, 16, 59, 59, 999))).toBe('2026-10-04');
+    expect(dailyKey(Date.UTC(2026, 9, 4, 17, 0, 0, 0))).toBe('2026-10-05');
+  });
+
+  it('rolls over month and year ends', () => {
+    expect(dailyKey(Date.UTC(2026, 11, 31, 17, 0, 0))).toBe('2027-01-01');
+    expect(dailyKey(Date.UTC(2028, 1, 28, 17, 0, 0))).toBe('2028-02-29');
+    expect(dailyKey(Date.UTC(2026, 9, 30, 17, 0, 0))).toBe('2026-10-31');
+  });
+
+  it('reads a time that is not a number as the epoch, rather than throwing', () => {
+    expect(dailyKey(0)).toBe('1970-01-01');
+    expect(dailyKey(-1)).toBe('1970-01-01');
+    expect(dailyKey(Number.NaN)).toBe('1970-01-01');
+    expect(dailyKey(Number.POSITIVE_INFINITY)).toBe('1970-01-01');
+  });
+});
+
+describe('isDailyKey', () => {
+  it('accepts real dates written YYYY-MM-DD and nothing else', () => {
+    expect(isDailyKey('2026-10-04')).toBe(true);
+    expect(isDailyKey('2028-02-29')).toBe(true);
+    expect(isDailyKey('2027-02-29')).toBe(false);
+    expect(isDailyKey('2026-02-30')).toBe(false);
+    expect(isDailyKey('2026-13-01')).toBe(false);
+    expect(isDailyKey('2026-10-4')).toBe(false);
+    expect(isDailyKey('0050-10-04')).toBe(false);
+    expect(isDailyKey('')).toBe(false);
+    expect(isDailyKey(20261004)).toBe(false);
+    expect(isDailyKey(null)).toBe(false);
+  });
+});
+
+describe('shiftDailyKey', () => {
+  it('moves a date by whole days, across month, year and leap days', () => {
+    expect(shiftDailyKey('2026-10-04', 1)).toBe('2026-10-05');
+    expect(shiftDailyKey('2026-10-04', -1)).toBe('2026-10-03');
+    expect(shiftDailyKey('2026-01-01', -1)).toBe('2025-12-31');
+    expect(shiftDailyKey('2026-12-31', 1)).toBe('2027-01-01');
+    expect(shiftDailyKey('2028-02-28', 1)).toBe('2028-02-29');
+    expect(shiftDailyKey('2027-02-28', 1)).toBe('2027-03-01');
+    expect(shiftDailyKey('2026-10-04', 0)).toBe('2026-10-04');
+    // 365 days back is 2025-10-04, and 35 more reaches the end of August.
+    expect(shiftDailyKey('2026-10-04', -400)).toBe('2025-08-30');
+  });
+
+  it('gives null for a key that is not a date or a step that is not a whole number', () => {
+    expect(shiftDailyKey('nope', 1)).toBeNull();
+    expect(shiftDailyKey('2026-10-04', 0.5)).toBeNull();
+    expect(shiftDailyKey('2026-10-04', Number.NaN)).toBeNull();
+    expect(shiftDailyKey('2026-10-04', 1e12)).toBeNull();
+  });
+});
+
+describe('dailyNumber', () => {
+  it('is 1 on the first day and one more each day after', () => {
+    expect(DAILY_FIRST_KEY).toBe('2026-10-04');
+    expect(dailyNumber('2026-10-04')).toBe(1);
+    expect(dailyNumber('2026-10-05')).toBe(2);
+    expect(dailyNumber('2026-11-01')).toBe(29);
+    expect(dailyNumber('2027-10-04')).toBe(366);
+  });
+
+  it('is 0 — no number — for an invalid key or a day before the first Daily', () => {
+    expect(dailyNumber('')).toBe(0);
+    expect(dailyNumber('not a date')).toBe(0);
+    expect(dailyNumber('2026-02-30')).toBe(0);
+    expect(dailyNumber('2026-10-03')).toBe(0);
+    expect(dailyNumber('2020-01-01')).toBe(0);
+  });
+
+  it('counts the same days as dailyKey, whatever the time of day', () => {
+    const noon = Date.UTC(2026, 9, 4, 5, 0, 0);
+    for (let day = 0; day < 40; day++) {
+      expect(dailyNumber(dailyKey(noon + day * 86_400_000))).toBe(day + 1);
+    }
+  });
+});
+
+describe('msUntilNextDaily', () => {
+  it('counts down to the next Bangkok midnight, 17:00 UTC', () => {
+    expect(msUntilNextDaily(Date.UTC(2026, 9, 4, 16, 59, 59, 999))).toBe(1);
+    expect(msUntilNextDaily(Date.UTC(2026, 9, 4, 12, 0, 0))).toBe(5 * 3_600_000);
+  });
+
+  it('is a whole day at the moment the day turns over, never zero', () => {
+    expect(msUntilNextDaily(Date.UTC(2026, 9, 4, 17, 0, 0, 0))).toBe(86_400_000);
+    expect(msUntilNextDaily(Number.NaN)).toBeGreaterThan(0);
+  });
+});
+
+describe('dailyPuzzle', () => {
+  /** The day keys of the next `days` days from the first Daily. */
+  const keys = (days: number) => Array.from({ length: days }, (_, i) => shiftDailyKey('2026-10-04', i)!);
+  const minesOf = (game: PuzzleGame) => game.mines.flatMap((mine, index) => (mine ? [index] : []));
+  const neighboursOf = (index: number) => {
+    const out: number[] = [];
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        const r = Math.floor(index / 16) + dr;
+        const c = (index % 16) + dc;
+        if ((dr !== 0 || dc !== 0) && r >= 0 && r < 16 && c >= 0 && c < 16) out.push(r * 16 + c);
+      }
+    }
+    return out;
+  };
+
+  it('is a 16 × 16 board with 40 mines, already under way', () => {
+    expect(DAILY_PRESET).toEqual({ rows: 16, cols: 16, mines: 40 });
+    const game = dailyPuzzle('2026-10-04');
+    expect(game.rows).toBe(16);
+    expect(game.cols).toBe(16);
+    expect(game.mineCount).toBe(40);
+    expect(game.status).toBe('playing');
+    expect(game.hintsUsed).toBe(0);
+    expect(game.exploded).toEqual([]);
+    expect(count(game.flagged)).toBe(0);
+  });
+
+  it('is the same board every time for the same day', () => {
+    expect(dailyPuzzle('2026-10-04')).toEqual(dailyPuzzle('2026-10-04'));
+    expect(dailyPuzzle('2027-03-15')).toEqual(dailyPuzzle('2027-03-15'));
+  });
+
+  it('is a different board on a different day', () => {
+    const boards = keys(120).map((key) => minesOf(dailyPuzzle(key)).join(','));
+    expect(new Set(boards).size).toBe(boards.length);
+    // And the opening is not stuck in one place either.
+    expect(new Set(keys(120).map(dailyOpening)).size).toBeGreaterThan(40);
+  });
+
+  it('has exactly 40 mines, none beside the opening, and a number on every cell that fits', () => {
+    for (const key of keys(120)) {
+      const game = dailyPuzzle(key);
+      expect(count(game.mines)).toBe(40);
+      const opening = dailyOpening(key);
+      for (const index of [opening, ...neighboursOf(opening)]) expect(game.mines[index]).toBe(false);
+      game.mines.forEach((_, index) => {
+        expect(game.adjacent[index]).toBe(neighboursOf(index).filter((n) => game.mines[n]).length);
+      });
+    }
+  });
+
+  it('opens on a 0 inside the board’s inner ring, with its whole region open', () => {
+    for (const key of keys(120)) {
+      const game = dailyPuzzle(key);
+      const opening = dailyOpening(key);
+      const row = Math.floor(opening / 16);
+      const col = opening % 16;
+      expect(row).toBeGreaterThanOrEqual(1);
+      expect(row).toBeLessThanOrEqual(14);
+      expect(col).toBeGreaterThanOrEqual(1);
+      expect(col).toBeLessThanOrEqual(14);
+      expect(game.adjacent[opening]).toBe(0);
+      expect(game.open[opening]).toBe(true);
+      // Flood fill is finished: every open 0 has all its neighbours open, and no mine is open.
+      game.open.forEach((isOpen, index) => {
+        if (!isOpen) return;
+        expect(game.mines[index]).toBe(false);
+        if (game.adjacent[index] === 0) for (const n of neighboursOf(index)) expect(game.open[n]).toBe(true);
+      });
+      // At least the 3 × 3 around the opening.
+      expect(count(game.open)).toBeGreaterThanOrEqual(9);
+    }
+  });
+
+  it('is never already won or lost', () => {
+    for (const key of keys(120)) {
+      const game = dailyPuzzle(key);
+      expect(game.status).toBe('playing');
+      expect(count(game.open)).toBeLessThan(256 - 40);
+    }
+  });
+
+  it('plays on like any game: the next click opens more, a mine ends it', () => {
+    const game = dailyPuzzle('2026-10-04');
+    const covered = game.open.findIndex((isOpen, index) => !isOpen && !game.mines[index]);
+    const next = playPuzzleCell(game, Math.floor(covered / 16), covered % 16, createRng(1));
+    expect(count(next.open)).toBeGreaterThan(count(game.open));
+    const mine = game.mines.indexOf(true);
+    expect(playPuzzleCell(game, Math.floor(mine / 16), mine % 16, createRng(1)).status).toBe('lost');
+  });
+
+  // The seed and the order of random draws are the board. If this fails, the
+  // algorithm changed — and every day's board with it. Do not "fix" the numbers;
+  // undo the change (see the comment on dailyPuzzle).
+  it('lays one known day exactly as it did when it shipped', () => {
+    expect(dailySeed('2026-10-04')).toBe(3963088592);
+    expect(dailyOpening('2026-10-04')).toBe(215);
+    const game = dailyPuzzle('2026-10-04');
+    expect(minesOf(game)).toEqual([
+      7, 14, 15, 26, 33, 37, 38, 44, 49, 53, 59, 60, 62, 71, 73, 83, 85, 88, 96, 129, 141, 152, 154, 155, 166, 169,
+      175, 176, 180, 185, 204, 209, 211, 217, 223, 225, 239, 246, 248, 250,
+    ]);
+    expect(count(game.open)).toBe(19);
+    expect(minesOf(dailyPuzzle('2026-10-05')).slice(0, 8)).toEqual([7, 15, 40, 42, 43, 48, 57, 58]);
   });
 });

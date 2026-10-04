@@ -1,4 +1,4 @@
-import { randomInt, type Rng } from './rng.js';
+import { createRng, randomInt, type Rng } from './rng.js';
 import { mineProbabilities, type SolverCell, type SolverView } from './solver.js';
 
 /**
@@ -245,6 +245,168 @@ export function puzzleColumnName(col: number): string {
     name = String.fromCharCode(65 + ((n - 1) % 26)) + name;
   }
   return name;
+}
+
+/**
+ * How much of the board the player has cleared, as a whole percent of the safe
+ * cells: 100 only for a win, never more than 99 otherwise — a loss that opened
+ * the last safe cell and a mine in one chord should not read as "100% cleared".
+ */
+export function puzzleClearedPercent(game: PuzzleGame): number {
+  if (game.status === 'won') return 100;
+  // newPuzzle keeps at least one cell free of mines, so this is never zero.
+  const safe = game.rows * game.cols - game.mineCount;
+  const opened = game.open.filter(Boolean).length;
+  return Math.min(99, Math.floor((opened / safe) * 100));
+}
+
+/* ── daily challenge ─────────────────────────────────────────────────────
+ * One board a day, the same for everyone, with the same safe opening already
+ * revealed so nobody starts ahead. Days are Bangkok days (UTC+7, which has no
+ * daylight saving), worked out by plain arithmetic so no browser needs
+ * time-zone data to agree on what day it is. Nothing here is stored or sent
+ * anywhere: the board is rebuilt from the date.
+ */
+
+/**
+ * The daily board's size: 16 × 16 with 40 mines — Medium's numbers, but kept
+ * as its own constant so a later change to Medium never changes a board that
+ * people have already played.
+ */
+export const DAILY_PRESET: PuzzlePreset = { rows: 16, cols: 16, mines: 40 };
+
+/** The day of the first Daily, #1. Earlier days have no number. */
+export const DAILY_FIRST_KEY = '2026-10-04';
+
+const DAY_MS = 86_400_000;
+const BANGKOK_OFFSET_MS = 7 * 3_600_000;
+
+/** Mixed into the seed so the daily's boards are their own family, not just "the date". */
+const DAILY_SEED_PREFIX = 'fmm-daily-v1:';
+
+const pad = (n: number, width: number) => String(n).padStart(width, '0');
+
+/** UTC midnight of a calendar date as a timestamp, or null when the key is not a real date. */
+function dayStart(key: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!match) return null;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const time = Date.UTC(year, month - 1, day);
+  // A date that rolled over (February 30th) or a two-digit year Date.UTC
+  // bumped to 19xx is not the date that was written.
+  const date = new Date(time);
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return time;
+}
+
+function keyOfDayStart(time: number): string | null {
+  const date = new Date(time);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${pad(date.getUTCFullYear(), 4)}-${pad(date.getUTCMonth() + 1, 2)}-${pad(date.getUTCDate(), 2)}`;
+}
+
+/** Is this a real calendar date written 'YYYY-MM-DD'? */
+export function isDailyKey(value: unknown): value is string {
+  return typeof value === 'string' && dayStart(value) !== null;
+}
+
+/**
+ * The Bangkok calendar date of a moment, 'YYYY-MM-DD': the time plus seven
+ * hours, read as UTC. 16:59:59.999 UTC is still today in Bangkok; 17:00:00 UTC
+ * is the next day. A time that is not a number reads as the epoch.
+ */
+export function dailyKey(now: number): string {
+  const time = Number.isFinite(now) ? now : 0;
+  const key = keyOfDayStart(Math.floor((time + BANGKOK_OFFSET_MS) / DAY_MS) * DAY_MS);
+  // Past the dates a Date can hold. Not reachable by a clock, but never undefined.
+  return key ?? '1970-01-01';
+}
+
+/**
+ * The key a number of days before (negative) or after a key; null when the key
+ * is not a real date or the result is out of range. Streaks walk back with this.
+ */
+export function shiftDailyKey(key: string, days: number): string | null {
+  const start = dayStart(key);
+  if (start === null || !Number.isInteger(days)) return null;
+  return keyOfDayStart(start + days * DAY_MS);
+}
+
+/**
+ * The day's number: 1 for 2026-10-04, one more each day. 0 means "no number" —
+ * an invalid key, or a day before the first Daily (a device clock set wrong).
+ */
+export function dailyNumber(key: string): number {
+  const start = dayStart(key);
+  const first = dayStart(DAILY_FIRST_KEY);
+  if (start === null || first === null) return 0;
+  return Math.max(0, Math.round((start - first) / DAY_MS) + 1);
+}
+
+/** Milliseconds from a moment to the next Bangkok midnight, when the next Daily appears: (0, 24 h]. */
+export function msUntilNextDaily(now: number): number {
+  const local = (Number.isFinite(now) ? now : 0) + BANGKOK_OFFSET_MS;
+  return (Math.floor(local / DAY_MS) + 1) * DAY_MS - local;
+}
+
+/** FNV-1a, 32 bits: a small, well-known string hash with the same answer everywhere. */
+function fnv1a32(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * The day's seed. NEVER change how this is worked out — not the prefix, not the
+ * hash — once a Daily has shipped: the seed is the board, so any change gives
+ * everyone a different board for every day, past ones included.
+ */
+export function dailySeed(key: string): number {
+  return fnv1a32(DAILY_SEED_PREFIX + key);
+}
+
+/**
+ * The opening cell: anywhere in the inner 14 × 14, never on the outer ring, so
+ * the safe opening is always the full 3 × 3 and can only grow from there. (Anywhere
+ * on the board would sometimes give a corner, which opens as few as four cells —
+ * a poor start for a day everyone shares.)
+ *
+ * The order of the random draws here — row, then column, then the mines — is part
+ * of the board. NEVER reorder or add a draw before them once shipped.
+ */
+function pickDailyOpening(rng: Rng): number {
+  const row = 1 + randomInt(rng, DAILY_PRESET.rows - 2);
+  const col = 1 + randomInt(rng, DAILY_PRESET.cols - 2);
+  return row * DAILY_PRESET.cols + col;
+}
+
+/** The cell the day's opening is centred on, as an index (row * 16 + col). */
+export function dailyOpening(key: string): number {
+  return pickDailyOpening(createRng(dailySeed(key)));
+}
+
+/**
+ * The day's board, the same on every device: a 16 × 16 board with 40 mines laid
+ * the way the first click lays them (the opening and its neighbours stay clear),
+ * and the opening already opened with the normal flood fill. It comes back
+ * 'playing' with no hints used; mines exist from the start, unlike a level.
+ *
+ * Any string makes a board — this does not check the key. Callers that care use
+ * `isDailyKey`.
+ *
+ * NEVER change the seed, the order of random draws below, or `layMines` /
+ * `openCells` in a way that changes where the mines land once a Daily has
+ * shipped, or everyone's board for the day changes. A test pins one day's mines
+ * so an accidental change fails loudly.
+ */
+export function dailyPuzzle(key: string): PuzzleGame {
+  const rng = createRng(dailySeed(key));
+  const opening = pickDailyOpening(rng);
+  const laid = layMines(newPuzzle(DAILY_PRESET), opening, rng);
+  return openCells(laid, [opening]);
 }
 
 function indexOf(game: PuzzleGame, row: number, col: number): number | null {
