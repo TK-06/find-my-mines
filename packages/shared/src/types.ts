@@ -147,6 +147,11 @@ export interface AiHintResult {
   col?: number;
   /** Why this cell, in a sentence. */
   text?: string;
+  /**
+   * The "Why?" behind it, in a sentence or two, worked out from the public
+   * board. The language model's rewording of it may follow as `ai:hintWhy`.
+   */
+  why?: string;
   hintsLeft?: number;
 }
 

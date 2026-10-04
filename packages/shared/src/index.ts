@@ -8,6 +8,7 @@ export * from './moderation.js';
 export * from './reports.js';
 export * from './presence.js';
 export * from './ai.js';
+export * from './hintWhy.js';
 export * from './chat.js';
 export * from './avatar.js';
 export * from './engine/rng.js';

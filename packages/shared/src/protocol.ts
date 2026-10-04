@@ -237,6 +237,16 @@ export interface ServerToClientEvents {
   /** A line in your room's chat, from a player or the computer opponent. */
   'room:message': (message: ChatMessage) => void;
 
+  /**
+   * The language model's friendlier wording of a hint's "Why?", sent only to
+   * the player who asked, a moment after the `ai:hint` answer (which already
+   * carries the plain explanation as `why`). Optional by design: it never
+   * comes without a Groq key, in time, or when the wording fails the server's
+   * checks — and the client only swaps it in while that hint (same cell) is
+   * still on screen.
+   */
+  'ai:hintWhy': (payload: { row: number; col: number; why: string }) => void;
+
   /** The world chat so far, sent once after you pick a name. Oldest first. */
   'lobby:history': (messages: LobbyMessage[]) => void;
   /** A new world-chat line or invite card. */

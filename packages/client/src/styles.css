@@ -1590,6 +1590,33 @@ a.player-link:hover { text-decoration-color: currentColor; }
   border-radius: 50%;
 }
 
+/* The Why? on a hint: a small toggle at the note's right edge, with the reason
+   opening underneath in the same blue-edged look. The button looks small but
+   its tap area is the usual 44px — the ::after reaches past its border into
+   the note's padding, so the note does not grow to fit it. */
+button.hint-why-toggle {
+  position: relative;
+  flex: none;
+  margin-left: auto;
+  padding: 3px 12px;
+  color: var(--hint);
+  border-color: var(--hint);
+}
+button.hint-why-toggle::after { content: ''; position: absolute; inset: -9px -4px; }
+button.hint-why-toggle[aria-expanded='true'] { background: color-mix(in srgb, var(--hint) 14%, transparent); }
+.hint-why {
+  margin: 6px 0 0;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--hint);
+  border-radius: var(--r);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+/* An author `display` would beat the hidden attribute; none is set, and this keeps it that way. */
+.hint-why[hidden] { display: none; }
+
 /* The hinted cell: tinted, edged and ringed in --hint — a shape as well as a
    colour. Hover still turns it signal orange like any covered cell on your
    turn, because that is what "click here" looks like. */
@@ -1785,6 +1812,7 @@ a.player-link:hover { text-decoration-color: currentColor; }
 .puzzle-card > * + * { margin-top: 12px; }
 .puzzle-card > .puzzle-hint-status:empty { margin-top: 0; }
 .puzzle-hint-status .hint-note { margin: 0; }
+.puzzle-hint-status .hint-why { margin-top: 6px; }
 
 /* Counter · New game · clock · Hint, like the classic top bar. */
 .puzzle-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; }

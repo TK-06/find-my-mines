@@ -226,3 +226,27 @@ export function isNewMatch(prev: PublicMatchState | null, next: PublicMatchState
 export function hintButtonLabel(hintsLeft: number): string {
   return hintsLeft > 0 ? `Hint (${hintsLeft} left)` : 'No hints left';
 }
+
+/** The hint on screen in a match: where, what it says, and its "Why?". */
+export interface ShownHint extends CellRef {
+  text: string;
+  /** The explanation behind it, when the server gave one. */
+  why: string | null;
+  /** Counts hints in this browser, so each new one starts with its "Why?" collapsed. */
+  id: number;
+}
+
+/**
+ * The language model's reworded "Why?" arrives a moment after the hint. It
+ * replaces the plain one only if it is for the hint on screen — the same cell —
+ * and is real text. Anything else leaves the hint exactly as it was (the very
+ * same object, so a state setter sees no change).
+ */
+export function applyHintWhy<T extends ShownHint>(
+  hint: T | null,
+  update: { row: unknown; col: unknown; why: unknown },
+): T | null {
+  if (!hint || hint.row !== update.row || hint.col !== update.col) return hint;
+  if (typeof update.why !== 'string' || update.why.trim() === '') return hint;
+  return { ...hint, why: update.why };
+}

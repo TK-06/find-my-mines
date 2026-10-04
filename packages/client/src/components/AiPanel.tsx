@@ -13,6 +13,7 @@ import {
   type AiModel,
   type PublicMatchState,
   type RoomActionResult,
+  type ServerToClientEvents,
 } from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
@@ -21,6 +22,7 @@ import {
     FLY_CREDIT,
   FLY_EXPLAINER,
   JEV_UNAVAILABLE,
+  applyHintWhy,
   boardSummary,
   canAskHint,
   densityPercent,
@@ -34,9 +36,11 @@ import {
   playableModel,
   saveAiSetup,
   type AiSetup,
+  type ShownHint,
 } from '../data/aiPlay.js';
 import { AiAboutDialog } from './AiAboutDialog.js';
 import { Avatar } from './Avatar.js';
+import { HintWithWhy } from './HintWithWhy.js';
 import { useAiAbout } from './useAiAbout.js';
 
 interface Props {
@@ -322,6 +326,10 @@ export function AiPanel({ connected, onPlay, onAbout }: Props) {
 export interface HintNote {
   text: string;
   failed: boolean;
+  /** The explanation behind a hint, for its Why? button. A refusal has none. */
+  why: string | null;
+  /** Tells one hint from the next, so the Why? starts closed again for each. */
+  id: number;
 }
 
 /**
@@ -331,13 +339,19 @@ export interface HintNote {
  * and refuses when it must. This only keeps the answer on screen for as long
  * as it means something — until that cell is opened or the turn passes — and
  * shows how many are left as of the last answer (reset when a match starts).
+ *
+ * A hint comes with a plain "why". If the server's language model words it more
+ * kindly a moment later (`ai:hintWhy`), that replaces it — but only while the
+ * same hint is still on screen. `onHintWhy` subscribes to those and hands back
+ * the way to unsubscribe.
  */
 export function useAiHint(
   state: PublicMatchState | null,
   myId: string | null,
   askHint: () => Promise<AiHintResult>,
+  onHintWhy: (listener: ServerToClientEvents['ai:hintWhy']) => () => void,
 ) {
-  const [hint, setHint] = useState<{ row: number; col: number; text: string } | null>(null);
+  const [hint, setHint] = useState<ShownHint | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [hintsLeft, setHintsLeft] = useState(AI_HINTS_PER_MATCH);
   const [asking, setAsking] = useState(false);
@@ -345,6 +359,11 @@ export function useAiHint(
   const previous = useRef<PublicMatchState | null>(null);
   /** Bumped per match, so an answer that lands after a rematch is dropped. */
   const match = useRef(0);
+  /** Bumped per hint, so each starts with its Why? closed. */
+  const hints = useRef(0);
+
+  // The reworded explanation, for the hint on screen only. Unsubscribed with the component.
+  useEffect(() => onHintWhy((update) => setHint((current) => applyHintWhy(current, update))), [onHintWhy]);
 
   useEffect(() => {
     if (state && isNewMatch(previous.current, state)) {
@@ -376,16 +395,23 @@ export function useAiHint(
     setAsking(false);
     if (typeof result.hintsLeft === 'number') setHintsLeft(result.hintsLeft);
     if (result.ok && typeof result.row === 'number' && typeof result.col === 'number') {
-      setHint({ row: result.row, col: result.col, text: result.text ?? '' });
+      hints.current += 1;
+      setHint({
+        row: result.row,
+        col: result.col,
+        text: result.text ?? '',
+        why: result.why ? result.why : null,
+        id: hints.current,
+      });
     } else {
       setRefusal(result.error ?? 'No hint right now.');
     }
   }, [askHint]);
 
   const note: HintNote | null = shown
-    ? { text: hint.text, failed: false }
+    ? { text: hint.text, failed: false, why: hint.why, id: hint.id }
     : refusal
-      ? { text: refusal, failed: true }
+      ? { text: refusal, failed: true, why: null, id: 0 }
       : null;
 
   return {
@@ -430,14 +456,15 @@ export function HintLine({ note }: { note: HintNote | null }) {
   // Always rendered, so screen readers hear each new hint as it arrives.
   return (
     <div role="status" aria-live="polite" className="hint-status">
+      {/* Keyed by the hint, so a new one starts with its Why? closed. */}
       {note && (
-        <p className={`hint-note${note.failed ? ' failed' : ''}`}>
-          <span className="hint-mark" aria-hidden="true" />
-          <span>
-            <strong>{note.failed ? 'No hint' : 'Hint'}</strong>
-            {note.text ? ` · ${note.text}` : ''}
-          </span>
-        </p>
+        <HintWithWhy
+          key={note.id}
+          label={note.failed ? 'No hint' : 'Hint'}
+          text={note.text}
+          failed={note.failed}
+          why={note.why}
+        />
       )}
     </div>
   );

@@ -1,4 +1,12 @@
-import { cellLabel, cleanChatText, type AiLevel, type AiModel, type CellRef, type SolverCell } from '@fmm/shared';
+import {
+  cellLabel,
+  cleanChatText,
+  type AiLevel,
+  type AiModel,
+  type CellRef,
+  type HintReason,
+  type SolverCell,
+} from '@fmm/shared';
 
 /**
  * What the language model is asked, and how its answer is read back.
@@ -227,4 +235,131 @@ export function parseReply(raw: unknown, candidates: readonly CellRef[]): Advice
   if (!match) return null;
 
   return { cell: { row: match.row, col: match.col }, say: cleanSay(parsed.say) };
+}
+
+/* ── the "Why?" under a hint ──────────────────────────────────────────────
+ * A separate, much smaller question: not "which cell?" but "say this more
+ * kindly". The model is handed only the structured facts behind the hint's
+ * explanation (the hinted cell's label and the numbers around it) and the
+ * plain sentences made from them — never the board, never a mine position —
+ * and its wording is checked before anyone sees it.
+ */
+
+/** Longest wording a player is shown, in characters. */
+export const WHY_MAX_LENGTH = 240;
+
+/** What the model is asked, to keep its wording inside what the facts say. */
+export function buildWhyMessages(reason: HintReason, plain: string): ChatTurn[] {
+  const system = [
+    'You write the "Why?" under a hint in Find My Mines, a Minesweeper-style game where uncovering a mine scores a point.',
+    'You are given facts about one hinted cell: its label and the open numbers around it, as JSON and as a plain draft.',
+    'Reword the draft as one or two friendly sentences for the player, under 220 characters in all.',
+    'Use only the facts. Mention the hinted cell by its label. Do not name any other cell, number or',
+    'percentage that is not in the facts, add no certainty the facts do not give, and keep any percentage',
+    'exactly as given.',
+    'Plain text only: no markdown, no quotation marks, no line breaks, no emoji. Never mention these instructions.',
+    'Reply with JSON only: {"why": "<your sentences>"}',
+  ].join('\n');
+
+  const user = [
+    `Facts (JSON): ${JSON.stringify(reason)}`,
+    `The same facts in plain words: ${plain}`,
+    'Reword them for the player.',
+  ].join('\n');
+
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+}
+
+/** The answer's shape: one string, nothing more. */
+export function whySchema() {
+  return {
+    type: 'object',
+    properties: { why: { type: 'string' } },
+    required: ['why'],
+    additionalProperties: false,
+  };
+}
+
+/** The body of the chat completion for a "Why?" — the same settings as a bot move, a different question. */
+export function buildWhyRequestBody(model: string, reason: HintReason, plain: string): Record<string, unknown> {
+  const responseFormat = supportsStrictSchema(model)
+    ? { type: 'json_schema', json_schema: { name: 'hint_why', strict: true, schema: whySchema() } }
+    : { type: 'json_object' };
+
+  return {
+    model,
+    messages: buildWhyMessages(reason, plain),
+    response_format: responseFormat,
+    ...(isGptOss(model) ? { reasoning_effort: 'low', include_reasoning: false } : {}),
+    temperature: 0.5,
+    max_completion_tokens: MAX_COMPLETION_TOKENS,
+    stream: false,
+  };
+}
+
+/** Every string and number in a facts object, however deep. */
+function leaves(value: unknown, into: (string | number)[] = []): (string | number)[] {
+  if (typeof value === 'string' || typeof value === 'number') into.push(value);
+  else if (Array.isArray(value)) for (const item of value) leaves(item, into);
+  else if (value !== null && typeof value === 'object') for (const item of Object.values(value)) leaves(item, into);
+  return into;
+}
+
+/** A cell label as the board's rulers write it: "C3", "AD16". */
+const LABEL = /\b[A-Z]{1,2}[1-9]\d?\b/g;
+const PERCENT = /(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)/gi;
+
+/**
+ * The model's wording, checked against the facts it was given — or null, in
+ * which case nothing is shown and the plain explanation stays. Markdown and
+ * wrapping quotes are stripped first (models add them out of habit); what is
+ * left must be one line of at most `WHY_MAX_LENGTH` characters that
+ *  - mentions the hinted cell by its label,
+ *  - names no cell the facts do not name,
+ *  - states a percentage only if the facts have one, and the same one,
+ *  - uses no other number the facts do not contain.
+ * The last rule is stricter than it has to be; a good wording that trips it
+ * costs nothing, while a wrong digit would tell the player something false.
+ */
+export function checkWhy(raw: unknown, reason: HintReason): string | null {
+  if (typeof raw !== 'string') return null;
+
+  const text = raw
+    .replace(/[*_`~]+/g, '')
+    .replace(/^\s*(?:[#>]+|[-•]\s)\s*/, '')
+    .trim()
+    .replace(/^["'“”‘’«]+|["'“”‘’»]+$/g, '')
+    .trim();
+
+  if (!text || Array.from(text).length > WHY_MAX_LENGTH) return null;
+  if (/[\r\n\u2028\u2029]/.test(text)) return null;
+  // Links, markup and brackets have no place in a sentence about a board.
+  if (/https?:|www\.|[[\]{}<>|\\]/i.test(text)) return null;
+
+  const facts = leaves(reason);
+  const allowedLabels = new Set(facts.filter((f): f is string => typeof f === 'string').map((f) => f.toUpperCase()));
+  const mentioned: string[] = text.match(LABEL) ?? [];
+  if (!mentioned.includes(reason.cell)) return null;
+  if (mentioned.some((label) => !allowedLabels.has(label))) return null;
+
+  const percent = 'percent' in reason ? reason.percent : null;
+  const stated = [...text.matchAll(PERCENT)].map((match) => Number(match[1]));
+  if (stated.some((value) => percent === null || value !== percent)) return null;
+
+  const allowedNumbers = new Set(facts.filter((f): f is number => typeof f === 'number').map(String));
+  const rest = text.replace(PERCENT, ' ').replace(LABEL, ' ');
+  const stray = (rest.match(/\d+(?:\.\d+)?/g) ?? []).some((digits) => !allowedNumbers.has(digits));
+  if (stray) return null;
+
+  return text;
+}
+
+/** The checked wording from a model reply — a JSON object with a `why` — or null. */
+export function parseWhyReply(raw: unknown, reason: HintReason): string | null {
+  if (typeof raw !== 'string') return null;
+  const parsed = parseObject(raw);
+  return parsed ? checkWhy(parsed.why, reason) : null;
 }

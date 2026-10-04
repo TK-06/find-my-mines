@@ -4,11 +4,16 @@ import {
   countsForBest,
   createRng,
   dailyPuzzle,
+  describeHintReason,
+  explainHint,
   flagPuzzleCell,
   isPuzzleLevel,
+  mineProbabilities,
   newPuzzle,
   playPuzzleCell,
+  puzzleView,
   takePuzzleHint,
+  type HintExplanation,
   type PuzzleGame,
   type PuzzleHint,
   type PuzzleLevel,
@@ -49,6 +54,12 @@ export interface PuzzleSession {
   endedAt: number | null;
   /** The hint on the board, until the board changes under it. */
   hint: PuzzleHint | null;
+  /**
+   * Why that hint: the facts and the sentences made from them, worked out when
+   * the hint was taken. Goes and changes together with `hint`. The model never
+   * helps here — Puzzle sends nothing anywhere.
+   */
+  why: HintExplanation | null;
   best: BestTimes;
   /** This game set the level's best time. Never true for the Daily, which has its own. */
   newBest: boolean;
@@ -85,6 +96,7 @@ export function startSession(level: PuzzleLevel, best: BestTimes, daily: DailyRe
     startedAt: null,
     endedAt: null,
     hint: null,
+    why: null,
     best,
     newBest: false,
     day: null,
@@ -114,6 +126,7 @@ export function startDailySession(
     startedAt: resumed?.startedAt ?? null,
     endedAt: null,
     hint: null,
+    why: null,
     best,
     newBest: false,
     day: key,
@@ -203,7 +216,7 @@ export function puzzleReducer(session: PuzzleSession, action: PuzzleAction): Puz
 
       // Any opened cell changes the numbers, so the old hint may no longer be
       // the safest cell — or safe at all. It goes rather than mislead.
-      return { ...session, game, startedAt, endedAt, hint: null, best, newBest, daily, recorded };
+      return { ...session, game, startedAt, endedAt, hint: null, why: null, best, newBest, daily, recorded };
     }
 
     case 'flag': {
@@ -216,7 +229,9 @@ export function puzzleReducer(session: PuzzleSession, action: PuzzleAction): Puz
       const hint = session.hint;
       if (hint === null || hint.row !== action.row || hint.col !== action.col) return { ...session, game };
       const unflagged = hint.flagged && !game.flagged[action.row * game.cols + action.col];
-      return { ...session, game, hint: unflagged ? { ...hint, flagged: false } : null };
+      if (!unflagged) return { ...session, game, hint: null, why: null };
+      // The hint is now a plain cell to open, so its reason stops talking about the flag.
+      return { ...session, game, hint: { ...hint, flagged: false }, why: withoutFlag(session.why) };
     }
 
     case 'hint': {
@@ -224,9 +239,27 @@ export function puzzleReducer(session: PuzzleSession, action: PuzzleAction): Puz
       if (session.hint) return session;
       const taken = takePuzzleHint(session.game);
       if (!taken) return session;
-      return { ...session, game: taken.game, hint: taken.hint };
+      return { ...session, game: taken.game, hint: taken.hint, why: explainPuzzleHint(taken.game, taken.hint) };
     }
   }
+}
+
+/**
+ * Why the safest cell is the safest, from the visible board alone — the same
+ * numbers and the same solver the hint came from. Flags are not facts to the
+ * solver, so `puzzleView` leaves them out; the hint's own `flagged` is what
+ * makes the explanation end on the flag.
+ */
+export function explainPuzzleHint(game: PuzzleGame, hint: PuzzleHint): HintExplanation {
+  const view = puzzleView(game);
+  return explainHint(view, mineProbabilities(view), hint, 'safe', { flagged: hint.flagged });
+}
+
+/** The same explanation after the flag it spoke of is taken off: the facts stay, the flag line goes. */
+function withoutFlag(why: HintExplanation | null): HintExplanation | null {
+  if (!why) return null;
+  const reason = { ...why.reason, flagged: false };
+  return { reason, text: describeHintReason(reason) };
 }
 
 /** Time on the clock: zero before the first click, frozen once the game ends. */

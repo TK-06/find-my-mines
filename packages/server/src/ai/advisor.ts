@@ -1,4 +1,13 @@
-import { buildRequestBody, parseReply, replyContent, type Advice, type PromptInput } from './prompt.js';
+import type { HintReason } from '@fmm/shared';
+import {
+  buildRequestBody,
+  buildWhyRequestBody,
+  parseReply,
+  parseWhyReply,
+  replyContent,
+  type Advice,
+  type PromptInput,
+} from './prompt.js';
 
 /**
  * The computer opponent's optional second opinion: a language model on Groq
@@ -21,6 +30,13 @@ export const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
  */
 export const AI_CALLS_PER_MINUTE = 20;
 export const AI_TOKENS_PER_MINUTE = 6_000;
+
+/**
+ * A hint's "Why?" is a nicety, the bot's move is the game: a rewording may only
+ * spend the first half of the minute's allowance, so a busy server's hints
+ * never leave the bot without a call.
+ */
+export const HINT_WHY_RESERVE = 0.5;
 
 /** How long to stop calling after a 429 that did not say. */
 export const DEFAULT_RETRY_AFTER_MS = 30_000;
@@ -53,7 +69,7 @@ export class RateBudget {
       wait = Math.max(wait, this.calls[this.calls.length - this.callsPerMinute]! + MINUTE_MS - now);
     }
 
-    let spent = this.tokens.reduce((sum, entry) => sum + entry.count, 0);
+    let spent = this.tokensSpent();
     for (const entry of this.tokens) {
       if (spent < this.tokensPerMinute) break;
       // Once this entry ages out, what is left is under the limit (or the loop carries on).
@@ -63,11 +79,24 @@ export class RateBudget {
     return wait;
   }
 
-  /** Spends a call when the budget allows. False, and nothing spent, otherwise. */
-  take(now: number): boolean {
+  /**
+   * Spends a call when the budget allows. False, and nothing spent, otherwise.
+   * `reserve` (0–1) is the share of the minute's calls and tokens kept back for
+   * someone more important: a caller that passes 0.5 gets nothing once half is spent.
+   */
+  take(now: number, reserve = 0): boolean {
     if (this.waitMs(now) > 0) return false;
+    if (reserve > 0) {
+      const share = 1 - Math.min(1, reserve);
+      if (this.calls.length >= this.callsPerMinute * share) return false;
+      if (this.tokensSpent() >= this.tokensPerMinute * share) return false;
+    }
     this.calls.push(now);
     return true;
+  }
+
+  private tokensSpent(): number {
+    return this.tokens.reduce((sum, entry) => sum + entry.count, 0);
   }
 
   /** What a finished call cost — only known once the reply is in. */
@@ -101,13 +130,18 @@ export function retryAfterMs(header: string | null, now: number): number {
   return DEFAULT_RETRY_AFTER_MS;
 }
 
-/** What one call to the model came to. The eval script reports these as they are. */
-export type AskOutcome =
-  | { kind: 'ok'; advice: Advice; tokens: number; ms: number }
+/** What one call to Groq came to, whatever it asked: the usable answer, or why there is none. */
+type Settled<T> =
+  | { kind: 'ok'; value: T; tokens: number; ms: number }
   | { kind: 'invalid'; tokens: number; ms: number }
   | { kind: 'http'; status: number; retryAfter: string | null; ms: number }
   | { kind: 'timeout'; ms: number }
   | { kind: 'network'; ms: number };
+
+/** What one call to the model came to. The eval script reports these as they are. */
+export type AskOutcome =
+  | { kind: 'ok'; advice: Advice; tokens: number; ms: number }
+  | Exclude<Settled<never>, { kind: 'ok' }>;
 
 export interface AskOptions {
   apiKey: string;
@@ -122,24 +156,34 @@ function totalTokens(body: unknown): number {
   return typeof count === 'number' && Number.isFinite(count) ? count : 0;
 }
 
+interface CallOptions<T> {
+  apiKey: string;
+  /** The chat completion request, already built. */
+  body: Record<string, unknown>;
+  timeoutMs: number;
+  fetch?: typeof globalThis.fetch;
+  /** Turns the reply's text into the answer, or null when it will not do. */
+  read(content: string | null): T | null;
+}
+
 /**
  * One chat completion, raced against a timer. Never throws, and never takes
  * longer than `timeoutMs` — even if the request ignores its abort signal.
  */
-export async function askModel(options: AskOptions): Promise<AskOutcome> {
-  const { apiKey, model, input, timeoutMs } = options;
+async function callGroq<T>(options: CallOptions<T>): Promise<Settled<T>> {
+  const { apiKey, body: request, timeoutMs, read } = options;
   const doFetch = options.fetch ?? globalThis.fetch;
   const started = Date.now();
   const elapsed = () => Date.now() - started;
   const controller = new AbortController();
 
-  const work = async (): Promise<AskOutcome> => {
+  const work = async (): Promise<Settled<T>> => {
     let response: Response;
     try {
       response = await doFetch(GROQ_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildRequestBody(model, input)),
+        body: JSON.stringify(request),
         signal: controller.signal,
       });
     } catch {
@@ -167,14 +211,14 @@ export async function askModel(options: AskOptions): Promise<AskOutcome> {
     }
 
     const tokens = totalTokens(body);
-    const advice = parseReply(replyContent(body), input.candidates.map((c) => c.cell));
-    return advice
-      ? { kind: 'ok', advice, tokens, ms: elapsed() }
+    const value = read(replyContent(body));
+    return value !== null
+      ? { kind: 'ok', value, tokens, ms: elapsed() }
       : { kind: 'invalid', tokens, ms: elapsed() };
   };
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<AskOutcome>((resolve) => {
+  const timedOut = new Promise<Settled<T>>((resolve) => {
     timer = setTimeout(() => {
       controller.abort();
       resolve({ kind: 'timeout', ms: elapsed() });
@@ -188,6 +232,22 @@ export async function askModel(options: AskOptions): Promise<AskOutcome> {
   }
 }
 
+/** One bot-move question to the model; see `callGroq`. Never throws. */
+export async function askModel(options: AskOptions): Promise<AskOutcome> {
+  const { apiKey, model, input, timeoutMs } = options;
+  const candidates = input.candidates.map((c) => c.cell);
+  const outcome = await callGroq({
+    apiKey,
+    body: buildRequestBody(model, input),
+    timeoutMs,
+    fetch: options.fetch,
+    read: (content) => parseReply(content, candidates),
+  });
+  return outcome.kind === 'ok'
+    ? { kind: 'ok', advice: outcome.value, tokens: outcome.tokens, ms: outcome.ms }
+    : outcome;
+}
+
 export interface AdvisorOptions {
   apiKey: string;
   model: string;
@@ -197,6 +257,12 @@ export interface AdvisorOptions {
   /** Where brief failure lines go. Never given the key, a prompt or a reply body. */
   warn?: (line: string) => void;
 }
+
+/** What a failed call costs the bot, for the log line. */
+const BOT_FALLBACK = "the bot plays the solver's pick";
+
+/** What a failed call costs a hint, for the log line. */
+const HINT_FALLBACK = 'the hint keeps its plain explanation';
 
 /** The game's advisor: budgeted, backing off on 429, quiet about its failures. */
 export class Advisor {
@@ -222,46 +288,72 @@ export class Advisor {
     if (input.candidates.length === 0 || timeoutMs <= 0) return null;
     if (!this.budget.take(this.now())) return null;
 
-    const outcome = await askModel({
+    const candidates = input.candidates.map((c) => c.cell);
+    const outcome = await callGroq({
       apiKey: this.options.apiKey,
-      model: this.model,
-      input,
+      body: buildRequestBody(this.model, input),
       timeoutMs,
       fetch: this.options.fetch,
+      read: (content) => parseReply(content, candidates),
     });
-    const now = this.now();
+    return this.settle(outcome, timeoutMs, BOT_FALLBACK);
+  }
 
+  /**
+   * A friendlier wording of a hint's explanation, or null — straight away when
+   * the budget (or the half of it a hint may use) is spent or Groq asked us to
+   * wait, otherwise within `timeoutMs`. The model sees only the facts and the
+   * plain draft; what comes back is checked against the facts before it is
+   * returned (see `checkWhy`), so a non-null answer is safe to show.
+   */
+  async explain(reason: HintReason, plain: string, timeoutMs: number): Promise<string | null> {
+    if (timeoutMs <= 0) return null;
+    if (!this.budget.take(this.now(), HINT_WHY_RESERVE)) return null;
+
+    const outcome = await callGroq({
+      apiKey: this.options.apiKey,
+      body: buildWhyRequestBody(this.model, reason, plain),
+      timeoutMs,
+      fetch: this.options.fetch,
+      read: (content) => parseWhyReply(content, reason),
+    });
+    return this.settle(outcome, timeoutMs, HINT_FALLBACK);
+  }
+
+  /** Books what a call cost, backs off when asked to, and hands back the answer if there was one. */
+  private settle<T>(outcome: Settled<T>, timeoutMs: number, fallback: string): T | null {
+    const now = this.now();
     switch (outcome.kind) {
       case 'ok':
         this.budget.noteTokens(now, outcome.tokens);
-        return outcome.advice;
+        return outcome.value;
       case 'invalid':
         this.budget.noteTokens(now, outcome.tokens);
-        this.failed('an unusable reply', now);
+        this.failed('an unusable reply', now, fallback);
         return null;
       case 'http':
         if (outcome.status === 429) {
           this.budget.pauseUntil(now + retryAfterMs(outcome.retryAfter, Date.now()));
         }
-        this.failed(`HTTP ${outcome.status}`, now);
+        this.failed(`HTTP ${outcome.status}`, now, fallback);
         return null;
       case 'timeout':
-        this.failed(`no answer within ${timeoutMs} ms`, now);
+        this.failed(`no answer within ${timeoutMs} ms`, now, fallback);
         return null;
       case 'network':
-        this.failed('a network error', now);
+        this.failed('a network error', now, fallback);
         return null;
     }
   }
 
   /** One line now and then — a 429 storm must not flood the console. */
-  private failed(what: string, now: number): void {
+  private failed(what: string, now: number, fallback: string): void {
     if (now - this.lastWarnAt < WARN_EVERY_MS) {
       this.quietFailures += 1;
       return;
     }
     const more = this.quietFailures > 0 ? ` (${this.quietFailures} more since the last report)` : '';
-    this.warn(`advisor call failed — ${what}; the bot plays the solver's pick${more}`);
+    this.warn(`advisor call failed — ${what}; ${fallback}${more}`);
     this.lastWarnAt = now;
     this.quietFailures = 0;
   }

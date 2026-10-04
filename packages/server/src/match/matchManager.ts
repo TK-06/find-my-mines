@@ -140,6 +140,13 @@ export class MatchManager {
   /** Hints each player has used this match, in a game against the computer. */
   private hintsUsed = new Map<string, number>();
 
+  /**
+   * Which match this room is on: one more each time a match starts (a rematch
+   * included). Lets something that began in one match — a hint's reworded
+   * explanation — tell that it must not land in the next.
+   */
+  private matchesStarted = 0;
+
   readonly createdAt = Date.now();
   private readonly timer: TurnTimer;
 
@@ -527,6 +534,7 @@ export class MatchManager {
     this.winnerId = null;
     this.rematchVotes.clear();
     this.hintsUsed.clear();
+    this.matchesStarted++;
     for (const player of this.players) {
       player.score = 0;
       player.eloDelta = undefined;
@@ -695,6 +703,11 @@ export class MatchManager {
     if (playerId !== this.currentPlayerId) return 'Wait for your turn to ask for a hint.';
     if (this.hintsLeft(playerId) <= 0) return 'No hints left this match.';
     return null;
+  }
+
+  /** Which match the room is on; see `matchesStarted`. */
+  get matchNumber(): number {
+    return this.matchesStarted;
   }
 
   /** Uses one of the player's hints. Returns how many they have left. */

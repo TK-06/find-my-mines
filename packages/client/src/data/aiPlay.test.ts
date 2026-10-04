@@ -9,6 +9,7 @@ import {
   FLY_EXPLAINER,
   JEV_UNAVAILABLE,
   JEV_UNAVAILABLE_NOTE,
+  applyHintWhy,
   boardSummary,
   canAskHint,
   densityPercent,
@@ -306,5 +307,36 @@ describe('hintButtonLabel', () => {
     expect(hintButtonLabel(1)).toBe('Hint (1 left)');
     expect(hintButtonLabel(0)).toBe('No hints left');
     expect(hintButtonLabel(-1)).toBe('No hints left');
+  });
+});
+
+describe('applyHintWhy', () => {
+  const hint = { row: 2, col: 3, text: 'C4 must be a mine', why: 'The plain reason.', id: 4 };
+
+  it('swaps in the reworded explanation for the hint on screen, keeping the rest of it', () => {
+    expect(applyHintWhy(hint, { row: 2, col: 3, why: 'A friendlier reason.' })).toEqual({
+      ...hint,
+      why: 'A friendlier reason.',
+    });
+  });
+
+  it('also fills in a hint that had no explanation of its own', () => {
+    expect(applyHintWhy({ ...hint, why: null }, { row: 2, col: 3, why: 'Here is why.' })?.why).toBe('Here is why.');
+  });
+
+  it('ignores one for another cell — an older hint, or one that is gone', () => {
+    expect(applyHintWhy(hint, { row: 2, col: 4, why: 'Not this one.' })).toBe(hint);
+    expect(applyHintWhy(hint, { row: 0, col: 3, why: 'Not this one.' })).toBe(hint);
+  });
+
+  it('ignores it when there is no hint on screen', () => {
+    expect(applyHintWhy(null, { row: 2, col: 3, why: 'Too late.' })).toBeNull();
+  });
+
+  it('ignores a payload that is not a cell and some text, whatever the server sent', () => {
+    for (const why of ['', '   ', 7, null, undefined, {}]) {
+      expect(applyHintWhy(hint, { row: 2, col: 3, why })).toBe(hint);
+    }
+    expect(applyHintWhy(hint, { row: '2', col: 3, why: 'x' })).toBe(hint);
   });
 });
