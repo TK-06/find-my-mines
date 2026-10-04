@@ -84,6 +84,7 @@ export function App() {
     playVsAi,
     aiAbout,
     askHint,
+    onHintWhy,
     roomMessages,
     sayInRoom,
     lobbyMessages,
@@ -93,7 +94,7 @@ export function App() {
 
   // Up here with the other hooks, before any early return. Inert outside a
   // game against the computer.
-  const hint = useAiHint(state, playerId, askHint);
+  const hint = useAiHint(state, playerId, askHint, onHintWhy);
 
   // The game's sounds and the buzz on your turn. They follow the room whatever
   // page is open, so a turn is heard from the profile page too. The admin

@@ -20,6 +20,7 @@ import {
   type ReportReason,
   type RoomMode,
   type RoomSummary,
+  type ServerToClientEvents,
 } from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AiSetup } from './data/aiPlay.js';
@@ -633,6 +634,19 @@ export function useGame() {
   );
 
   /**
+   * Hears the language model's friendlier wording of a hint's "Why?", which the
+   * server sends to the asker alone a moment after the hint itself. The hint
+   * hook decides whether it still applies; this only wires the event, and
+   * hands back the way to stop listening.
+   */
+  const onHintWhy = useCallback((listener: ServerToClientEvents['ai:hintWhy']) => {
+    socket.on('ai:hintWhy', listener);
+    return () => {
+      socket.off('ai:hintWhy', listener);
+    };
+  }, []);
+
+  /**
    * Say something in the room's chat. Nothing is shown until the server sends
    * the line back to the whole room, us included — it may refuse (too fast,
    * not in a room) and says why in `error`.
@@ -739,6 +753,7 @@ export function useGame() {
     playVsAi,
     aiAbout,
     askHint,
+    onHintWhy,
     roomMessages,
     sayInRoom,
     lobbyMessages,

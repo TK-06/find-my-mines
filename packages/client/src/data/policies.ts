@@ -16,7 +16,7 @@ import { APP_VERSION, REPO_URL } from '../version.js';
 /** The one address people should write to (the owner asked for just this one). */
 export const CONTACT_EMAIL = 'Palangtaj@gmail.com';
 
-export const POLICY_UPDATED = '4 October 2026';
+export const POLICY_UPDATED = '5 October 2026';
 
 /** A `mailto:` link to the contact address with the subject already filled in. */
 export function contactMailto(topic: string): string {
@@ -227,6 +227,7 @@ const privacy: Policy = {
       blocks: [
         'Supabase runs our database and sign-in, stores profile pictures, and sends the email that confirms a new account. Your account data is stored with Supabase, which keeps its own technical logs as part of running the service.',
         'The website and the game server run on hosting services, which see ordinary network traffic, such as your IP address, when you connect.',
+        'In games against the computer, the game server asks AI services for help: Groq (for the AI opponent’s moves and chat lines, and the wording of a hint’s “Why?”) and TypeSafe AI (for the JEV opponent’s moves). The server sends them only what is on the board — the board size, the open cells and their numbers, the scores, and the cells it is choosing between, or for a “Why?” a short description of the numbers around the hinted cell. Nothing you typed (your name or chat messages), and nothing that identifies you, is sent. Puzzle mode sends nothing at all.',
       ],
     },
     {

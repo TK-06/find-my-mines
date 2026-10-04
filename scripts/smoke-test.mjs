@@ -1549,6 +1549,16 @@ section('play vs AI');
   check('ai:hint on your turn names a covered cell with a reason',
     hintCovered && typeof hintOnTurn?.text === 'string' && hintOnTurn.text.length > 0,
     JSON.stringify(hintOnTurn));
+  // The ack carries the deterministic "Why?" worked out from the public board.
+  // The language model's reworded ai:hintWhy follows only with a Groq key and
+  // in time, so it is deliberately not asserted here.
+  const hintLabel = hintOnTurn?.ok === true
+    ? `${String.fromCharCode(65 + hintOnTurn.col)}${hintOnTurn.row + 1}`
+    : '';
+  check('the ai:hint answer carries a "why" that names the hinted cell',
+    hintLabel !== '' && typeof hintOnTurn?.why === 'string' && hintOnTurn.why.length > 0 &&
+      hintOnTurn.why.includes(hintLabel),
+    `${hintLabel}: ${JSON.stringify(hintOnTurn?.why)}`);
   check('hintsLeft counts down with each hint',
     hintAgain?.ok === true && hintOnTurn?.hintsLeft === hintAgain.hintsLeft + 1,
     `${hintOnTurn?.hintsLeft} → ${hintAgain?.hintsLeft}`);

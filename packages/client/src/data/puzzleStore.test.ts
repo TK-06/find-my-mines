@@ -1,4 +1,11 @@
-import { PUZZLE_HINTS_PER_GAME, dailyPuzzle, puzzleClearedPercent, puzzleFromMines, type PuzzleGame } from '@fmm/shared';
+import {
+  PUZZLE_HINTS_PER_GAME,
+  dailyPuzzle,
+  puzzleCellLabel,
+  puzzleClearedPercent,
+  puzzleFromMines,
+  type PuzzleGame,
+} from '@fmm/shared';
 import { describe, expect, it } from 'vitest';
 import { emptyDailyRecords, makeSavedDaily, recordDailyResult, type DailyRecords } from './dailyStore.js';
 import {
@@ -120,6 +127,64 @@ describe('puzzleReducer', () => {
     // Flagging it again goes against the hint, so the hint goes.
     session = puzzleReducer(session, { type: 'flag', row: 0, col: 0 });
     expect(session.hint).toBeNull();
+  });
+
+  it('works out why when the hint is taken, from the visible board, and shows it with the hint', () => {
+    const session = puzzleReducer(midGame(['..*..', '..*..', '..*..']), { type: 'hint' });
+    const hint = session.hint!;
+    expect(session.why).not.toBeNull();
+    expect(session.why!.reason).toMatchObject({ goal: 'safe', cell: puzzleCellLabel(hint), flagged: false });
+    expect(session.why!.text).toContain(puzzleCellLabel(hint));
+    expect(startSession('easy', {}).why).toBeNull();
+  });
+
+  it('drops the reason with the hint, whenever the hint goes', () => {
+    let session = puzzleReducer(midGame(['..*..', '..*..', '..*..']), { type: 'hint' });
+    // Another flag: hint and reason both stay, untouched.
+    const { row, col } = session.hint!;
+    const elsewhere = row === 0 && col === 0 ? { row: 2, col: 4 } : { row: 0, col: 0 };
+    const kept = puzzleReducer(session, { type: 'flag', ...elsewhere });
+    expect(kept.why).toBe(session.why);
+    // Its own cell flagged, a cell opened: both go.
+    expect(puzzleReducer(session, { type: 'flag', row, col }).why).toBeNull();
+    session = puzzleReducer(session, play(1, 0, 2000));
+    expect(session.hint).toBeNull();
+    expect(session.why).toBeNull();
+    // A new game starts clean too.
+    const hinted = puzzleReducer(midGame(['..*..', '..*..', '..*..']), { type: 'hint' });
+    expect(puzzleReducer(hinted, { type: 'new', level: 'easy' }).why).toBeNull();
+  });
+
+  describe('a hint on a flagged cell', () => {
+    // A strip along the top with mines at B1 and D1; the open row below makes A1, C1 and E1 safe for sure.
+    // All three are flagged and B1 and D1 are not, so the safest cell to name is a flag that is wrong.
+    function flaggedStrip(): PuzzleSession {
+      const base = fromMap(['.*.*.', '.....']);
+      const game: PuzzleGame = {
+        ...base,
+        open: base.open.map((_, i) => i >= 5),
+        flagged: base.flagged.map((_, i) => i === 0 || i === 2 || i === 4),
+      };
+      return { ...startSession('easy', {}), game, startedAt: 1000 };
+    }
+
+    it('ends the reason on the flag being wrong', () => {
+      const session = puzzleReducer(flaggedStrip(), { type: 'hint' });
+      expect(session.hint).toMatchObject({ row: 0, col: 0, flagged: true });
+      expect(session.why!.reason.flagged).toBe(true);
+      expect(session.why!.text).toBe(
+        'The 1 at A2 already touches a sure mine at B1, so A1 is safe. The flag on A1 is wrong, so take it off.',
+      );
+    });
+
+    it('rewords the reason without the flag line once the flag is taken off — facts unchanged', () => {
+      let session = puzzleReducer(flaggedStrip(), { type: 'hint' });
+      const before = session.why!;
+      session = puzzleReducer(session, { type: 'flag', row: 0, col: 0 });
+      expect(session.hint).toMatchObject({ row: 0, col: 0, flagged: false });
+      expect(session.why!.reason).toEqual({ ...before.reason, flagged: false });
+      expect(session.why!.text).toBe('The 1 at A2 already touches a sure mine at B1, so A1 is safe.');
+    });
   });
 
   it('gives no hint before the first click or past the limit', () => {

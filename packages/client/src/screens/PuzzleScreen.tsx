@@ -1,5 +1,6 @@
 import { PUZZLE_HINTS_PER_GAME, PUZZLE_LEVELS, dailyKey, describePuzzleHint, puzzleMinesLeft } from '@fmm/shared';
 import { useCallback, useEffect, useMemo, useReducer } from 'react';
+import { HintWithWhy } from '../components/HintWithWhy.js';
 import { DailyPanel } from '../components/puzzle/DailyPanel.js';
 import { PuzzleBoard } from '../components/puzzle/PuzzleBoard.js';
 import { PuzzleClock } from '../components/puzzle/PuzzleClock.js';
@@ -186,13 +187,14 @@ export function PuzzleScreen() {
 
         {/* Always rendered, so a screen reader hears each hint as it arrives. */}
         <div role="status" aria-live="polite" className="puzzle-hint-status">
+          {/* Keyed by how many hints this game has used: each new hint starts with its Why? closed. */}
           {session.hint && (
-            <p className="hint-note">
-              <span className="hint-mark" aria-hidden="true" />
-              <span>
-                <strong>Hint</strong> · {describePuzzleHint(session.hint)}
-              </span>
-            </p>
+            <HintWithWhy
+              key={game.hintsUsed}
+              label="Hint"
+              text={describePuzzleHint(session.hint)}
+              why={session.why?.text}
+            />
           )}
         </div>
 

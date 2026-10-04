@@ -18,6 +18,7 @@ import {
   describeHint,
   describeReasons,
   describeReport,
+  explainHint,
   hintFor,
   isAiBoardSize,
   isAiDensity,
@@ -54,6 +55,7 @@ import { clientAddress } from './admin/access.js';
 import { attachAdminNamespace } from './admin/adminNamespace.js';
 import { ActivityLog } from './admin/activityLog.js';
 import { createAdvisor } from './ai/advisor.js';
+import { rewordHint } from './ai/hintReword.js';
 import { createJevPicker } from './ai/jev.js';
 import { BotController } from './ai/botController.js';
 import { contain, respond, settleWithin } from './safety.js';
@@ -1280,6 +1282,8 @@ io.on('connection', contain((socket: GameSocket) => {
   // A hint in a game against the computer: the covered cell the solver thinks
   // most likely a mine, worked out from the public board — never from the
   // mine positions. Refusals carry the count too, so the button stays honest.
+  // The answer carries a plain "why" from the same public board; the language
+  // model's friendlier wording, when there is one, follows as ai:hintWhy.
   listen(socket, 'ai:hint', (_payload, ack) => {
     const room = rooms.roomOf(socket.id);
     if (!room) {
@@ -1296,26 +1300,50 @@ io.on('connection', contain((socket: GameSocket) => {
     }
 
     const state = room.publicState();
-    const hint = hintFor(
-      mineProbabilities({
-        rows: state.rows,
-        cols: state.cols,
-        mineCount: state.bombCount,
-        revealed: state.revealed,
-      }),
-    );
+    const view = { rows: state.rows, cols: state.cols, mineCount: state.bombCount, revealed: state.revealed };
+    const grid = mineProbabilities(view);
+    const hint = hintFor(grid);
     if (!hint) {
       respond(ack, { ok: false, error: 'There is nothing left to uncover.', hintsLeft });
       return;
     }
 
+    const why = explainHint(view, grid, hint, 'mine');
+    const left = room.spendHint(socket.id);
     respond(ack, {
       ok: true,
       row: hint.row,
       col: hint.col,
       text: describeHint(hint),
-      hintsLeft: room.spendHint(socket.id),
+      why: why.text,
+      hintsLeft: left,
     });
+
+    // After the answer, and without anyone waiting: it only ever adds to it.
+    void rewordHint(
+      {
+        advisor,
+        // Only while this player is still seated in this same room, in this same match.
+        look: () => {
+          if (rooms.roomOf(socket.id) !== room || !room.isSeated(socket.id)) return null;
+          const now = room.publicState();
+          return {
+            matchNumber: room.matchNumber,
+            hintsLeft: room.hintsLeft(socket.id),
+            playing: now.status === 'playing',
+            covered: !now.revealed.some((cell) => cell.row === hint.row && cell.col === hint.col),
+          };
+        },
+        send: (payload) => socket.emit('ai:hintWhy', payload),
+      },
+      {
+        row: hint.row,
+        col: hint.col,
+        reason: why.reason,
+        plain: why.text,
+        stamp: { matchNumber: room.matchNumber, hintsLeft: left },
+      },
+    );
   });
 
   // Room chat, players and spectators alike. Nothing is stored: a line goes to

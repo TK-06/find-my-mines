@@ -1,3 +1,4 @@
+import type { HintReason } from '@fmm/shared';
 import { describe, expect, it } from 'vitest';
 import {
   Advisor,
@@ -275,5 +276,126 @@ describe('Advisor.choose', () => {
     expect(warnings[1]).toMatch(/1 more/);
     expect(warnings.join('\n')).not.toContain(KEY);
     expect(warnings.join('\n')).not.toContain('boom');
+  });
+});
+
+describe('RateBudget — keeping a share back for the bot', () => {
+  it('refuses a caller that asks to leave half alone once half is spent, while the bot may carry on', () => {
+    const budget = new RateBudget(4);
+    expect(budget.take(0, 0.5)).toBe(true);
+    expect(budget.take(1, 0.5)).toBe(true);
+    // Half of four calls is gone: a hint stops here…
+    expect(budget.take(2, 0.5)).toBe(false);
+    // …but the bot, which keeps nothing back, still has the other half.
+    expect(budget.take(3)).toBe(true);
+    expect(budget.take(4)).toBe(true);
+    expect(budget.take(5)).toBe(false);
+  });
+
+  it('keeps the same share of the minute’s tokens back', () => {
+    const budget = new RateBudget(20, 1_000);
+    budget.take(0);
+    budget.noteTokens(0, 500);
+    expect(budget.take(1, 0.5)).toBe(false);
+    expect(budget.take(1)).toBe(true);
+  });
+
+  it('frees the share again as calls age out of the minute', () => {
+    const budget = new RateBudget(2);
+    budget.take(0);
+    expect(budget.take(1, 0.5)).toBe(false);
+    expect(budget.take(60_000, 0.5)).toBe(true);
+  });
+});
+
+describe('Advisor.explain', () => {
+  const REASON: HintReason = {
+    goal: 'mine',
+    cell: 'C3',
+    flagged: false,
+    kind: 'forced',
+    number: { at: 'B3', value: 2, found: 0, need: 2, covered: 2 },
+    cells: ['C3', 'C4'],
+    sureMines: [],
+    knownSafe: [],
+  };
+  const PLAIN = 'The 2 at B3 still needs 2 mines and touches only C3 and C4, so both are mines.';
+  const WHY = 'C3 is a mine: the 2 at B3 needs 2 mines and only C3 and C4 are left to hold them.';
+  const reply = () => completion(JSON.stringify({ why: WHY }), 120);
+
+  it('returns the model’s wording once it passes the checks', async () => {
+    const groq = fakeGroq(reply);
+    const { advisor } = advisorWith(groq.fetch);
+    expect(await advisor.explain(REASON, PLAIN, 1_000)).toBe(WHY);
+    expect(groq.calls).toHaveLength(1);
+  });
+
+  it('sends the facts and their plain wording — not the board — with the key as a bearer token', async () => {
+    const groq = fakeGroq(reply);
+    const { advisor } = advisorWith(groq.fetch);
+    await advisor.explain(REASON, PLAIN, 1_000);
+
+    const [call] = groq.calls;
+    expect(call?.url).toBe(GROQ_URL);
+    expect((call?.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
+    const body = JSON.parse(String(call?.init.body)) as { messages: { content: string }[] };
+    const everything = body.messages.map((m) => m.content).join('\n');
+    expect(everything).toContain(JSON.stringify(REASON));
+    expect(everything).toContain(PLAIN);
+    expect(String(call?.init.body)).not.toMatch(/revealed|bombCount|nickname/);
+  });
+
+  it('returns null, and says so once, for wording that fails the checks', async () => {
+    const bad = fakeGroq(() => completion(JSON.stringify({ why: 'It is a mine — trust me.' })));
+    const { advisor, warnings } = advisorWith(bad.fetch);
+    expect(await advisor.explain(REASON, PLAIN, 1_000)).toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/hint keeps its plain explanation/);
+    expect(warnings[0]).not.toContain(KEY);
+  });
+
+  it('shares the bot’s budget: it may spend only the first half, and never calls once the budget is gone', async () => {
+    const groq = fakeGroq(reply);
+    const { advisor } = advisorWith(groq.fetch, new RateBudget(2));
+    expect(await advisor.explain(REASON, PLAIN, 1_000)).toBe(WHY);
+    // One call of two used: the other is the bot's.
+    expect(await advisor.explain(REASON, PLAIN, 1_000)).toBeNull();
+    expect(groq.calls).toHaveLength(1);
+    // The bot can still use it.
+    expect(await advisor.choose(INPUT, 1_000)).toBeNull(); // the reply is a "why", not a move…
+    expect(groq.calls).toHaveLength(2); // …but it was allowed to ask.
+  });
+
+  it('backs off together with the bot after a 429', async () => {
+    const groq = fakeGroq(() => new Response('{}', { status: 429, headers: { 'retry-after': '20' } }));
+    const { advisor, clock } = advisorWith(groq.fetch);
+    expect(await advisor.explain(REASON, PLAIN, 1_000)).toBeNull();
+    clock.now = 5_000;
+    expect(await advisor.choose(INPUT, 1_000)).toBeNull();
+    expect(await advisor.explain(REASON, PLAIN, 1_000)).toBeNull();
+    expect(groq.calls).toHaveLength(1);
+  });
+
+  it('gives up at the timeout and aborts the request', async () => {
+    let aborted = false;
+    const hang: FakeFetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    const { advisor } = advisorWith(hang);
+    const started = Date.now();
+    expect(await advisor.explain(REASON, PLAIN, 30)).toBeNull();
+    expect(aborted).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('returns null when the network fails, without throwing', async () => {
+    const { advisor } = advisorWith(async () => {
+      throw new TypeError('fetch failed');
+    });
+    expect(await advisor.explain(REASON, PLAIN, 1_000)).toBeNull();
   });
 });
