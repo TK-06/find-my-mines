@@ -96,6 +96,24 @@ export async function fetchProfile(userId: string): Promise<ProfileRow | null> {
   return (data as ProfileRow) ?? null;
 }
 
+/** Someone's public profile, by their exact username — for /u/<username>. */
+export async function fetchProfileByUsername(username: string): Promise<ProfileRow | null> {
+  if (!supabase) return null;
+  let { data, error } = await supabase
+    .from('profiles')
+    .select(`${PROFILE_COLUMNS}, avatar_path`)
+    .eq('username', username)
+    .maybeSingle();
+  if (isMissingColumn(error)) {
+    ({ data, error } = await supabase.from('profiles').select(PROFILE_COLUMNS).eq('username', username).maybeSingle());
+  }
+  if (error) {
+    console.error('[profile] load by name failed:', error.message);
+    return null;
+  }
+  return (data as ProfileRow) ?? null;
+}
+
 /** Renaming is the only thing a client may change; a trigger freezes ratings. */
 export async function updateUsername(
   userId: string,

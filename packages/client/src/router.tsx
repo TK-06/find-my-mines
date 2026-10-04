@@ -10,7 +10,9 @@ export type Route =
   | 'admin'
   | 'privacy'
   | 'security'
-  | 'terms';
+  | 'terms'
+  /** Someone else's public profile: /u/<username>. */
+  | 'player';
 
 const PATHS: Record<Route, string> = {
   game: '/',
@@ -22,6 +24,8 @@ const PATHS: Record<Route, string> = {
   privacy: '/privacy',
   security: '/security',
   terms: '/terms',
+  // Never navigated to bare: see pathForPlayer.
+  player: '/u',
 };
 
 /** The URL a route lives at — for real hrefs, so middle-click and "copy link" work. */
@@ -44,6 +48,24 @@ export function joinCodeFromPath(pathname: string): string | null {
   return match ? parseRoomCode(match[1]) : null;
 }
 
+/** Where a player's public profile lives: /u/<username>. */
+export function pathForPlayer(username: string): string {
+  return `/u/${encodeURIComponent(username)}`;
+}
+
+/** The username in a /u/<username> path, or null anywhere else. */
+export function playerNameFromPath(pathname: string): string | null {
+  const match = /^\/u\/([^/]+)\/*$/.exec(pathname);
+  if (!match) return null;
+  try {
+    const name = decodeURIComponent(match[1]!).trim();
+    return name.length >= 1 && name.length <= 20 ? name : null;
+  } catch {
+    // A broken %-escape names nobody.
+    return null;
+  }
+}
+
 /**
  * A small router in a few lines.
  *
@@ -53,6 +75,7 @@ export function joinCodeFromPath(pathname: string): string | null {
  * read, so in-page #anchors never change the screen.
  */
 export function routeFromPath(pathname: string): Route {
+  if (playerNameFromPath(pathname) !== null) return 'player';
   switch (pathname.replace(/\/+$/, '') || '/') {
     case '/admin':
       return 'admin';
@@ -127,25 +150,36 @@ export function RouteLink({
   );
 }
 
-export function useRoute(): [Route, (next: Route) => void] {
-  const [route, setRoute] = useState<Route>(() => routeFromPath(window.location.pathname));
+/**
+ * The current screen, a way to change it, and the path itself — which a
+ * screen with a parameter (/u/<name>) reads, and which changes even when the
+ * route does not (one player's page to another's).
+ */
+export function useRoute(): [Route, (next: Route, path?: string) => void, string] {
+  const [location, setLocation] = useState(() => ({
+    route: routeFromPath(window.location.pathname),
+    path: window.location.pathname,
+  }));
 
   useEffect(() => {
     // Keep the back/forward buttons working.
-    const onPop = () => setRoute(routeFromPath(window.location.pathname));
+    const onPop = () =>
+      setLocation({ route: routeFromPath(window.location.pathname), path: window.location.pathname });
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  const navigate = (next: Route) => {
-    window.history.pushState({}, '', PATHS[next]);
-    setRoute(next);
+  /** `path` is for routes with a parameter in them, like a player's /u/<name>. */
+  const navigate = (next: Route, path?: string) => {
+    const to = path ?? PATHS[next];
+    window.history.pushState({}, '', to);
+    setLocation({ route: next, path: to });
     // A new screen starts at its top, as a page load would. Footer links sit at
     // the very bottom, so without this the next page opens scrolled away.
     window.scrollTo(0, 0);
   };
 
-  return [route, navigate];
+  return [location.route, navigate, location.path];
 }
 
 export function NavBar({

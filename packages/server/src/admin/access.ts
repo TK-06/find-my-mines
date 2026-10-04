@@ -46,6 +46,47 @@ export function isServerMachine(
   return LOOPBACK.has(peer) || ownAddresses.map(normalise).includes(peer);
 }
 
+/** Only the characters an IPv4 or IPv6 address can hold, and no longer than one can be. */
+const IP_LIKE = /^[0-9a-fA-F:.]{2,45}$/;
+
+/** A header's single value, or undefined when it is missing or sent more than once. */
+function single(value: string | string[] | undefined): string | undefined {
+  return typeof value === 'string' ? value.trim() : undefined;
+}
+
+/**
+ * The address to show for a connection: the visitor's own, as far as the
+ * server can tell.
+ *
+ * Behind the Cloudflare tunnel every visitor reaches the server from the
+ * tunnel process on this machine, so the peer is always 127.0.0.1. Cloudflare
+ * puts the real visitor's address in CF-Connecting-IP (and X-Forwarded-For).
+ * Those headers are believed only when the peer is loopback — that is, when
+ * the request came through something running on this machine. Anyone
+ * connecting from elsewhere could write any header they like, so for them the
+ * peer address stands.
+ *
+ * For display and reports only. Nothing about access is decided by this:
+ * `isServerMachine` still refuses every forwarded request.
+ */
+export function clientAddress(
+  address: string | undefined,
+  headers: Record<string, string | string[] | undefined>,
+): string {
+  if (!address) return 'unknown';
+  const peer = normalise(address);
+  if (!LOOPBACK.has(peer)) return peer;
+
+  const cloudflare = single(headers['cf-connecting-ip']);
+  if (cloudflare && IP_LIKE.test(cloudflare)) return normalise(cloudflare);
+
+  // The left-most entry is the original client; later ones are proxies.
+  const forwarded = single(headers['x-forwarded-for'])?.split(',')[0]?.trim();
+  if (forwarded && IP_LIKE.test(forwarded)) return normalise(forwarded);
+
+  return peer;
+}
+
 export interface ConsoleHandshake {
   address?: string;
   headers: Record<string, string | string[] | undefined>;

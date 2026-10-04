@@ -16,14 +16,17 @@ import {
   cleanChatText,
   describeHint,
   describeReasons,
+  describeReport,
   hintFor,
   isAiBoardSize,
   isAiDensity,
   isAiLevel,
   isAiModel,
+  isGuestId,
   listedRooms,
   mineProbabilities,
   parseRemovalNote,
+  parseReport,
   presenceOf,
   type AdminState,
   type AdminToServerEvents,
@@ -34,9 +37,11 @@ import {
   type Identity,
   type JoinResult,
   type OnlinePlayer,
+  type PlayerReport,
   type QueueEntry,
   type RemovalNote,
   type RemovalNotice,
+  type ReportParty,
   type RevealedCell,
   type RoomConfig,
   type RoomMode,
@@ -44,6 +49,7 @@ import {
   type ServerToAdminEvents,
   type ServerToClientEvents,
 } from '@fmm/shared';
+import { clientAddress } from './admin/access.js';
 import { attachAdminNamespace } from './admin/adminNamespace.js';
 import { ActivityLog } from './admin/activityLog.js';
 import { createAdvisor } from './ai/advisor.js';
@@ -53,6 +59,7 @@ import { contain, respond, settleWithin } from './safety.js';
 import { ADVERTISED_HOST, AI_MODEL, CORS_ORIGIN, GROQ_API_KEY, HOST, JEV_API_KEY, JEV_MODEL, PORT } from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
+import { deleteOldReports, loadRecentReports, saveReport, saveReportStatus } from './persistence/reportRecorder.js';
 import { areFriends, guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
 import type { FinishedMatch, MatchBroadcaster, MatchManager } from './match/matchManager.js';
 import { RoomManager } from './rooms/roomManager.js';
@@ -60,6 +67,8 @@ import { ChatLimit } from './state/chatLimit.js';
 import { InviteLimit } from './state/inviteLimit.js';
 import { LobbyChat, inviteLine, inviteRefusal, lobbyInviteLimit, playerLine } from './state/lobbyChat.js';
 import { ClientRegistry } from './state/registry.js';
+import { ReportLimit } from './state/reportLimit.js';
+import { REPORT_KEEP_MS, ReportStore } from './state/reportStore.js';
 import { isSamePlayer } from './state/seatHold.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -302,6 +311,13 @@ const queue = new MatchmakingQueue({
 /** Verified identity per socket. Populated on player:join, cleared on disconnect. */
 const identities = new Map<string, Identity>();
 
+/**
+ * The random id a guest's browser keeps in its fmm_guest cookie, per socket.
+ * Memory only, and used for one thing: labelling a report sent by or about
+ * that guest, so an admin can tell the same browser coming back.
+ */
+const guestIds = new Map<string, string>();
+
 function identityOf(socketId: string): Identity {
   return identities.get(socketId) ?? guestIdentity('Player');
 }
@@ -505,6 +521,56 @@ const chatLimit = new ChatLimit();
  */
 const lobbyChat = new LobbyChat();
 const lobbyChatLimit = new ChatLimit();
+
+/** Player reports for the console: newest first, the last 90 days. */
+const reports = new ReportStore();
+const reportLimit = new ReportLimit();
+
+/** One side of a report, from the server's own records. Null for a client with no name yet. */
+function partyOf(socketId: string): ReportParty | null {
+  const identity = identities.get(socketId);
+  const client = registry.get(socketId);
+  if (!identity || !client) return null;
+  const socket = io.sockets.sockets.get(socketId);
+  return {
+    nickname: identity.nickname,
+    profileId: identity.isGuest ? null : identity.profileId,
+    isGuest: identity.isGuest,
+    guestId: guestIds.get(socketId) ?? null,
+    sessionId: socket ? sessionIdOf(socket) : null,
+    address: client.address,
+  };
+}
+
+/** Who someone is for the report limits: an account beats a guest id beats a tab. */
+function reportKey(party: ReportParty, socketId: string): string {
+  if (party.profileId) return `account:${party.profileId}`;
+  if (party.guestId) return `guest:${party.guestId}`;
+  if (party.sessionId) return `tab:${party.sessionId}`;
+  return `socket:${socketId}`;
+}
+
+/**
+ * Reports older than 90 days go, from memory and the database: at start-up
+ * (after loading what the database kept) and then once a day.
+ */
+async function loadAndPruneReports(): Promise<void> {
+  await deleteOldReports();
+  reports.addAll(await loadRecentReports());
+  reports.prune(Date.now(), REPORT_KEEP_MS);
+  adminConsole.reportsChanged();
+}
+setInterval(
+  contain(
+    () => {
+      reports.prune(Date.now(), REPORT_KEEP_MS);
+      void deleteOldReports();
+      adminConsole.reportsChanged();
+    },
+    (error) => console.error('[reports] daily prune failed:', error),
+  ),
+  24 * 60 * 60 * 1000,
+).unref();
 const lobbyInvites = lobbyInviteLimit();
 
 /** Every connected socket signed in as this account — one per open tab. */
@@ -747,6 +813,17 @@ const adminConsole = attachAdminNamespace({
     pushUpdates();
   },
 
+  reports: () => reports.list(),
+
+  setReportStatus: (id, status) => {
+    const changed = reports.setStatus(id, status, Date.now());
+    if (!changed) return false;
+    void saveReportStatus(id, changed.status, changed.handledAt);
+    log.add('moderation', `admin marked the report on ${changed.target.nickname} ${status}`);
+    adminConsole.reportsChanged();
+    return true;
+  },
+
   // The world chat lives only in this process's memory, so emptying it here
   // empties it for good; every open lobby is told to empty its copy too.
   clearChat: () => {
@@ -799,7 +876,9 @@ function text(payload: unknown, field: string): string {
 // ── game namespace ──────────────────────────────────────────────────────────
 
 io.on('connection', contain((socket: GameSocket) => {
-  const address = socket.handshake.address ?? 'unknown';
+  // Through the Cloudflare tunnel every peer is 127.0.0.1; the visitor's own
+  // address comes from the tunnel's header (see clientAddress).
+  const address = clientAddress(socket.handshake.address, socket.handshake.headers);
   registry.add(socket.id, address);
   log.add('connection', `connect ${socket.id} from ${address} via ${socket.conn.transport.name}`);
 
@@ -836,6 +915,9 @@ io.on('connection', contain((socket: GameSocket) => {
     // They may have left while the database answered.
     if (socket.disconnected) return;
     identities.set(socket.id, identity);
+    const guestId = (payload as { guestId?: unknown } | null | undefined)?.guestId;
+    if (identity.isGuest && isGuestId(guestId)) guestIds.set(socket.id, guestId);
+    else guestIds.delete(socket.id);
 
     registry.setIdentity(socket.id, identity.nickname, identity.isGuest);
     log.add(
@@ -1351,6 +1433,64 @@ io.on('connection', contain((socket: GameSocket) => {
     socket.emit('queue:status', null);
   });
 
+  // Anyone with a name may report anyone else online. Who sent it and about
+  // whom is filled in from the server's own records of both connections.
+  listen(socket, 'player:report', (payload, ack) => {
+    const reporter = partyOf(socket.id);
+    if (!reporter) {
+      respond(ack, { ok: false, error: 'Pick a name first.' });
+      return;
+    }
+    const parsed = parseReport(payload);
+    if (!parsed.ok) {
+      respond(ack, { ok: false, error: parsed.error });
+      return;
+    }
+    const target = partyOf(parsed.targetId);
+    if (!target) {
+      respond(ack, { ok: false, error: 'That player is no longer online.' });
+      return;
+    }
+    if (parsed.targetId === socket.id || (reporter.profileId !== null && reporter.profileId === target.profileId)) {
+      respond(ack, { ok: false, error: 'You cannot report yourself.' });
+      return;
+    }
+
+    const verdict = reportLimit.tryReport(
+      reportKey(reporter, socket.id),
+      reportKey(target, parsed.targetId),
+      Date.now(),
+    );
+    if (!verdict.ok) {
+      const minutes = Math.max(1, Math.ceil(verdict.waitMs / 60_000));
+      respond(ack, {
+        ok: false,
+        error:
+          verdict.why === 'same-target'
+            ? `You already reported ${target.nickname} — the admins have it. You can report them again in ${minutes} min.`
+            : `That is a lot of reports — try again in ${minutes} min.`,
+      });
+      return;
+    }
+
+    const report: PlayerReport = {
+      id: randomUUID(),
+      createdAt: Date.now(),
+      reason: parsed.reason,
+      details: parsed.details,
+      roomId: registry.get(parsed.targetId)?.roomId ?? registry.get(socket.id)?.roomId ?? null,
+      reporter,
+      target: { ...target, clientId: parsed.targetId },
+      status: 'open',
+      handledAt: null,
+    };
+    reports.add(report);
+    void saveReport(report);
+    log.add('moderation', `${describeReport(report)}${report.details ? ` — "${report.details}"` : ''}`);
+    adminConsole.reportsChanged();
+    respond(ack, { ok: true });
+  });
+
   listen(socket, 'game:start', () => {
     rooms.roomOf(socket.id)?.start(socket.id);
   });
@@ -1380,6 +1520,7 @@ io.on('connection', contain((socket: GameSocket) => {
 
         registry.remove(socket.id);
         identities.delete(socket.id);
+        guestIds.delete(socket.id);
         chatLimit.forget(socket.id);
         pushUpdates();
       },
@@ -1459,4 +1600,5 @@ httpServer.listen(PORT, HOST, () => {
   JEV     →  ${jevPicker ? `TypeSafe ${jevPicker.model}` : 'not configured'}
 `);
   printConsole();
+  void loadAndPruneReports();
 });

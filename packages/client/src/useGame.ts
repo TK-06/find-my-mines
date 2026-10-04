@@ -17,6 +17,7 @@ import {
   type RoomLookupResult,
   type QueueSnapshot,
   type RoomConfig,
+  type ReportReason,
   type RoomMode,
   type RoomSummary,
 } from '@fmm/shared';
@@ -30,6 +31,7 @@ import {
   forfeitResultApplies,
   forfeitSeats,
   loadGuestProfile,
+  newGuestId,
   saveGuestProfile,
   unofficialRatingChange,
   withGuestName,
@@ -123,6 +125,17 @@ export function useGame() {
   const playingSnapshot = useRef<PublicMatchState | null>(null);
   /** Set once "Forget me" is used by a tab that already has a name: nothing is remembered again until it reloads. */
   const suppressRemember = useRef(false);
+  /**
+   * The id a brand-new guest gets. Made up front, so the very first join can
+   * already send it; the record created after that join keeps the same one.
+   */
+  const pendingGuestId = useRef(newGuestId());
+
+  // A cookie written before guests had ids was given one when it was read.
+  // Write it back once, so every later read (and this tab's join) sees the same id.
+  useEffect(() => {
+    if (guestProfileRef.current) saveGuestProfile(guestProfileRef.current);
+  }, []);
 
   /**
    * The room this client is in, as far as it knows. Room events for any other
@@ -191,7 +204,9 @@ export function useGame() {
   );
 
   const join = useCallback((nickname: string) => {
-    socket.emit('player:join', { nickname }, (result) => {
+    // A signed-in player's id is their account; the server ignores this for them.
+    const guestId = (loadGuestProfile() ?? guestProfileRef.current)?.id ?? pendingGuestId.current;
+    socket.emit('player:join', { nickname, guestId }, (result) => {
       lastNickname.current = nickname;
       playerIdRef.current = result.playerId;
       setPlayerId(result.playerId);
@@ -202,7 +217,9 @@ export function useGame() {
         rememberGuest(nickname);
         // The same person on this browser keeps their record under a new name.
         if (!suppressRemember.current) {
-          commitGuest(withGuestName(loadGuestProfile() ?? guestProfileRef.current, nickname, Date.now()));
+          commitGuest(
+            withGuestName(loadGuestProfile() ?? guestProfileRef.current, nickname, Date.now(), pendingGuestId.current),
+          );
         }
       }
       // The server held our seat through a dropped connection or a refresh.
@@ -395,6 +412,8 @@ export function useGame() {
    */
   const forgetGuestData = useCallback(() => {
     suppressRemember.current = playerIdRef.current !== null;
+    // Forgotten means forgotten: the next guest on this browser is a new id too.
+    pendingGuestId.current = newGuestId();
     clearGuestProfile();
     clearGuestMatches();
     guestProfileRef.current = null;
@@ -569,6 +588,23 @@ export function useGame() {
     [],
   );
 
+  /**
+   * Report someone in the online list. The server fills in who and where from
+   * its own records; a refusal (already reported, too many) comes back as
+   * `error`. Timed, so a lost answer never leaves the dialog waiting.
+   */
+  const reportPlayer = useCallback(
+    (targetId: string, reason: ReportReason, details: string) =>
+      new Promise<ModerationResult>((resolve) =>
+        socket
+          .timeout(8000)
+          .emit('player:report', { targetId, reason, details }, (err: Error | null, result: ModerationResult) =>
+            resolve(err ? { ok: false, error: 'The server did not answer — try again.' } : result),
+          ),
+      ),
+    [],
+  );
+
   const dismissInvite = useCallback(
     (id: string) => setFriendInvites((list) => list.filter((invite) => invite.id !== id)),
     [],
@@ -699,6 +735,7 @@ export function useGame() {
     friendInvites,
     inviteFriend,
     dismissInvite,
+    reportPlayer,
     playVsAi,
     aiAbout,
     askHint,

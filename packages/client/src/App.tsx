@@ -20,11 +20,12 @@ import { ShareRoom } from './components/ShareRoom.js';
 import { SiteFooter } from './components/SiteFooter.js';
 import { PostInviteButton, WorldChat } from './components/WorldChat.js';
 import { isPolicy } from './data/policies.js';
-import { NavBar, joinCodeFromPath, pathFor, useRoute, type Route } from './router.js';
+import { NavBar, joinCodeFromPath, pathFor, pathForPlayer, playerNameFromPath, useRoute, type Route } from './router.js';
 import { AuthScreen } from './screens/AuthScreen.js';
 import { GameLogScreen } from './screens/GameLogScreen.js';
 import { LeaderboardScreen } from './screens/LeaderboardScreen.js';
 import { LobbyScreen } from './screens/LobbyScreen.js';
+import { PlayerProfileScreen } from './screens/PlayerProfileScreen.js';
 import { PolicyScreen } from './screens/PolicyScreen.js';
 import { ProfileScreen } from './screens/ProfileScreen.js';
 import { RemovedScreen } from './screens/RemovedScreen.js';
@@ -76,6 +77,7 @@ export function App() {
     friendInvites,
     inviteFriend,
     dismissInvite,
+    reportPlayer,
     playVsAi,
     aiAbout,
     askHint,
@@ -92,7 +94,7 @@ export function App() {
 
   const [signedIn, setSignedIn] = useState(false);
   const [ready, setReady] = useState(!authEnabled);
-  const [route, navigate] = useRoute();
+  const [route, navigate, path] = useRoute();
   const [theme, toggleTheme] = useTheme();
   /** The host's kick/ban dialog, when open. */
   const [pendingRemoval, setPendingRemoval] = useState<
@@ -257,6 +259,22 @@ export function App() {
     );
   }
 
+  // Someone else's profile: public data, readable with no nickname or sign-in.
+  const playerName = route === 'player' ? playerNameFromPath(path) : null;
+  if (route === 'player' && playerName) {
+    return (
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+        <PlayerProfileScreen
+          key={playerName}
+          username={playerName}
+          onOpenGameLog={() => navigate('games')}
+          onOpenOwnProfile={() => navigate('profile')}
+        />
+        {inviteToasts}
+      </Shell>
+    );
+  }
+
   // Puzzle mode is single-player and runs entirely in this browser: no name,
   // sign-in or server round trip needed.
   if (route === 'puzzle') {
@@ -365,7 +383,15 @@ export function App() {
             {/* Who is online, then what they are saying. On phones the two split
                 up: the online list first, the chat after the games. */}
             <div className="stack lobby-side">
-              <OnlinePanel online={online} myId={playerId} rooms={rooms} onJoin={handleJoin} />
+              <OnlinePanel
+                online={online}
+                myId={playerId}
+                rooms={rooms}
+                onJoin={handleJoin}
+                onViewProfile={(name) => navigate('player', pathForPlayer(name))}
+                onOpenOwnProfile={() => navigate('profile')}
+                onReport={reportPlayer}
+              />
               <WorldChat
                 messages={lobbyMessages}
                 rooms={rooms}

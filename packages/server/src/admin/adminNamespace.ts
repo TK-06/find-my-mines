@@ -1,11 +1,14 @@
 import {
   ADMIN_ONLY_ERROR,
+  isReportStatus,
   parseRemovalNote,
   type AdminRoomView,
   type AdminState,
   type AdminToServerEvents,
   type ModerationResult,
+  type PlayerReport,
   type RemovalNote,
+  type ReportStatus,
   type ServerToAdminEvents,
 } from '@fmm/shared';
 import type { Namespace, Socket } from 'socket.io';
@@ -39,6 +42,10 @@ export interface AdminDeps {
   reset(roomId?: string): void;
   /** Empties the lobby's world chat for everyone, and logs it. */
   clearChat(): void;
+  /** Player reports, newest first. */
+  reports(): PlayerReport[];
+  /** False when there is no such report. Logs it and tells every console. */
+  setReportStatus(id: string, status: ReportStatus): boolean;
 }
 
 export interface AdminConsole {
@@ -48,6 +55,8 @@ export interface AdminConsole {
   roomChanged(roomId: string): void;
   /** Re-send every watched room. */
   allRoomsChanged(): void;
+  /** Send the reports to every open console. */
+  reportsChanged(): void;
 }
 
 interface Watcher {
@@ -141,6 +150,7 @@ export function attachAdminNamespace(deps: AdminDeps): AdminConsole {
     watchers.set(socket.id, { roomId: null, showMines: false });
 
     socket.emit('admin:state', deps.state());
+    socket.emit('admin:reports', deps.reports());
     // Backfill first, so the line below arrives once, live.
     socket.emit('admin:log', log.recent());
     log.add('admin', `console opened from ${socket.handshake.address} (${socket.data.access})`);
@@ -191,6 +201,16 @@ export function attachAdminNamespace(deps: AdminDeps): AdminConsole {
       deps.clearChat();
     });
 
+    listen('admin:report', (payload, ack) => {
+      const id = typeof payload?.id === 'string' ? payload.id : '';
+      const status = payload?.status;
+      if (!isReportStatus(status)) {
+        respond(ack, { ok: false, error: 'Pick resolved, dismissed or open.' });
+        return;
+      }
+      respond(ack, deps.setReportStatus(id, status) ? { ok: true } : { ok: false, error: 'That report is gone.' });
+    });
+
     listen('admin:watch', (payload) => {
       const watcher = watchers.get(socket.id);
       if (!watcher) return;
@@ -224,6 +244,7 @@ export function attachAdminNamespace(deps: AdminDeps): AdminConsole {
 
   return {
     pushState: () => adminIo.emit('admin:state', deps.state()),
+    reportsChanged: () => adminIo.emit('admin:reports', deps.reports()),
     roomChanged,
     allRoomsChanged: () => {
       for (const watcher of watchers.values()) {

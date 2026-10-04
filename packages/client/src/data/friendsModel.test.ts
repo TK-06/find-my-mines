@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FriendInvite, OnlinePlayer, PresenceStatus, RoomSummary } from '@fmm/shared';
 import {
+  cardFriendButton,
   INVITE_TTL_MS,
   MAX_INVITES,
   PRIVATE_ROOM_TEXT,
@@ -372,5 +373,34 @@ describe('initialOf', () => {
 
   it('falls back to a question mark for an empty name', () => {
     expect(initialOf('   ')).toBe('?');
+  });
+});
+
+describe('cardFriendButton', () => {
+  const pending = (direction: 'incoming' | 'outgoing') =>
+    ({ otherId: 'x', otherName: 'x', status: 'pending', direction }) as const;
+
+  it('asks a guest viewer to sign in', () => {
+    expect(cardFriendButton(false, null)).toMatchObject({ does: 'none', note: 'Sign in to add friends.' });
+  });
+
+  it('waits while the friendship loads', () => {
+    expect(cardFriendButton(true, undefined)).toMatchObject({ label: 'Add friend', does: 'none' });
+  });
+
+  it('offers Add with nothing between you, or when it could not be read', () => {
+    expect(cardFriendButton(true, null)).toMatchObject({ label: 'Add friend', does: 'add' });
+    expect(cardFriendButton(true, 'unknown')).toMatchObject({ label: 'Add friend', does: 'add' });
+  });
+
+  it('accepts their request, and waits on yours', () => {
+    expect(cardFriendButton(true, pending('incoming'))).toMatchObject({ label: 'Accept request', does: 'accept' });
+    expect(cardFriendButton(true, pending('outgoing'))).toMatchObject({ label: 'Requested', does: 'none' });
+  });
+
+  it('says Friends once you are', () => {
+    expect(
+      cardFriendButton(true, { otherId: 'x', otherName: 'x', status: 'accepted', direction: 'outgoing' }),
+    ).toMatchObject({ label: 'Friends', does: 'none', primary: false });
   });
 });

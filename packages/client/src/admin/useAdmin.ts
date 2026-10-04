@@ -4,7 +4,9 @@ import {
   type AdminState,
   type LogLine,
   type ModerationResult,
+  type PlayerReport,
   type RemovalNote,
+  type ReportStatus,
 } from '@fmm/shared';
 import { useCallback, useEffect, useState } from 'react';
 import { mergeLogLines } from '../data/format.js';
@@ -21,6 +23,8 @@ export function useAdmin() {
   const [locked, setLocked] = useState(false);
   const [lines, setLines] = useState<LogLine[]>([]);
   const [view, setView] = useState<AdminRoomView | null>(null);
+  /** Player reports, newest first, as the server keeps them. */
+  const [reports, setReports] = useState<PlayerReport[]>([]);
 
   useEffect(() => {
     const onConnect = () => {
@@ -39,6 +43,7 @@ export function useAdmin() {
     adminSocket.on('admin:state', setState);
     adminSocket.on('admin:log', onLog);
     adminSocket.on('admin:room', setView);
+    adminSocket.on('admin:reports', setReports);
 
     // A signed-in admin's session carries over from the game page: the socket
     // reads the token itself when the handshake is sent.
@@ -51,6 +56,7 @@ export function useAdmin() {
       adminSocket.off('admin:state');
       adminSocket.off('admin:log');
       adminSocket.off('admin:room');
+      adminSocket.off('admin:reports');
       adminSocket.disconnect();
     };
   }, []);
@@ -91,6 +97,13 @@ export function useAdmin() {
 
   const reset = useCallback((roomId?: string) => adminSocket.emit('admin:reset', { roomId }), []);
 
+  /** Resolve, dismiss or reopen a report. Every open console gets the new list. */
+  const setReportStatus = useCallback(
+    (id: string, status: ReportStatus) =>
+      new Promise<ModerationResult>((resolve) => adminSocket.emit('admin:report', { id, status }, resolve)),
+    [],
+  );
+
   /** Empties the lobby's world chat for everyone. The terminal log confirms it. */
   const clearChat = useCallback(() => adminSocket.emit('admin:clearChat'), []);
 
@@ -100,6 +113,8 @@ export function useAdmin() {
     locked,
     lines,
     view,
+    reports,
+    setReportStatus,
     kick,
     ban,
     closeRoom,

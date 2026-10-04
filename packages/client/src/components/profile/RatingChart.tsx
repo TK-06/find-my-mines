@@ -6,6 +6,8 @@ interface Props {
   series: RatingSeries;
   /** Current rating minus the starting rating. */
   sinceJoining: number;
+  /** False on someone else's profile page, where "your" would be wrong. */
+  own?: boolean;
 }
 
 /**
@@ -19,7 +21,7 @@ interface Props {
  * Hover or arrow keys move a crosshair between matches; the readout under the
  * chart says the value, so nothing is only reachable by pointing.
  */
-export function RatingChart({ series, sinceJoining }: Props) {
+export function RatingChart({ series, sinceJoining, own = true }: Props) {
   /** Index into `points`: 0 is where the line starts, n is after the nth match. */
   const [active, setActive] = useState<number | null>(null);
 
@@ -28,7 +30,9 @@ export function RatingChart({ series, sinceJoining }: Props) {
     series.total > shown
       ? `last ${shown} ranked matches`
       : shown === 1
-        ? 'your first ranked match'
+        ? own
+          ? 'your first ranked match'
+          : 'their first ranked match'
         : `all ${shown} ranked matches`;
 
   const head = (
@@ -48,10 +52,14 @@ export function RatingChart({ series, sinceJoining }: Props) {
     return (
       <section className="card">
         {head}
-        <p className="muted">
-          No ranked matches yet. Play a <strong>Ranked</strong> room while signed in and your
-          rating line starts here.
-        </p>
+        {own ? (
+          <p className="muted">
+            No ranked matches yet. Play a <strong>Ranked</strong> room while signed in and your
+            rating line starts here.
+          </p>
+        ) : (
+          <p className="muted">No ranked matches yet.</p>
+        )}
       </section>
     );
   }

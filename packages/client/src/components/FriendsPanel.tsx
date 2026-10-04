@@ -1,5 +1,5 @@
 import type { ModerationResult, OnlinePlayer, RoomSummary } from '@fmm/shared';
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   acceptFriendRequest,
   listFriendships,
@@ -15,7 +15,9 @@ import {
   type FriendRow,
   type Friendship,
 } from '../data/friendsModel.js';
+import type { SearchResult } from '../data/playerSearch.js';
 import { Avatar } from './Avatar.js';
+import { FriendSearch } from './FriendSearch.js';
 
 export interface FriendsPanelProps {
   /** The signed-in player's profile id. */
@@ -68,8 +70,6 @@ export function FriendsPanel({
   const [missingTable, setMissingTable] = useState(false);
 
   const [adding, setAdding] = useState(false);
-  const [username, setUsername] = useState('');
-  const [sending, setSending] = useState(false);
   /** How the last add, accept or remove went. */
   const [notice, setNotice] = useState<Note | null>(null);
 
@@ -118,6 +118,7 @@ export function FriendsPanel({
     () => friendRows(groups.accepted, online, rooms, myRoomId),
     [groups, online, rooms, myRoomId],
   );
+  const rowsById = useMemo(() => new Map(rows.map((row) => [row.profileId, row])), [rows]);
 
   const markBusy = (id: string, on: boolean) =>
     setBusy((current) => {
@@ -139,23 +140,29 @@ export function FriendsPanel({
     await refresh();
   }
 
-  async function submitAdd(event: FormEvent) {
-    event.preventDefault();
-    if (sending) return;
-    setSending(true);
-    const result = await sendFriendRequest(userId, username);
-    if (!alive.current) return;
-    setSending(false);
+  /** Add from the search: the request goes out by the exact name the search found. */
+  async function addFromSearch(found: SearchResult): Promise<boolean> {
+    if (busy.has(found.id)) return false;
+    markBusy(found.id, true);
+    const result = await sendFriendRequest(userId, found.username);
+    if (!alive.current) return false;
+    markBusy(found.id, false);
     setNotice({
-      text: result.message ?? (result.ok ? 'Request sent.' : 'That did not work.'),
+      text: result.message ?? (result.ok ? `Request sent to ${found.username}.` : 'That did not work.'),
       failed: !result.ok,
     });
-    if (result.ok) {
-      setUsername('');
-      setAdding(false);
-    }
     if (result.missingTable) setMissingTable(true);
     await refresh();
+    return result.ok;
+  }
+
+  async function acceptFromSearch(found: SearchResult): Promise<boolean> {
+    await change(
+      found.id,
+      () => acceptFriendRequest(userId, found.id),
+      `You and ${found.username} are friends now.`,
+    );
+    return true;
   }
 
   function showInviteNote(profileId: string, note: Note) {
@@ -214,22 +221,18 @@ export function FriendsPanel({
       </div>
 
       {adding && !missingTable && (
-        <form className="friend-add" onSubmit={(event) => void submitAdd(event)}>
-          <input
-            type="text"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            placeholder="Their exact username"
-            aria-label="Username"
-            maxLength={20}
-            autoComplete="off"
-            spellCheck={false}
-            autoFocus
-          />
-          <button className="small" type="submit" disabled={sending || !username.trim()}>
-            {sending ? 'Sending…' : 'Send request'}
-          </button>
-        </form>
+        <FriendSearch
+          userId={userId}
+          friendships={friendships}
+          online={online}
+          friendRows={rowsById}
+          busy={busy}
+          inviteNotes={inviteNotes}
+          onAdd={addFromSearch}
+          onAccept={acceptFromSearch}
+          onFriendAction={run}
+          onClose={() => setAdding(false)}
+        />
       )}
 
       {notice && (
@@ -318,7 +321,7 @@ export function FriendsPanel({
           {!loaded ? (
             <p className="muted">Loading friends…</p>
           ) : rows.length === 0 ? (
-            <p className="muted">No friends yet — add someone by their username.</p>
+            <p className="muted">No friends yet — press + Add friend and type a few letters of their name.</p>
           ) : (
             <ul className="list friend-list">
               {rows.map((row) => {

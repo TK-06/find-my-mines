@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adminAccess, isServerMachine } from './access.js';
+import { adminAccess, clientAddress, isServerMachine } from './access.js';
 
 /** This machine's own addresses, as os.networkInterfaces() would report them. */
 const OWN = ['192.168.1.20', 'fe80::1c2b:3a4d'];
@@ -119,5 +119,37 @@ describe('adminAccess', () => {
       const local = { address: '127.0.0.1', headers: {}, auth: {} };
       expect(await adminAccess(local, OWN, noAccount, SECRET)).toBe('server machine');
     });
+  });
+});
+
+describe('clientAddress', () => {
+  it('is the peer for a direct connection', () => {
+    expect(clientAddress('203.0.113.9', {})).toBe('203.0.113.9');
+    expect(clientAddress('::ffff:192.168.1.33', {})).toBe('192.168.1.33');
+  });
+
+  it("reads Cloudflare's header when the tunnel on this machine forwarded it", () => {
+    expect(clientAddress('127.0.0.1', { 'cf-connecting-ip': '198.51.100.7' })).toBe('198.51.100.7');
+    expect(clientAddress('::1', { 'cf-connecting-ip': '2001:db8::5' })).toBe('2001:db8::5');
+  });
+
+  it('falls back to the first X-Forwarded-For entry from loopback', () => {
+    expect(clientAddress('127.0.0.1', { 'x-forwarded-for': '198.51.100.7, 10.0.0.1' })).toBe('198.51.100.7');
+  });
+
+  it('never believes the headers from a machine that is not this one', () => {
+    expect(clientAddress('203.0.113.9', { 'cf-connecting-ip': '1.1.1.1', 'x-forwarded-for': '8.8.8.8' })).toBe(
+      '203.0.113.9',
+    );
+  });
+
+  it('ignores a header that is not an address, or sent twice', () => {
+    expect(clientAddress('127.0.0.1', { 'cf-connecting-ip': '<script>' })).toBe('127.0.0.1');
+    expect(clientAddress('127.0.0.1', { 'cf-connecting-ip': ['1.1.1.1', '2.2.2.2'] })).toBe('127.0.0.1');
+    expect(clientAddress('127.0.0.1', { 'x-forwarded-for': 'x'.repeat(60) })).toBe('127.0.0.1');
+  });
+
+  it('says unknown for a missing address', () => {
+    expect(clientAddress(undefined, {})).toBe('unknown');
   });
 });

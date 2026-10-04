@@ -114,7 +114,7 @@ const ACTIVITY: Record<PresenceStatus, number> = {
   lobby: 0,
 };
 
-function mostActiveTab(tabs: OnlinePlayer[]): OnlinePlayer | undefined {
+export function mostActiveTab(tabs: OnlinePlayer[]): OnlinePlayer | undefined {
   let best: OnlinePlayer | undefined;
   for (const tab of tabs) {
     if (!best || ACTIVITY[tab.status] > ACTIVITY[best.status]) best = tab;
@@ -232,6 +232,38 @@ export function requestPlan(
   if (existing.status === 'accepted') return 'already-friends';
   // They asked first: saying yes is what both of you want.
   return existing.direction === 'incoming' ? 'accept-theirs' : 'already-requested';
+}
+
+/** The friend button on a player card. */
+export interface CardFriendButton {
+  label: string;
+  /** What pressing it does; 'none' means it is shown disabled. */
+  does: 'add' | 'accept' | 'none';
+  primary: boolean;
+  /** Said under the buttons, when there is something to explain. */
+  note: string | null;
+}
+
+/**
+ * What the friend button says, given who is looking and what is already
+ * between you. `existing` is undefined while it loads and 'unknown' when it
+ * could not be read — then Add is offered and the request itself sorts it out.
+ */
+export function cardFriendButton(
+  viewerSignedIn: boolean,
+  existing: Friendship | null | 'unknown' | undefined,
+): CardFriendButton {
+  if (!viewerSignedIn) {
+    return { label: 'Add friend', does: 'none', primary: true, note: 'Sign in to add friends.' };
+  }
+  if (existing === undefined) return { label: 'Add friend', does: 'none', primary: true, note: null };
+  if (existing === null || existing === 'unknown') {
+    return { label: 'Add friend', does: 'add', primary: true, note: null };
+  }
+  if (existing.status === 'accepted') return { label: 'Friends', does: 'none', primary: false, note: null };
+  return existing.direction === 'incoming'
+    ? { label: 'Accept request', does: 'accept', primary: true, note: 'They asked to be friends.' }
+    : { label: 'Requested', does: 'none', primary: false, note: 'Waiting for them to accept.' };
 }
 
 /**

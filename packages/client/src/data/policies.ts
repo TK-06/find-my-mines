@@ -16,7 +16,7 @@ import { APP_VERSION, REPO_URL } from '../version.js';
 /** The one address people should write to (the owner asked for just this one). */
 export const CONTACT_EMAIL = 'Palangtaj@gmail.com';
 
-export const POLICY_UPDATED = '29 September 2026';
+export const POLICY_UPDATED = '3 October 2026';
 
 /** A `mailto:` link to the contact address with the subject already filled in. */
 export function contactMailto(topic: string): string {
@@ -117,7 +117,8 @@ const privacy: Policy = {
       title: 'If you play as a guest',
       blocks: [
         'Guests have no account and no profile. To the game server a guest is always a fixed 800 and never changes. The name you pick is kept in your browser tab, and by the game server while you are connected.',
-        'Your browser also keeps a small cookie called fmm_guest, so the game can greet you again and show you an unofficial rating. It holds your name, that unofficial rating, and how many ranked games you have won, lost and drawn. The rating is worked out by your browser alone; the game server never reads it, never trusts it, and never saves it. It is not a real rating and does not count on the rankings.',
+        'Your browser also keeps a small cookie called fmm_guest, so the game can greet you again and show you an unofficial rating. It holds your name, that unofficial rating, how many ranked games you have won, lost and drawn, and a random id made by your browser. The rating is worked out by your browser alone; the game server never reads it, never trusts it, and never saves it. It is not a real rating and does not count on the rankings.',
+        'The random id is sent to the game server when you pick your name. The server keeps it in memory while you are connected and uses it for one thing only: if you report someone, or someone reports you, the report says which browser it came from (see “Reports”). It is not linked to anything else and is never used for ads or analytics.',
         'The cookie stays for 30 days from the last time you played as that guest, then goes by itself. It is sent only to this site, and goes nowhere else. To remove it sooner, use “Forget me on this browser” on your profile page, or “Not you?” on the name screen — either clears it, and the list of matches your browser keeps for the game log, at once — or clear this site’s data in your browser.',
         'Matches you finish as a guest are still saved to the match log, under the name you played with.',
       ],
@@ -152,6 +153,21 @@ const privacy: Policy = {
       ],
     },
     {
+      id: 'reports',
+      title: 'Reports',
+      blocks: [
+        'Anyone in the game, guests included, can report another player from the online list. When a report is sent, the game server saves it with what the server itself knows about both of you:',
+        [
+          'the reason picked and any details written;',
+          'each person’s name at the time, and their account id if they have an account;',
+          'for guests, the random id from the fmm_guest cookie;',
+          'the id of each browser tab, and each person’s IP address;',
+          'the room either of you was in, and the time.',
+        ],
+        'Only the server’s admins can see reports, on the server console. The person reported is not told who reported them. Reports are kept for 90 days and then deleted.',
+      ],
+    },
+    {
       id: 'who-can-see',
       title: 'What other people can see',
       blocks: [
@@ -177,7 +193,7 @@ const privacy: Policy = {
           'as a guest, the name you chose — for this tab only, so a refresh does not sign you out;',
           'a random id for this tab, so if your connection drops the server can give your seat back within 30 seconds;',
           'as a guest, the ids of up to 50 matches you played in the last 30 days, with the name you used and when, so the match log can show your own games;',
-          'as a guest, a cookie called fmm_guest: your name, an unofficial rating your browser works out, and your ranked wins, losses and draws. It lasts 30 days from the last time you played as that guest, is sent only to this site, and is described under “If you play as a guest”.',
+          'as a guest, a cookie called fmm_guest: your name, an unofficial rating your browser works out, your ranked wins, losses and draws, and a random id. It lasts 30 days from the last time you played as that guest, is sent only to this site, and is described under “If you play as a guest”.',
         ],
         'The tab-only items go when you close the tab. You can clear the rest in your browser settings at any time.',
       ],
@@ -186,7 +202,7 @@ const privacy: Policy = {
       id: 'game-server',
       title: 'What the game server sees',
       blocks: [
-        'While you are connected, the game server holds your IP address in memory. Whoever runs the server can see it, next to your name and where you are, on the server console and in the server’s log output. It is not saved to our database.',
+        'While you are connected, the game server holds your IP address in memory. Whoever runs the server can see it, next to your name and where you are, on the server console and in the server’s log output. It is saved to our database only as part of a report (see “Reports”).',
         'The server also keeps a short activity log in memory — who connected, what happened in rooms, and recent game moves — so the operator can see what is going on. A restart clears it. The server’s log output may be kept for a while by the machine or hosting service that runs it.',
         'Rooms, matches in progress and the online list exist only in the server’s memory.',
       ],
@@ -198,7 +214,7 @@ const privacy: Policy = {
         [
           'No ads.',
           'No analytics or tracking.',
-          'No tracking cookies.',
+          'No tracking cookies. The one cookie is the guest cookie described above.',
           'We don’t sell your data or give it to anyone for marketing.',
         ],
       ],
@@ -216,6 +232,7 @@ const privacy: Policy = {
       title: 'How long we keep it',
       blocks: [
         'Accounts and match records stay until you ask us to delete them, or until we wipe the database.',
+        'Reports are deleted 90 days after they are sent.',
         'What the server holds in memory goes when you disconnect, or, for the activity log, when the server restarts.',
         'On your own device, the guest cookie and the guest match list go 30 days after you last played as that guest.',
       ],
@@ -382,6 +399,7 @@ const terms: Policy = {
       title: 'Moderation',
       blocks: [
         'The host of a casual Custom room can kick or ban players from that room. Server admins can kick or ban players from the server and end any game.',
+        'Anyone can report a player from the online list. Reports go to the server admins, who decide what, if anything, to do. Please report honestly — reporting someone just to get them removed is itself against these terms.',
         'We may rename offensive usernames, reset ratings, or wipe data — for example to fix a bug or to start fresh. Ratings and records have no value outside the game.',
       ],
     },
