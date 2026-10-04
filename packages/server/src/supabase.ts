@@ -1,5 +1,6 @@
 import { STARTING_ELO, avatarUrlFor, isOwnAvatarPath, type Identity } from '@fmm/shared';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { ProfileSummary } from './preview.js';
 
 /**
  * Server-side Supabase access.
@@ -80,6 +81,40 @@ export async function areFriends(a: string, b: string): Promise<boolean> {
   } catch (error) {
     console.error('[friends] could not check a friendship:', error);
     return false;
+  }
+}
+
+/**
+ * What a link preview says about a public profile: the name, rating and games
+ * played of the account with this exact username. Only those three columns are
+ * read — a link preview shows what anyone can see on /u/<name>, nothing more.
+ *
+ * Null when Supabase is off, there is no such account, or anything goes wrong:
+ * the link then unfurls as the site's default card. The caller bounds how long
+ * this may take and how often it runs (ProfileLookup in preview.ts).
+ */
+export async function profileForPreview(username: string): Promise<ProfileSummary | null> {
+  if (!admin) return null;
+
+  try {
+    const { data, error } = await admin
+      .from('profiles')
+      .select('username, elo, games_played')
+      .eq('username', username)
+      .maybeSingle();
+    if (error) {
+      console.error('[preview] could not read a profile:', error.message);
+      return null;
+    }
+    if (!data) return null;
+
+    // Anything unexpected in the row is no profile at all, never a half card.
+    const { username: name, elo, games_played: gamesPlayed } = data as Record<string, unknown>;
+    if (typeof name !== 'string' || !Number.isFinite(elo) || !Number.isFinite(gamesPlayed)) return null;
+    return { username: name, elo: elo as number, gamesPlayed: gamesPlayed as number };
+  } catch (error) {
+    console.error('[preview] could not read a profile:', error);
+    return null;
   }
 }
 

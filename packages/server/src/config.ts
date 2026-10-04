@@ -24,6 +24,33 @@ const corsList = (process.env.CORS_ORIGIN ?? '*')
 export const CORS_ORIGIN: string | string[] =
   corsList.length === 1 ? corsList[0]! : corsList;
 
+/** Where the game lives when PUBLIC_URL does not say otherwise. */
+const DEFAULT_PUBLIC_URL = 'https://findmymines.app';
+
+/**
+ * The address to put in a link preview, from a PUBLIC_URL value: an http(s)
+ * address with its trailing slash dropped, or the default for anything else —
+ * unset, blank, not a URL, or another scheme (javascript:, ftp:). Any query,
+ * fragment or login in it is dropped too.
+ */
+export function publicUrlFrom(raw: string | undefined): string {
+  try {
+    const url = new URL((raw ?? '').trim());
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return DEFAULT_PUBLIC_URL;
+    return url.origin + url.pathname.replace(/\/+$/, '');
+  } catch {
+    return DEFAULT_PUBLIC_URL;
+  }
+}
+
+/**
+ * Optional. The public address of the game, used for the og:url of the link
+ * previews that chat apps unfurl from a /join/CODE or /u/NAME link (see
+ * preview.ts), e.g. PUBLIC_URL=https://findmymines.app. It is set here, never
+ * built from the request's Host header, which a visitor controls.
+ */
+export const PUBLIC_URL = publicUrlFrom(process.env.PUBLIC_URL);
+
 /**
  * Optional password for the /admin console: a third way in, beside the server
  * machine and an admin account. Set it on a public host (behind a proxy the

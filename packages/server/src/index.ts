@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,11 +57,22 @@ import { createAdvisor } from './ai/advisor.js';
 import { createJevPicker } from './ai/jev.js';
 import { BotController } from './ai/botController.js';
 import { contain, respond, settleWithin } from './safety.js';
-import { ADVERTISED_HOST, AI_MODEL, CORS_ORIGIN, GROQ_API_KEY, HOST, JEV_API_KEY, JEV_MODEL, PORT } from './config.js';
+import {
+  ADVERTISED_HOST,
+  AI_MODEL,
+  CORS_ORIGIN,
+  GROQ_API_KEY,
+  HOST,
+  JEV_API_KEY,
+  JEV_MODEL,
+  PORT,
+  PUBLIC_URL,
+} from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
 import { deleteOldReports, loadRecentReports, saveReport, saveReportStatus } from './persistence/reportRecorder.js';
-import { areFriends, guestIdentity, identityFromToken, supabaseEnabled } from './supabase.js';
+import { ProfileLookup, previewFor, renderPreview } from './preview.js';
+import { areFriends, guestIdentity, identityFromToken, profileForPreview, supabaseEnabled } from './supabase.js';
 import type { FinishedMatch, MatchBroadcaster, MatchManager } from './match/matchManager.js';
 import { RoomManager } from './rooms/roomManager.js';
 import { ChatLimit } from './state/chatLimit.js';
@@ -1563,11 +1575,54 @@ app.get('/health', httpLimit, (_req, res) => {
 // In production the built client is served from the same origin as the socket,
 // so there is one port to open on EC2 and no CORS to configure.
 const clientDist = path.resolve(__dirname, '../../client/dist');
+const indexFile = path.join(clientDist, 'index.html');
 app.use(express.static(clientDist));
-app.get('*', httpLimit, (_req, res) => {
-  res.sendFile(path.join(clientDist, 'index.html'), (err) => {
-    if (err) res.status(404).send('Client not built. Run `npm run build`, or use `npm run dev`.');
-  });
+
+/**
+ * The built index.html, read when first asked for and again only if the file
+ * changed (a rebuild while the server runs), judged by a cheap stat. Null while
+ * there is no build, so the next request tries again.
+ */
+let indexPage: { mtimeMs: number; size: number; html: string } | null = null;
+
+async function builtIndexHtml(): Promise<string | null> {
+  try {
+    const info = await stat(indexFile);
+    if (indexPage?.mtimeMs === info.mtimeMs && indexPage.size === info.size) return indexPage.html;
+    const html = await readFile(indexFile, 'utf8');
+    indexPage = { mtimeMs: info.mtimeMs, size: info.size, html };
+    return html;
+  } catch {
+    return null;
+  }
+}
+
+/** Profile cards: answers remembered for a minute, so a crawler cannot lean on Supabase. */
+const previewProfiles = new ProfileLookup(profileForPreview);
+
+// Every other path gets the app, so deep links work. A room's share link and a
+// player's profile link get their own title and description first: that is
+// what chat apps read to draw the link's card (see preview.ts). Anything that
+// goes wrong building that card sends the page as built.
+app.get('*', httpLimit, async (req, res) => {
+  const html = await builtIndexHtml();
+  if (html === null) {
+    res.status(404).send('Client not built. Run `npm run build`, or use `npm run dev`.');
+    return;
+  }
+
+  let page = html;
+  try {
+    const card = await previewFor(req.path, {
+      room: (code) => rooms.get(code)?.summary(),
+      profile: (name) => previewProfiles.get(name),
+    });
+    if (card) page = renderPreview(html, card, PUBLIC_URL);
+  } catch (error) {
+    console.error('[preview] could not build a link preview:', error);
+  }
+
+  res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }).send(page);
 });
 
 // ── last line of defence ────────────────────────────────────────────────────
