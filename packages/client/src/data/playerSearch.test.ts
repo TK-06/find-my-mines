@@ -1,7 +1,61 @@
 import type { OnlinePlayer } from '@fmm/shared';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Friendship } from './friendsModel.js';
-import { escapeLike, normalizeQuery, presenceText, rankResults, searchPattern, type FoundProfile } from './playerSearch.js';
+import {
+  SEARCH_MIN_CHARS,
+  escapeLike,
+  normalizeQuery,
+  presenceText,
+  rankResults,
+  searchPattern,
+  searchProfiles,
+  type FoundProfile,
+} from './playerSearch.js';
+
+/**
+ * A stand-in Supabase client that records each query's builder calls and
+ * answers every one with the same canned rows. Enough to check what a search
+ * asks for without a database. `configured: false` plays the part of a build
+ * with no Supabase keys.
+ */
+const fake = vi.hoisted(() => {
+  type Step = [string, unknown[]];
+  const state = {
+    calls: [] as { table: string; steps: Step[] }[],
+    rows: [] as unknown[],
+    configured: true,
+  };
+
+  function from(table: string): unknown {
+    const call = { table, steps: [] as Step[] };
+    state.calls.push(call);
+    const chain: unknown = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          // Awaiting the builder runs the query.
+          if (prop === 'then') {
+            return (resolve: (r: unknown) => unknown) => resolve({ data: state.rows, error: null });
+          }
+          return (...args: unknown[]) => {
+            call.steps.push([String(prop), args]);
+            return chain;
+          };
+        },
+      },
+    );
+    return chain;
+  }
+
+  return { state, client: { from } };
+});
+
+// Hoisted above the import of playerSearch.js, so it sees this client.
+vi.mock('../auth/supabase.js', () => ({
+  get supabase() {
+    return fake.state.configured ? fake.client : null;
+  },
+}));
 
 const profile = (id: string, username: string, elo = 800): FoundProfile => ({ id, username, elo, avatarUrl: null });
 
@@ -39,6 +93,24 @@ describe('search text', () => {
   });
 });
 
+describe('searching from the first letter', () => {
+  it('starts at one character', () => {
+    expect(SEARCH_MIN_CHARS).toBe(1);
+  });
+
+  it('keeps a single letter as the query, and a blank one as nothing', () => {
+    expect(normalizeQuery(' a ')).toBe('a');
+    expect(searchPattern('a')).toBe('%a%');
+    expect(normalizeQuery('   ').length).toBeLessThan(SEARCH_MIN_CHARS);
+  });
+
+  it('matches a lone wildcard character literally', () => {
+    expect(searchPattern('_')).toBe('%\\_%');
+    expect(searchPattern('%')).toBe('%\\%%');
+    expect(searchPattern('\\')).toBe('%\\\\%');
+  });
+});
+
 describe('rankResults', () => {
   const found = [
     profile('p-tapioca', 'tapioca'),
@@ -64,6 +136,23 @@ describe('rankResults', () => {
     expect(ranked).toEqual(['tanuki88', 'tamago', 'rata', 'tapioca', 'taro']);
   });
 
+  it('ranks a one-letter query the same way: names that start with it come first', () => {
+    const names = [profile('p1', 'bob'), profile('p2', 'abe'), profile('p3', 'barb'), profile('p4', 'cab')];
+    const ranked = rankResults(names, 'b', { myId: 'me', friendships: [], online: [] });
+    expect(ranked.map((r) => r.username)).toEqual(['barb', 'bob', 'abe', 'cab']);
+    expect(ranked.map((r) => r.prefix)).toEqual([true, true, false, false]);
+  });
+
+  it('puts a friend and an online player ahead of a name that merely starts with the letter', () => {
+    const names = [profile('p-bea', 'bea'), profile('p-abe', 'abe'), profile('p-cab', 'cab')];
+    const ranked = rankResults(names, 'b', {
+      myId: 'me',
+      friendships: [friendship('p-cab', 'accepted', 'outgoing')],
+      online: [tab('p-abe', 'lobby')],
+    });
+    expect(ranked.map((r) => r.username)).toEqual(['cab', 'abe', 'bea']);
+  });
+
   it('marks requests both ways and leaves strangers as none', () => {
     const ranked = rankResults(
       found,
@@ -82,6 +171,12 @@ describe('rankResults', () => {
     expect(ranked.filter((r) => r.id === 'p-tamago')).toHaveLength(1);
   });
 
+  it('lists everyone for a guest, who has no profile to hide and no friends', () => {
+    const ranked = rankResults(found, 'ta', { myId: null, friendships: [], online: context.online });
+    expect(ranked.some((r) => r.id === 'me')).toBe(true);
+    expect(ranked.every((r) => r.relation === 'none')).toBe(true);
+  });
+
   it('shows the busiest tab of someone online twice', () => {
     const ranked = rankResults([profile('p-x', 'tax')], 'ta', {
       ...context,
@@ -92,5 +187,48 @@ describe('rankResults', () => {
 
   it('stops at the limit', () => {
     expect(rankResults(found, 'ta', context, 2)).toHaveLength(2);
+  });
+});
+
+describe('searchProfiles', () => {
+  beforeEach(() => {
+    fake.state.calls.length = 0;
+    fake.state.rows = [];
+    fake.state.configured = true;
+  });
+
+  type Call = (typeof fake.state.calls)[number];
+  const step = (call: Call | undefined, name: string) => call?.steps.find(([n]) => n === name)?.[1];
+
+  it('searches profiles for a single letter', async () => {
+    fake.state.rows = [{ id: 'p1', username: 'anna', elo: 812 }];
+
+    const outcome = await searchProfiles('a', []);
+
+    expect(outcome).toEqual({ ok: true, found: [{ id: 'p1', username: 'anna', elo: 812, avatarUrl: null }] });
+    // No friends to look for separately, so one query.
+    expect(fake.state.calls).toHaveLength(1);
+    expect(fake.state.calls[0]?.table).toBe('profiles');
+    expect(step(fake.state.calls[0], 'ilike')).toEqual(['username', '%a%']);
+  });
+
+  it('escapes a lone wildcard, and looks for friends on their own too', async () => {
+    await searchProfiles('_', ['f1', 'f2']);
+
+    const [everyone, friends] = fake.state.calls;
+    expect(step(everyone, 'ilike')).toEqual(['username', '%\\_%']);
+    expect(step(friends, 'ilike')).toEqual(['username', '%\\_%']);
+    expect(step(everyone, 'in')).toBeUndefined();
+    expect(step(friends, 'in')).toEqual(['id', ['f1', 'f2']]);
+  });
+
+  it('sends nothing for a blank box', async () => {
+    expect(await searchProfiles('   ', [])).toEqual({ ok: true, found: [] });
+    expect(fake.state.calls).toHaveLength(0);
+  });
+
+  it('finds nobody, and does not throw, when Supabase is not configured', async () => {
+    fake.state.configured = false;
+    expect(await searchProfiles('a', [])).toEqual({ ok: true, found: [] });
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "findmymines",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "private": true,
   "type": "module",
   "description": "Find My Mines - a two-player online minesweeper-style game over Socket.IO (Net-Centric course assignment)",

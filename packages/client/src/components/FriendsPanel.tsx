@@ -1,21 +1,9 @@
 import type { ModerationResult, OnlinePlayer, RoomSummary } from '@fmm/shared';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  acceptFriendRequest,
-  listFriendships,
-  removeFriendship,
-  sendFriendRequest,
-  type FriendsResult,
-} from '../data/friends.js';
-import {
-  MISSING_TABLE_MESSAGE,
-  friendRows,
-  groupFriendships,
-  type FriendAction,
-  type FriendRow,
-  type Friendship,
-} from '../data/friendsModel.js';
-import type { SearchResult } from '../data/playerSearch.js';
+import { useMemo, useState } from 'react';
+import { acceptFriendRequest, removeFriendship } from '../data/friends.js';
+import { MISSING_TABLE_MESSAGE, friendRows, groupFriendships } from '../data/friendsModel.js';
+import { useFriendships } from '../data/useFriendships.js';
+import { PlayerLink } from '../router.js';
 import { Avatar } from './Avatar.js';
 import { FriendSearch } from './FriendSearch.js';
 
@@ -31,27 +19,18 @@ export interface FriendsPanelProps {
   onJoin: (roomId: string) => void;
   onWatch: (roomId: string) => void;
   onInvite: (profileId: string) => Promise<ModerationResult>;
-}
-
-/**
- * How long "Invited" (or why not) replaces the Invite button. Matches the
- * server's cooldown, so the button comes back when inviting works again.
- */
-const INVITE_NOTE_MS = 10_000;
-
-interface Note {
-  text: string;
-  failed: boolean;
+  /** Opens someone's public profile: every name here is a link to it. */
+  onViewProfile: (username: string) => void;
 }
 
 /**
  * The friends list on the profile page: requests waiting on you, requests you
  * sent, then your friends and where each one is right now.
  *
- * Friendships live in Supabase. Where a friend is comes from the live online
- * list, so a dot changes the moment they start or leave a game — only the
- * friendships themselves are refetched (on mount, after every change, and when
- * the window regains focus).
+ * Friendships live in Supabase (`useFriendships`). Where a friend is comes from
+ * the live online list, so a dot changes the moment they start or leave a game
+ * — only the friendships themselves are refetched (on mount, after every
+ * change, and when the window regains focus).
  */
 export function FriendsPanel({
   userId,
@@ -61,57 +40,27 @@ export function FriendsPanel({
   onJoin,
   onWatch,
   onInvite,
+  onViewProfile,
 }: FriendsPanelProps) {
-  const [friendships, setFriendships] = useState<Friendship[]>([]);
-  /** Profile pictures by profile id, read with the friendships. */
-  const [pictures, setPictures] = useState<ReadonlyMap<string, string>>(new Map());
-  const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [missingTable, setMissingTable] = useState(false);
+  const {
+    friendships,
+    pictures,
+    loaded,
+    error: loadError,
+    missingTable,
+    busy,
+    notice,
+    setNotice,
+    inviteNotes,
+    change,
+    addFromSearch,
+    acceptFromSearch,
+    run,
+  } = useFriendships(userId, { onJoin, onWatch, onInvite });
 
   const [adding, setAdding] = useState(false);
-  /** How the last add, accept or remove went. */
-  const [notice, setNotice] = useState<Note | null>(null);
-
-  /** People with a change in flight, so their buttons cannot be pressed twice. */
-  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   /** The friend whose Remove is waiting for a second, deliberate click. */
   const [confirming, setConfirming] = useState<string | null>(null);
-  /** "Invited", or why not, per friend — shown for a few seconds. */
-  const [inviteNotes, setInviteNotes] = useState<ReadonlyMap<string, Note>>(new Map());
-
-  const alive = useRef(true);
-  const loadCount = useRef(0);
-  const noteTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-
-  useEffect(() => {
-    alive.current = true;
-    const timers = noteTimers.current;
-    return () => {
-      alive.current = false;
-      for (const timer of timers.values()) clearTimeout(timer);
-      timers.clear();
-    };
-  }, []);
-
-  const refresh = useCallback(async () => {
-    const mine = ++loadCount.current;
-    const result = await listFriendships(userId);
-    // The panel went away, or a newer load started, while this one was out.
-    if (!alive.current || mine !== loadCount.current) return;
-    setFriendships(result.friendships);
-    setPictures(result.pictures);
-    setLoadError(result.error);
-    setMissingTable(result.missingTable);
-    setLoaded(true);
-  }, [userId]);
-
-  useEffect(() => {
-    void refresh();
-    const onFocus = () => void refresh();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [refresh]);
 
   const groups = useMemo(() => groupFriendships(friendships), [friendships]);
   const rows = useMemo(
@@ -119,88 +68,6 @@ export function FriendsPanel({
     [groups, online, rooms, myRoomId],
   );
   const rowsById = useMemo(() => new Map(rows.map((row) => [row.profileId, row])), [rows]);
-
-  const markBusy = (id: string, on: boolean) =>
-    setBusy((current) => {
-      const next = new Set(current);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-
-  /** One friendship change for one person, then a fresh list. */
-  async function change(otherId: string, work: () => Promise<FriendsResult>, success?: string) {
-    markBusy(otherId, true);
-    const result = await work();
-    if (!alive.current) return;
-    markBusy(otherId, false);
-    if (!result.ok) setNotice({ text: result.message ?? 'That did not work.', failed: true });
-    else setNotice(success ? { text: success, failed: false } : null);
-    if (result.missingTable) setMissingTable(true);
-    await refresh();
-  }
-
-  /** Add from the search: the request goes out by the exact name the search found. */
-  async function addFromSearch(found: SearchResult): Promise<boolean> {
-    if (busy.has(found.id)) return false;
-    markBusy(found.id, true);
-    const result = await sendFriendRequest(userId, found.username);
-    if (!alive.current) return false;
-    markBusy(found.id, false);
-    setNotice({
-      text: result.message ?? (result.ok ? `Request sent to ${found.username}.` : 'That did not work.'),
-      failed: !result.ok,
-    });
-    if (result.missingTable) setMissingTable(true);
-    await refresh();
-    return result.ok;
-  }
-
-  async function acceptFromSearch(found: SearchResult): Promise<boolean> {
-    await change(
-      found.id,
-      () => acceptFriendRequest(userId, found.id),
-      `You and ${found.username} are friends now.`,
-    );
-    return true;
-  }
-
-  function showInviteNote(profileId: string, note: Note) {
-    setInviteNotes((current) => new Map(current).set(profileId, note));
-    const timers = noteTimers.current;
-    const previous = timers.get(profileId);
-    if (previous) clearTimeout(previous);
-    timers.set(
-      profileId,
-      setTimeout(() => {
-        timers.delete(profileId);
-        setInviteNotes((current) => {
-          const next = new Map(current);
-          next.delete(profileId);
-          return next;
-        });
-      }, INVITE_NOTE_MS),
-    );
-  }
-
-  async function invite(profileId: string) {
-    markBusy(profileId, true);
-    const result = await onInvite(profileId);
-    if (!alive.current) return;
-    markBusy(profileId, false);
-    showInviteNote(
-      profileId,
-      result.ok
-        ? { text: 'Invited', failed: false }
-        : { text: result.error ?? 'Could not invite.', failed: true },
-    );
-  }
-
-  function run(row: FriendRow, action: FriendAction) {
-    if (action.kind === 'watch') onWatch(action.roomId);
-    else if (action.kind === 'join') onJoin(action.roomId);
-    else void invite(row.profileId);
-  }
 
   return (
     <section className="card friends-panel">
@@ -231,6 +98,7 @@ export function FriendsPanel({
           onAdd={addFromSearch}
           onAccept={acceptFromSearch}
           onFriendAction={run}
+          onViewProfile={onViewProfile}
           onClose={() => setAdding(false)}
         />
       )}
@@ -257,7 +125,9 @@ export function FriendsPanel({
                     url={pictures.get(request.otherId)}
                   />
                   <span className="friend-main">
-                    <strong className="friend-name">{request.otherName}</strong>
+                    <strong className="friend-name">
+                      <PlayerLink name={request.otherName} onOpen={onViewProfile} />
+                    </strong>
                     <span className="friend-status">wants to be friends</span>
                   </span>
                   <span className="friend-actions">
@@ -299,7 +169,9 @@ export function FriendsPanel({
                     url={pictures.get(request.otherId)}
                   />
                   <span className="friend-main">
-                    <strong className="friend-name">{request.otherName}</strong>
+                    <strong className="friend-name">
+                      <PlayerLink name={request.otherName} onOpen={onViewProfile} />
+                    </strong>
                     <span className="friend-status">Request sent</span>
                   </span>
                   <span className="friend-actions">
@@ -331,7 +203,9 @@ export function FriendsPanel({
                   <li key={row.profileId} className="friend-row">
                     <Avatar className="friend-avatar" name={row.name} url={pictures.get(row.profileId)} />
                     <span className="friend-main">
-                      <strong className="friend-name">{row.name}</strong>
+                      <strong className="friend-name">
+                        <PlayerLink name={row.name} onOpen={onViewProfile} />
+                      </strong>
                       <span className="friend-status">
                         <span className={`friend-dot ${row.dot}`} aria-hidden />
                         {row.statusText}

@@ -234,6 +234,47 @@ export function requestPlan(
   return existing.direction === 'incoming' ? 'accept-theirs' : 'already-requested';
 }
 
+/** One line of feedback: how a request went, or why an invite did not. */
+export interface FriendNote {
+  text: string;
+  failed: boolean;
+}
+
+/** What a friendship call answered. Structural, so this file never imports the I/O one. */
+interface Answer {
+  ok: boolean;
+  message?: string;
+}
+
+/**
+ * The people with a change in flight, with `id` added or taken away. A new set
+ * each time, so React sees the change.
+ */
+export function withBusy(current: ReadonlySet<string>, id: string, on: boolean): ReadonlySet<string> {
+  const next = new Set(current);
+  if (on) next.add(id);
+  else next.delete(id);
+  return next;
+}
+
+/** What to say after a friend request went out — or why it did not. */
+export function requestNotice(answer: Answer, username: string): FriendNote {
+  return {
+    text: answer.message ?? (answer.ok ? `Request sent to ${username}.` : 'That did not work.'),
+    failed: !answer.ok,
+  };
+}
+
+/**
+ * What to say after accepting, declining, cancelling or removing: the failure
+ * when it failed, `success` when it worked and there is something to say, else
+ * nothing (the list changing is the news).
+ */
+export function changeNotice(answer: Answer, success?: string): FriendNote | null {
+  if (!answer.ok) return { text: answer.message ?? 'That did not work.', failed: true };
+  return success ? { text: success, failed: false } : null;
+}
+
 /** The friend button on a player card. */
 export interface CardFriendButton {
   label: string;

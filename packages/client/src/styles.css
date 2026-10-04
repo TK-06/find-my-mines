@@ -607,6 +607,22 @@ input[type='checkbox'] { accent-color: var(--ink); }
   align-items: start;
 }
 .online-panel { position: sticky; top: 16px; }
+/* The card's headline: how many people are connected, big enough to read at a
+   glance. It is still the card's h3, so it reads "12 online now". */
+.online-count { display: flex; align-items: baseline; gap: 8px; margin: 0 0 14px; }
+.online-count-number {
+  font-family: var(--display);
+  font-stretch: 112%;
+  font-weight: 800;
+  font-size: 32px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.online-count-label { font-size: 14px; font-weight: 600; color: var(--slate); }
+/* "Find a player" under it. Its dropdown is absolutely placed, so it floats over
+   the list below — nothing here clips it (the card has no overflow). */
+.lobby-search { margin-bottom: 14px; }
+.lobby-search-note { margin: 8px 0 0; }
 .online-list li { flex-direction: column; align-items: flex-start; gap: 4px; }
 .online-who { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .online-where {
@@ -1291,9 +1307,13 @@ a.button-link:hover { background: var(--slate); border-color: var(--slate); }
 .search-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-hit { background: var(--cover); color: var(--ink); border-radius: 3px; padding: 0 1px; }
 .search-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--slate); }
+/* The lobby's column is narrow: a long "Looking for a match" is cut, not pushed past the button. */
+.search-meta-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-action button.small { padding: 4px 10px; font-size: 12px; }
-.friends-panel p.search-state { padding: 6px 10px; font-size: 13px; color: var(--slate); }
-.friends-panel p.search-state:empty { display: none; }
+.friend-search p.search-state { padding: 6px 10px; font-size: 13px; color: var(--slate); }
+.friend-search p.search-state:empty { display: none; }
+/* A guest typing: what they cannot do here, between the box and the dropdown. */
+.search-guest-note { margin: 8px 0 0; }
 .search-foot {
   display: flex;
   gap: 14px;
@@ -1340,6 +1360,15 @@ kbd {
 }
 .friend-main { display: grid; gap: 2px; min-width: 0; }
 .friend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A player's name as a link (Friends card, search results): the bold name it
+   was, underlined only on hover. Other clicks are the browser's — a new tab etc. */
+a.player-link {
+  color: inherit;
+  text-decoration: underline transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.12s;
+}
+a.player-link:hover { text-decoration-color: currentColor; }
 .friend-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--slate); }
 .friend-dot {
   width: 8px; height: 8px; border-radius: 50%;
@@ -1429,7 +1458,13 @@ kbd {
   padding: 12px 8px;
   text-align: center;
 }
-.ai-tile[aria-checked='true'] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+/* The picked tile keeps its ink edge under hover too: the :hover line is more
+   specific than the ghost hover rule that would turn the edge slate. */
+.ai-tile[aria-checked='true'],
+.ai-tile.ghost[aria-checked='true']:hover:not(:disabled) {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
 .ai-tile-name { font-size: 14px; }
 .ai-tile-note { font-size: 12px; font-weight: 500; color: var(--slate); }
 /* Not playable yet: dashed and dim, but still focusable so it can explain itself. */
@@ -1469,13 +1504,38 @@ kbd {
 .ai-seg-option + .ai-seg-option { margin-left: -1px; }
 .ai-seg-option:first-child { border-radius: var(--r) 0 0 var(--r); }
 .ai-seg-option:last-child { border-radius: 0 var(--r) var(--r) 0; }
-.ai-seg-option[aria-checked='true'] {
+/* The picked one: ink fill, paper text, and two cues that are not colour — a
+   heavier label and a paper ring inside the edge. The :hover and :focus-visible
+   lines sit at higher specificity than `button.ghost:hover:not(:disabled)`,
+   which would otherwise swap the fill to --sunken and leave paper text on it. */
+.ai-seg-option[aria-checked='true'],
+.ai-seg-option.ghost[aria-checked='true']:hover:not(:disabled),
+.ai-seg-option.ghost[aria-checked='true']:focus-visible {
   position: relative;
   background: var(--ink);
   border-color: var(--ink);
   color: var(--paper);
+  font-weight: 800;
+  box-shadow:
+    inset 0 0 0 1px var(--ink),
+    inset 0 0 0 3px var(--paper);
 }
 .ai-seg-option[aria-checked='true'] .ai-seg-sub { color: inherit; opacity: 0.75; }
+/* A phone keeps :hover on whatever was tapped last, so the ghost hover look
+   belongs to real pointers only. First switch the base rule off for these two
+   controls, then give it back where hovering exists. */
+.ai-seg-option.ghost:hover:not(:disabled),
+.ai-tile.ghost:hover:not(:disabled) {
+  background: transparent;
+  border-color: var(--rule);
+}
+@media (hover: hover) {
+  .ai-seg-option.ghost:hover:not(:disabled),
+  .ai-tile.ghost:hover:not(:disabled) {
+    background: var(--sunken);
+    border-color: var(--slate);
+  }
+}
 .ai-seg-sub { font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--slate); }
 .ai-summary { font-family: var(--mono); font-size: 13px; }
 .ai-play { width: 100%; min-height: 48px; font-size: 15px; }

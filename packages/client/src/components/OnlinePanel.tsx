@@ -1,7 +1,9 @@
 import type { ModerationResult, OnlinePlayer, ReportReason, RoomSummary } from '@fmm/shared';
 import { useEffect, useRef, useState } from 'react';
+import { authEnabled } from '../auth/supabase.js';
 import { presenceLabel } from '../data/format.js';
 import { PRIVATE_ROOM_TEXT } from '../data/friendsModel.js';
+import { LobbyFriendSearch } from './LobbyFriendSearch.js';
 import { PlayerCard } from './PlayerCard.js';
 import { ReportDialog } from './ReportDialog.js';
 
@@ -12,6 +14,8 @@ interface Props {
   rooms: RoomSummary[];
   /** Same action as the game list's Join — an ask-to-join room opens the request. */
   onJoin: (roomId: string) => void;
+  /** Spectate a friend's game, from the search's Watch button. */
+  onWatch: (roomId: string) => void;
   /** Someone else's public profile page. */
   onViewProfile: (username: string) => void;
   /** Your own name goes straight to your profile. */
@@ -26,10 +30,21 @@ interface Props {
  * server first. Then, the server will provide information about the other
  * connected client." The server pushes this list on every change.
  *
- * Each name opens that player's card (stats, View profile, Add friend, and
+ * The count is the headline. Under it, "Find a player" searches everyone (not
+ * just who is connected); the list below stays the graded roster. Each name in
+ * the list opens that player's card (stats, View profile, Add friend, and
  * Report behind ⋯); your own name opens your profile.
  */
-export function OnlinePanel({ online, myId, rooms, onJoin, onViewProfile, onOpenOwnProfile, onReport }: Props) {
+export function OnlinePanel({
+  online,
+  myId,
+  rooms,
+  onJoin,
+  onWatch,
+  onViewProfile,
+  onOpenOwnProfile,
+  onReport,
+}: Props) {
   // Yourself first, then everyone else in the order they connected.
   const ordered = [...online].sort((a, b) => Number(b.id === myId) - Number(a.id === myId));
   const roomsById = new Map(rooms.map((room) => [room.id, room]));
@@ -57,10 +72,23 @@ export function OnlinePanel({ online, myId, rooms, onJoin, onViewProfile, onOpen
 
   return (
     <aside className="card online-panel">
-      <div className="lobby-head" style={{ marginBottom: 12 }}>
-        <h3 style={{ margin: 0 }}>Online now</h3>
-        <span className="tag">{online.length}</span>
-      </div>
+      {/* The number is the news, so it is big; the heading still reads "N online now". */}
+      <h3 className="online-count">
+        <span className="online-count-number">{online.length}</span> <span className="online-count-label">online now</span>
+      </h3>
+
+      {/* Without Supabase there are no profiles to search, and a box that
+          always says "nobody" would only look broken. */}
+      {authEnabled && (
+        <LobbyFriendSearch
+          viewerProfileId={viewerProfileId}
+          online={online}
+          rooms={rooms}
+          onJoin={onJoin}
+          onWatch={onWatch}
+          onViewProfile={onViewProfile}
+        />
+      )}
 
       {ordered.length <= 1 ? (
         <p className="muted" style={{ margin: 0 }}>

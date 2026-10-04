@@ -4,16 +4,20 @@ import { isMissingColumn, pictureUrl } from './avatar.js';
 import { mostActiveTab, type Friendship } from './friendsModel.js';
 
 /**
- * Finding players by a few letters of their username, for the friends list's
- * type-ahead. Profiles are publicly readable (migration 0001), so this reads
- * them straight from the browser with the public key.
+ * Finding players by a few letters of their username, for the type-ahead on
+ * the Friends card and in the lobby. Profiles are publicly readable (migration
+ * 0001), so this reads them straight from the browser with the public key.
  *
  * The ranking is pure and tested here; the two small functions at the end do
  * the reading.
  */
 
-/** Fewer letters than this matches too many people to be useful. */
-export const SEARCH_MIN_CHARS = 2;
+/**
+ * A search starts at the first letter. One letter matches a lot of people, but
+ * the dropdown only ever shows the best few (friends, then people online), so
+ * waiting for a second letter only made the box feel dead.
+ */
+export const SEARCH_MIN_CHARS = 1;
 /** Rows the dropdown shows. */
 export const SEARCH_LIMIT = 8;
 /** Typing pauses this long before a search goes out. */
@@ -63,12 +67,12 @@ const GROUP: Record<SearchRelation, number> = { friend: 0, incoming: 1, outgoing
  * Found profiles in the order the dropdown shows them: **friends first**, then
  * everyone else. Inside each group, people online now come first, then names
  * that start with what was typed, then the rest by name. You never find
- * yourself.
+ * yourself. A guest has no profile to be (`myId` null), and no friendships.
  */
 export function rankResults(
   found: FoundProfile[],
   query: string,
-  context: { myId: string; friendships: Friendship[]; online: OnlinePlayer[] },
+  context: { myId: string | null; friendships: Friendship[]; online: OnlinePlayer[] },
   limit = SEARCH_LIMIT,
 ): SearchResult[] {
   const needle = normalizeQuery(query).toLowerCase();
