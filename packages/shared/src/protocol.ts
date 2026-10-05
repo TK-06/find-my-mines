@@ -89,6 +89,21 @@ export interface MatchReplayNotice {
   coach: boolean;
 }
 
+/** A Fruit Fly move's public-board-only neural activity, sent just before the reveal. */
+export interface FlyThoughtNotice {
+  roomId: string;
+  botId: string;
+  /** The number of cells already revealed when the fly chose this move. */
+  move: number;
+  pick: { row: number; col: number };
+  steps: number;
+  neurons: number;
+  /** One byte per rate, base64-encoded in step-major order. */
+  rates: string;
+  /** At most 40 display candidates; larger frontiers show the pick and best-scoring alternatives. */
+  candidates: { row: number; col: number; score: number }[];
+}
+
 /** Whether the coach can be asked about a game, and how many questions this person has left. */
 export interface ReviewCoachResult {
   ok: boolean;
@@ -304,6 +319,12 @@ export interface ServerToClientEvents {
    * still on screen.
    */
   'ai:hintWhy': (payload: { row: number; col: number; why: string }) => void;
+
+  /**
+   * The Fruit Fly's thought for a move, derived only from the public board and
+   * broadcast to the room immediately before the bot reveals its picked cell.
+   */
+  'ai:flyThought': (payload: FlyThoughtNotice) => void;
 
   /** The world chat so far, sent once after you pick a name. Oldest first. */
   'lobby:history': (messages: LobbyMessage[]) => void;

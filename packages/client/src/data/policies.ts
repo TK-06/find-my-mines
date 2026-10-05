@@ -190,6 +190,7 @@ const privacy: Policy = {
         'The game uses your browser’s local storage and session storage, and sets one cookie, only for guests (the last item). It keeps:',
         [
           'your theme, light or dark;',
+          'whether the Fruit Fly brain panel is open or closed in a game against the Fruit Fly;',
           'whether game sounds and vibration are on or off, set with the speaker button at the top of every page (both start on);',
           'in Puzzle mode, your fastest time on each level and, for the Daily puzzle, how your first try of each day went (won or lost, the time and the hints used, for about the last 13 months), your streak, your best Daily time, how many Dailies you have played, and — until you finish it — the Daily game you have started, so a refresh does not lose it. It stays in your browser and is never sent to the game server;',
           'your sign-in session, if you sign in, so you stay signed in (managed by Supabase);',

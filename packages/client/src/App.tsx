@@ -54,6 +54,11 @@ const PuzzleScreen = lazy(() => import('./screens/PuzzleScreen.js').then((m) => 
 // log, never on the way to a first game, so it loads as its own chunk.
 const ReviewScreen = lazy(() => import('./screens/ReviewScreen.js').then((m) => ({ default: m.ReviewScreen })));
 
+// The Fruit Fly brain: its map data and canvas only load in a fly room.
+const FlyBrainPanel = lazy(() =>
+  import('./components/fly/FlyBrainPanel.js').then((m) => ({ default: m.FlyBrainPanel })),
+);
+
 export function App() {
   const {
     connected,
@@ -75,6 +80,8 @@ export function App() {
     elo,
     queue,
     forfeit,
+    flyThought,
+    flyMapLive,
     error,
     join,
     forgetGuest,
@@ -503,6 +510,11 @@ export function App() {
   // turn, and the hint's reason shows under it — to you alone. The banner
   // keeps one height either way, so the board does not jump every turn.
   const aiSeat = state.origin === 'ai' && isSeated;
+  // The Fruit Fly, when this room has one: its brain panel shows beside the
+  // board, and its smell map tints the cells it is choosing between.
+  const flyBot = state.players.find((p) => p.bot?.model === 'fly');
+  const flyOwnThought = flyBot && flyThought && flyThought.botId === flyBot.id ? flyThought : null;
+  const flyOverlay = flyMapLive ? flyOwnThought : null;
   const turnBanner =
     state.status === 'playing' && !isSpectator ? (
       <div className={`banner ${myTurn ? 'you-turn' : 'wait'}${aiSeat ? ' with-hint' : ''}`}>
@@ -584,9 +596,23 @@ export function App() {
 
         <div className={`play-area ${state.status === 'waiting' ? 'no-board' : ''}`}>
           {state.status !== 'waiting' && (
-            <Board state={state} myTurn={myTurn && !isSpectator} onReveal={reveal} hint={hint.cell} />
+            <Board
+              state={state}
+              myTurn={myTurn && !isSpectator}
+              onReveal={reveal}
+              hint={hint.cell}
+              flyScores={flyOverlay?.candidates}
+              flyPick={flyOverlay?.pick}
+            />
           )}
           <div className="stack room-side">
+            {flyBot && (
+              <LoadBoundary what="the fly's brain">
+                <Suspense fallback={null}>
+                  <FlyBrainPanel thought={flyOwnThought} />
+                </Suspense>
+              </LoadBoundary>
+            )}
             <Leaderboard state={state} myId={playerId} moderation={moderation} />
             {/* Keyed by room: a half-typed line or an error never carries over. */}
             <RoomChat

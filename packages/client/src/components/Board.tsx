@@ -1,5 +1,6 @@
 import { TURN_SECONDS, type MinePosition, type PublicMatchState, type RevealedCell } from '@fmm/shared';
 import type { CSSProperties } from 'react';
+import { normalizeFlyScores } from './fly/smellMap.js';
 import { MineSprite } from './MineSprite.js';
 
 interface Props {
@@ -17,6 +18,14 @@ interface Props {
    * pointed at. Only ever this player's own — the hint is never broadcast.
    */
   hint?: { row: number; col: number } | null;
+  /**
+   * The Fruit Fly's "smell map" for its current move: the candidates it chose
+   * between, with its readout scores. Public-board cells only, shown until it
+   * reveals. Null for every other room.
+   */
+  flyScores?: { row: number; col: number; score: number }[] | null;
+  /** The cell the fly picked, ringed on the board while the map shows. */
+  flyPick?: { row: number; col: number } | null;
 }
 
 /** Index the reveal history by cell for O(1) lookup while rendering. */
@@ -31,12 +40,21 @@ const colName = (col: number) => String.fromCharCode(65 + col);
  * The board as a survey grid: lettered columns, numbered rows, and the turn
  * clock as a line along the top edge that drains while the turn runs.
  */
-export function Board({ state, myTurn, onReveal, mines, hint }: Props) {
+export function Board({ state, myTurn, onReveal, mines, hint, flyScores, flyPick }: Props) {
   const revealed = revealMap(state.revealed);
   const hiddenMines = new Set((mines ?? []).map((m) => `${m.row}:${m.col}`));
   const interactive = myTurn && state.status === 'playing';
   const playing = state.status === 'playing';
   const remaining = playing ? Math.max(0, state.secondsLeft) / TURN_SECONDS : 0;
+
+  // The fly's candidate scores, minimal-maximal, for the covered cells it looked at.
+  const flyScoresByCell = new Map<string, number>();
+  if (flyScores && flyScores.length > 0) {
+    const normalized = normalizeFlyScores(flyScores.map((cell) => cell.score));
+    flyScores.forEach((cell, index) =>
+      flyScoresByCell.set(`${cell.row}:${cell.col}`, normalized[index]!),
+    );
+  }
 
   const style = { '--cols': state.cols } as CSSProperties;
 
@@ -81,13 +99,19 @@ export function Board({ state, myTurn, onReveal, mines, hint }: Props) {
             if (!cell) {
               // Said in the label too, not only drawn: "C4, covered, hinted".
               const hinted = hint?.row === row && hint?.col === col;
+              const fly = flyScoresByCell.get(`${row}:${col}`);
+              const classes = ['cell'];
+              if (hinted) classes.push('hinted');
+              if (fly !== undefined) classes.push('fly-scored');
+              if (fly !== undefined && flyPick?.row === row && flyPick.col === col) classes.push('fly-pick');
               return (
                 <button
                   key={`${row}:${col}`}
-                  className={hinted ? 'cell hinted' : 'cell'}
+                  className={classes.join(' ')}
                   disabled={!interactive}
                   onClick={() => onReveal(row, col)}
                   aria-label={`${where}, covered${hinted ? ', hinted' : ''}`}
+                  style={fly !== undefined ? ({ '--fly': fly } as CSSProperties) : undefined}
                 />
               );
             }

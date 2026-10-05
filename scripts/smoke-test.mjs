@@ -1714,6 +1714,27 @@ section('fruit fly bot');
   const fayView = track(fay);
   const errorsBefore = adminLog.filter((l) => l.kind === 'error').length;
 
+  // Every thought and every reveal of this match, in the order they reach Fay,
+  // collected from before the game starts so no move can slip past unrecorded.
+  let flyEvents = 0;
+  const flyThoughts = [];
+  const flyReveals = [];
+  fay.on('ai:flyThought', (payload) => {
+    const open = fayView.state?.revealed ?? [];
+    flyThoughts.push({
+      payload,
+      order: flyEvents++,
+      at: Date.now(),
+      revealedAtArrival: open.length,
+      open: new Set(open.map(({ row, col }) => `${row}:${col}`)),
+    });
+  });
+  fay.on('cell:revealed', ({ cell, state }) => {
+    // Fay is the only person in the room, so anyone else's reveal is the fly's.
+    if (cell.byPlayerId === fayJoin.playerId) return;
+    flyReveals.push({ cell, move: state.revealed.length - 1, order: flyEvents++, at: Date.now() });
+  });
+
   const played = await emitAck(fay, 'ai:play', { level: 'hard', model: 'fly' });
   await sleep(300);
   const flyState = fayView.state;
@@ -1724,14 +1745,21 @@ section('fruit fly bot');
       flySeat.nickname === 'Fruit Fly · Hard' && flyState.roomName.endsWith('vs Fruit Fly · Hard'),
     flyState ? `${flyState.roomName}: ${flyState.players.map((p) => `${p.nickname}${p.bot ? `(${JSON.stringify(p.bot)})` : ''}`).join(' vs ')}` : JSON.stringify(played));
 
-  let flyMoves = 0;
-  fay.on('cell:revealed', ({ cell }) => {
-    if (cell.byPlayerId === flySeat?.id) flyMoves++;
-  });
-  // Fay opens cells on her turns until the fly has moved a couple of times.
+  // A spectator gets the same thoughts as the player.
+  const flyWatcher = await connect();
+  await setName(flyWatcher, 'Fly watcher');
+  const watched = await emitAck(flyWatcher, 'room:spectate', { roomId: played.roomId });
+  const watcherJoinedAt = Date.now();
+  const watcherThoughts = [];
+  flyWatcher.on('ai:flyThought', (payload) => watcherThoughts.push({ payload, at: Date.now() }));
+  check('a spectator can watch the Fruit Fly match', watched.ok === true && watched.seat === 'spectator',
+    watched.errors?.[0] ?? '');
+
+  // Fay plays the whole match, so the fly gets many turns, each one a full
+  // thought → hold → reveal. Fay takes the first covered cell she has not tried.
   const attempted = new Set();
-  const deadline = Date.now() + 40_000;
-  while (flyMoves < 2 && !fayView.ended && Date.now() < deadline) {
+  const deadline = Date.now() + 240_000;
+  while (!fayView.ended && Date.now() < deadline) {
     const s = fayView.state;
     if (s?.status === 'playing' && s.currentPlayerId === fayJoin.playerId) {
       const open = new Set(s.revealed.map((c) => `${c.row}:${c.col}`));
@@ -1749,13 +1777,84 @@ section('fruit fly bot');
     }
     await sleep(80);
   }
-  check('the Fruit Fly makes moves of its own', flyMoves >= 1, `${flyMoves} fly move(s)`);
+  check('the Fruit Fly makes moves of its own', flyReveals.length >= 1, `${flyReveals.length} fly move(s)`);
+
+  // The thought for a move is the one whose `move` is how many cells were open
+  // when the fly chose it — the same number as that move's place in the reveals.
+  const thoughtFor = (reveal) => flyThoughts.find(({ payload }) => payload.move === reveal.move);
+  check('every fly move is announced by an ai:flyThought, before its cell is revealed',
+    flyReveals.length >= 1 && flyThoughts.length === flyReveals.length &&
+      flyReveals.every((reveal) => (thoughtFor(reveal)?.order ?? Infinity) < reveal.order),
+    `${flyThoughts.length} thought(s) for ${flyReveals.length} move(s)`);
+  check('each thought is about the board it was made on, and the fly then opens the cell it picked',
+    flyThoughts.every(({ payload, revealedAtArrival }) => revealedAtArrival === payload.move) &&
+      flyReveals.every((reveal) => {
+        const pick = thoughtFor(reveal)?.payload.pick;
+        return pick?.row === reveal.cell.row && pick?.col === reveal.cell.col;
+      }),
+    flyReveals.map((r) => `${r.cell.row}:${r.cell.col}`).join(' '));
+
+  const THOUGHT_KEYS = ['botId', 'candidates', 'move', 'neurons', 'pick', 'rates', 'roomId', 'steps'];
+  const shapeOk = ({ payload }) =>
+    JSON.stringify(Object.keys(payload).sort()) === JSON.stringify(THOUGHT_KEYS) &&
+    payload.roomId === played.roomId && payload.botId === flySeat?.id &&
+    payload.steps === 16 && payload.neurons === 244 &&
+    typeof payload.rates === 'string' &&
+    Buffer.from(payload.rates, 'base64').toString('base64') === payload.rates &&
+    Buffer.from(payload.rates, 'base64').length === 16 * 244;
+  const firstThought = flyThoughts[0]?.payload;
+  check('ai:flyThought is 16 steps × 244 neurons: one base64 byte per rate, 3,904 bytes, and nothing else but the move',
+    flyThoughts.length >= 1 && flyThoughts.every(shapeOk),
+    firstThought ? `${Buffer.byteLength(JSON.stringify(firstThought))} bytes of JSON for the first thought` : 'no thought');
+
+  // The Classic board has 36 cells, under the display cap of 40, so the thought
+  // lists every covered cell at the time — and only covered cells: public-board data.
+  const candidatesOk = ({ payload, open }) => {
+    const seen = new Set();
+    for (const { row, col, score } of payload.candidates) {
+      const key = `${row}:${col}`;
+      const inside = Number.isInteger(row) && row >= 0 && row < flyState.rows &&
+        Number.isInteger(col) && col >= 0 && col < flyState.cols;
+      if (!inside || !Number.isFinite(score) || open.has(key) || seen.has(key)) return false;
+      seen.add(key);
+    }
+    return seen.size === flyState.rows * flyState.cols - open.size && seen.size <= 40 &&
+      seen.has(`${payload.pick.row}:${payload.pick.col}`);
+  };
+  check('every candidate is a distinct covered cell with a finite score, all covered cells are listed, and the pick is one of them',
+    flyThoughts.length >= 1 && flyThoughts.every(candidatesOk),
+    `${flyThoughts.map(({ payload }) => payload.candidates.length).join(' ')} candidates per thought`);
+
+  // The thought is held on screen before the reveal (1.2 s on the server, when
+  // the turn has the time), so the panel has a moment to play. Measured at Fay,
+  // from the thought arriving to the cell arriving.
+  const holds = flyReveals.map((reveal) => reveal.at - (thoughtFor(reveal)?.at ?? reveal.at));
+  check('the fly holds its thought on screen for about a second before it reveals',
+    holds.length >= 1 && Math.max(...holds) >= 1_000,
+    `${holds.join(' ')} ms`);
+
+  const sameThought = (a, b) => a.move === b.move && a.rates === b.rates &&
+    a.pick.row === b.pick.row && a.pick.col === b.pick.col;
+  const heardLater = flyThoughts.filter(({ at }) => at > watcherJoinedAt + 300);
+  check('the spectator receives the same Fruit Fly thoughts as the player',
+    watcherThoughts.length >= 1 &&
+      watcherThoughts.every(({ payload }) => flyThoughts.some((seen) => sameThought(seen.payload, payload))) &&
+      heardLater.every(({ payload }) => watcherThoughts.some((heard) => sameThought(heard.payload, payload))),
+    `${watcherThoughts.length} spectator thought(s), ${heardLater.length} sent after it joined`);
+  check('the Fruit Fly match finishes normally', Boolean(fayView.ended),
+    fayView.ended ? `${fayView.ended.players.map((p) => `${p.nickname} ${p.score}`).join(', ')}` : 'timed out');
+  check('Fruit Fly match scores add up to the mines',
+    fayView.ended?.players.reduce((sum, player) => sum + player.score, 0) === flyState?.bombCount,
+    JSON.stringify(fayView.ended?.players.map((p) => p.score)));
+
   const flyErrors = adminLog.filter((l) => l.kind === 'error').slice(errorsBefore);
   check('…through its circuit, with no bot errors logged',
     !flyErrors.some((l) => /computer move failed/.test(l.text)), flyErrors.map((l) => l.text).join(' | '));
 
+  flyWatcher.emit('room:leave');
   fay.emit('room:leave');
-  await sleep(200);
+  await sleep(250);
+  flyWatcher.close();
   fay.close();
 }
 

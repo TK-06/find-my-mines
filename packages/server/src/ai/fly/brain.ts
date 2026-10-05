@@ -142,6 +142,15 @@ export class FlyBrain {
    * the other eight drive one. The mix is slightly lopsided; the readout copes.
    */
   outputs(features: readonly number[]): Float64Array {
+    return this.simulate(features, false).outputs;
+  }
+
+  /** Every neuron's rate at every simulation step, in circuit order and step-major order. */
+  trace(features: readonly number[]): Float64Array {
+    return this.simulate(features, true).trace!;
+  }
+
+  private simulate(features: readonly number[], captureTrace: boolean): { outputs: Float64Array; trace?: Float64Array } {
     const n = this.count;
     const drive = new Float64Array(n);
     const channels = Math.max(1, features.length * 2);
@@ -154,6 +163,7 @@ export class FlyBrain {
     const potential = new Float64Array(n);
     let rate = new Float64Array(n);
     let next = new Float64Array(n);
+    const trace = captureTrace ? new Float64Array(FLY_STEPS * n) : undefined;
     const hiddenCount = this.hidden.length;
     for (let step = 0; step < FLY_STEPS; step++) {
       let hiddenMean = 0;
@@ -173,8 +183,9 @@ export class FlyBrain {
         next[i] = unit(GAIN[name] * (potential[i]! - THRESHOLD[name]));
       }
       [rate, next] = [next, rate];
+      trace?.set(rate, step * n);
     }
-    return Float64Array.from(this.outputIndex, (i) => rate[i]!);
+    return { outputs: Float64Array.from(this.outputIndex, (i) => rate[i]!), trace };
   }
 
   /** How strongly the fly "wants" this cell: the readout over its output neurons. Higher = likelier a mine. */

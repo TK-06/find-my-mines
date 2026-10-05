@@ -5,15 +5,15 @@ import {
   thinkDelayMs,
   type AiLevel,
   type BotSetup,
-  type CellRef,
-  type MovePlan,
+  type FlyThoughtNotice,
   type PublicMatchState,
   type Rng,
 } from '@fmm/shared';
 import { contain, settleWithin } from '../safety.js';
-import type { FlyBrain } from './fly/brain.js';
+import { FLY_STEPS, type FlyBrain } from './fly/brain.js';
 import { loadFlyBrain } from './fly/load.js';
-import { FLY_CHAT_CHANCE, flyLine, flyMove } from './fly/play.js';
+import { FLY_CHAT_CHANCE, flyLine, flyMove as chooseFlyMove, type FlyMove } from './fly/play.js';
+import { displayFlyCandidates, encodeFlyRates } from './fly/thought.js';
 import { JEV_CHAT_CHANCE, jevLine, type JevChoice, type JevInput } from './jev.js';
 import type { Advice, PromptInput } from './prompt.js';
 
@@ -29,6 +29,12 @@ const ADVISOR_MAX_WAIT_MS = 4_000;
 /** Thinking never eats the whole turn: this much is always left to actually move. */
 const THINK_TURN_MARGIN_MS = 1_000;
 const MIN_THINK_MS = 300;
+const FLY_THOUGHT_HOLD_MS = 1_200;
+
+/** Holds the fly's reveal only when the existing advisor margin remains afterwards. */
+export function flyThoughtHoldMs(leftMs: number): number {
+  return leftMs >= FLY_THOUGHT_HOLD_MS + ADVISOR_TURN_MARGIN_MS ? FLY_THOUGHT_HOLD_MS : 0;
+}
 
 /** How long after a match ends the bot votes for a rematch — time to read the result. */
 export const BOT_REMATCH_DELAY_MS = 2_500;
@@ -58,6 +64,8 @@ export interface BotControllerDeps {
   jev?: BotJev | null;
   /** Posts the bot's line to the room chat. */
   say(roomId: string, bot: { id: string; nickname: string }, text: string): void;
+  /** Broadcasts a public-board-only Fruit Fly thought immediately before its reveal. */
+  flyThought?(roomId: string, payload: FlyThoughtNotice): void;
   rng?: Rng;
   report?(error: unknown): void;
   /**
@@ -235,7 +243,11 @@ export class BotController {
       // The fly decides with its own neurons, from the open board alone: no
       // solver odds, no solver shortlist. The level only sets how sleepy it is.
       // The plan is used only if its brain cannot be loaded.
-      let pick = isFly ? this.flyPick(state, setup.level, plan) : plan.pick;
+      const flyDecision = isFly
+        ? this.flyDecisionFor(state, setup.level, this.deps.flyThought !== undefined)
+        : null;
+      if (flyDecision?.traceError !== undefined) this.report(flyDecision.traceError);
+      let pick = flyDecision?.pick ?? plan.pick;
       let say: string | null = null;
       const leftMs = turnMsLeft(state);
       // The fly's circuit decides its move. The model is shown only that one
@@ -286,14 +298,49 @@ export class BotController {
       }
 
       const nickname = state.players.find((p) => p.id === botId)?.nickname ?? 'AI';
-      room.reveal(botId, pick.row, pick.col);
+      let moveRoom = this.stillItsMove(roomId, task, botId, key);
+      if (!moveRoom) return;
+
+      if (isFly && flyDecision?.trace && this.deps.flyThought) {
+        const candidates = displayFlyCandidates(flyDecision.candidates, flyDecision.scores, flyDecision.pick);
+        if (candidates.length > 0) {
+          const thought: FlyThoughtNotice = {
+            roomId,
+            botId,
+            move: state.revealed.length,
+            pick: flyDecision.pick,
+            steps: FLY_STEPS,
+            neurons: flyDecision.trace.length / FLY_STEPS,
+            rates: encodeFlyRates(flyDecision.trace),
+            candidates,
+          };
+          let sent = false;
+          try {
+            this.deps.flyThought(roomId, thought);
+            sent = true;
+          } catch (error) {
+            this.report(error);
+          }
+
+          const holdMs = sent ? flyThoughtHoldMs(turnMsLeft(moveRoom.publicState())) : 0;
+          if (holdMs > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, holdMs));
+            moveRoom = this.stillItsMove(roomId, task, botId, key);
+            if (!moveRoom) return;
+          }
+        }
+      }
+
+      moveRoom = this.stillItsMove(roomId, task, botId, key);
+      if (!moveRoom) return;
+      moveRoom.reveal(botId, pick.row, pick.col);
       if (!say && isFly && this.rng() < FLY_CHAT_CHANCE) {
-        const opened = room.publicState().revealed.find((c) => c.row === pick.row && c.col === pick.col);
+        const opened = moveRoom.publicState().revealed.find((c) => c.row === pick.row && c.col === pick.col);
         if (opened) say = flyLine(pick, opened.kind === 'bomb', this.rng);
       }
       // JEV's line quotes its own odds, so there is none when it did not answer.
       if (!say && jevChoice && this.rng() < JEV_CHAT_CHANCE) {
-        const opened = room.publicState().revealed.find((c) => c.row === pick.row && c.col === pick.col);
+        const opened = moveRoom.publicState().revealed.find((c) => c.row === pick.row && c.col === pick.col);
         if (opened) say = jevLine(pick, jevChoice.probability, opened.kind === 'bomb', this.rng);
       }
       if (say) this.deps.say(roomId, { id: botId, nickname }, say);
@@ -310,7 +357,11 @@ export class BotController {
    * follows the readout. Public board only. Without a working brain it plays
    * the solver's pick, so the match always goes on.
    */
-  private flyPick(state: PublicMatchState, level: AiLevel, plan: MovePlan): CellRef {
+  private flyDecisionFor(
+    state: PublicMatchState,
+    level: AiLevel,
+    includeTrace: boolean,
+  ): FlyMove | null {
     if (this.flyBrain === undefined) {
       try {
         this.flyBrain = loadFlyBrain();
@@ -319,13 +370,13 @@ export class BotController {
         this.flyBrain = null;
       }
     }
-    if (!this.flyBrain) return plan.pick;
+    if (!this.flyBrain) return null;
     try {
       const view = { rows: state.rows, cols: state.cols, mineCount: state.bombCount, revealed: state.revealed };
-      return flyMove(this.flyBrain, view, level, this.rng)?.pick ?? plan.pick;
+      return chooseFlyMove(this.flyBrain, view, level, this.rng, { trace: includeTrace });
     } catch (error) {
       this.report(error);
-      return plan.pick;
+      return null;
     }
   }
 }

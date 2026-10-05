@@ -4,6 +4,7 @@ import {
   type AiAbout,
   type AiHintResult,
   type ChatMessage,
+  type FlyThoughtNotice,
   type ForfeitNotice,
   type FriendInvite,
   type JoinRequestOutcome,
@@ -51,6 +52,9 @@ import { addLobbyMessage, lobbyHistory } from './data/worldChat.js';
 import { socket } from './socket.js';
 
 const GUEST_KEY = 'fmm.guest';
+
+/** The fly's smell map comes off the board this long after its thought if no reveal does it first. */
+const FLY_MAP_GRACE_MS = 2_000;
 
 /**
  * The nickname a guest last played under, so a refresh does not log them out.
@@ -106,6 +110,17 @@ export function useGame() {
   const [elo, setElo] = useState(STARTING_ELO);
   const [queue, setQueue] = useState<QueueSnapshot | null>(null);
   const [forfeit, setForfeit] = useState<ForfeitNotice | null>(null);
+  /**
+   * The Fruit Fly's latest thought for the room we follow, or null. Kept after
+   * the reveal so the brain panel still shows what it last thought; only
+   * leaving the room drops it.
+   */
+  const [flyThought, setFlyThought] = useState<FlyThoughtNotice | null>(null);
+  /**
+   * Whether that thought's smell map is still on the board: from the thought
+   * until the fly reveals, or a short grace if the reveal never comes.
+   */
+  const [flyMapLive, setFlyMapLive] = useState(false);
   const [requestResolution, setRequestResolution] = useState<RequestResolution | null>(null);
   /** Invites from friends to the room they are in, newest last. */
   const [friendInvites, setFriendInvites] = useState<FriendInvite[]>([]);
@@ -159,17 +174,39 @@ export function useGame() {
    */
   const activeRoom = useRef<string | null>(null);
 
+  /** The smell map's grace timer, so a stale map never outlives the reveal by long. */
+  const flyMapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Takes the smell map off the board — on the reveal, after the grace, and when the room changes. */
+  const clearFlyMap = useCallback(() => {
+    if (flyMapTimer.current) {
+      clearTimeout(flyMapTimer.current);
+      flyMapTimer.current = null;
+    }
+    setFlyMapLive(false);
+  }, []);
+
+  /** Forgets the fly's thought altogether: another room, or a new match in this one. */
+  const dropFlyThought = useCallback(() => {
+    clearFlyMap();
+    setFlyThought(null);
+  }, [clearFlyMap]);
+
   /**
    * Adopt a room (or none) as the one we follow. Every place that changes
    * `activeRoom` goes through here, so the chat always belongs to it: lines
    * from the room we were in never show up in the next one.
    */
-  const followRoom = useCallback((roomId: string | null) => {
-    activeRoom.current = roomId;
-    playingSnapshot.current = null;
-    setGuestChange(null);
-    setRoomMessages([]);
-  }, []);
+  const followRoom = useCallback(
+    (roomId: string | null) => {
+      activeRoom.current = roomId;
+      playingSnapshot.current = null;
+      setGuestChange(null);
+      setRoomMessages([]);
+      dropFlyThought();
+    },
+    [dropFlyThought],
+  );
   const playerIdRef = useRef<string | null>(null);
   /** Set once joined, so a dropped connection can re-join under the same name. */
   const lastNickname = useRef<string | null>(null);
@@ -279,13 +316,35 @@ export function useGame() {
       if (next.roomId === activeRoom.current) {
         matchCountRef.current += 1;
         setMatchCount(matchCountRef.current);
+        // A new game (or rematch): the last game's thought is history.
+        dropFlyThought();
       }
       setForfeit(null);
       accept(next);
     });
     socket.on('match:ended', accept);
-    socket.on('match:reset', accept);
-    socket.on('cell:revealed', ({ state: next }) => accept(next));
+    socket.on('match:reset', (next) => {
+      if (next.roomId === activeRoom.current) dropFlyThought();
+      accept(next);
+    });
+    socket.on('cell:revealed', ({ state: next }) => {
+      // The fly's reveal is what the smell map was waiting for.
+      clearFlyMap();
+      accept(next);
+    });
+
+    // The Fruit Fly's thought, sent just before its reveal: players and
+    // spectators alike see the brain light up. Only the room we follow.
+    socket.on('ai:flyThought', (payload) => {
+      if (payload.roomId !== activeRoom.current) return;
+      setFlyThought(payload);
+      setFlyMapLive(true);
+      if (flyMapTimer.current) clearTimeout(flyMapTimer.current);
+      flyMapTimer.current = setTimeout(() => {
+        flyMapTimer.current = null;
+        setFlyMapLive(false);
+      }, FLY_MAP_GRACE_MS);
+    });
 
     socket.on('match:forfeit', (notice) => {
       if (notice.roomId !== activeRoom.current) return;
@@ -418,6 +477,7 @@ export function useGame() {
       socket.off('match:forfeit');
       socket.off('room:notice');
       socket.off('cell:revealed');
+      socket.off('ai:flyThought');
       socket.off('lobby:rooms');
       socket.off('player:removed');
       socket.off('room:requestResolved');
@@ -435,6 +495,7 @@ export function useGame() {
       socket.off('lobby:cleared');
       socket.off('friend:invited');
       if (errorTimer.current) clearTimeout(errorTimer.current);
+      if (flyMapTimer.current) clearTimeout(flyMapTimer.current);
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
     };
@@ -803,6 +864,8 @@ export function useGame() {
     elo,
     queue,
     forfeit,
+    flyThought,
+    flyMapLive,
     error,
     join,
     forgetGuest,

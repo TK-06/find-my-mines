@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FlyBrain, parseCircuit, parseReadout, type FlyCircuit, type FlyReadout } from './brain.js';
+import { FLY_STEPS, FlyBrain, parseCircuit, parseReadout, type FlyCircuit, type FlyReadout } from './brain.js';
 import { FLY_FEATURES } from './features.js';
 import { loadFlyCircuit, loadFlyReadout } from './load.js';
 
@@ -124,6 +124,22 @@ describe('FlyBrain on the fetched connectome', () => {
     const input = [0.4, 0.25, 0.3, 0.125, 0, 0.3];
     expect([...brain.outputs(input)]).toEqual([...brain.outputs(input)]);
     expect([...new FlyBrain(circuit).outputs(input)]).toEqual([...brain.outputs(input)]);
+  });
+
+  it('traces each step and keeps the final outputs and trained score unchanged', () => {
+    const brain = new FlyBrain(circuit, loadFlyReadout(circuit));
+    const input = [0.4, 0.25, 0.3, 0.125, 0, 0.3, 0.2, 0.1];
+    const trace = brain.trace(input);
+    const count = circuit.neurons.length;
+    const final = trace.slice((FLY_STEPS - 1) * count);
+    const outputRates = circuit.neurons.flatMap((neuron, index) =>
+      neuron.role === 'output' ? [final[index]!] : [],
+    );
+
+    expect(trace).toBeInstanceOf(Float64Array);
+    expect(trace).toHaveLength(FLY_STEPS * count);
+    expect(outputRates).toEqual([...brain.outputs(input)]);
+    expect(brain.score(input)).toBe(-1.938134686123369);
   });
 
   it('keeps every output a finite rate between 0 and 1', () => {

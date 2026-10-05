@@ -33,6 +33,15 @@ export interface FlyMove {
   /** The readout's score for each candidate, in the order given. */
   scores: number[];
   candidates: CellRef[];
+  /** Present only when asked: the picked cell's step-major neural rates. */
+  trace?: Float64Array;
+  /** A trace is display-only, so a tracing failure must not change the scored move. */
+  traceError?: unknown;
+}
+
+export interface FlyMoveOptions {
+  /** Record one extra simulation for the picked cell, without affecting the choice. */
+  trace?: boolean;
 }
 
 /**
@@ -42,10 +51,17 @@ export interface FlyMove {
  * the easier levels sample from softmax(score / temperature) using `rng`.
  * Null when nothing is covered.
  */
-export function flyMove(brain: FlyBrain, view: SolverView, level: AiLevel, rng: Rng): FlyMove | null {
+export function flyMove(
+  brain: FlyBrain,
+  view: SolverView,
+  level: AiLevel,
+  rng: Rng,
+  options: FlyMoveOptions = {},
+): FlyMove | null {
   const candidates = flyCandidatesAll(view, rng);
   if (candidates.length === 0) return null;
-  const scores = flyFeatures(view, candidates).map((features) => brain.score(features));
+  const features = flyFeatures(view, candidates);
+  const scores = features.map((row) => brain.score(row));
   let best = 0;
   for (let i = 1; i < scores.length; i++) if (scores[i]! > scores[best]!) best = i;
 
@@ -65,7 +81,19 @@ export function flyMove(brain: FlyBrain, view: SolverView, level: AiLevel, rng: 
     }
   }
   const { row, col } = candidates[chosen]!;
-  return { pick: { row, col }, scores, candidates };
+  const move: FlyMove = {
+    pick: { row, col },
+    scores,
+    candidates,
+  };
+  if (options.trace) {
+    try {
+      move.trace = brain.trace(features[chosen]!);
+    } catch (error) {
+      move.traceError = error;
+    }
+  }
+  return move;
 }
 
 const FOUND = [

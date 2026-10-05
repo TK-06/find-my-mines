@@ -111,6 +111,13 @@ describe('policy pages', () => {
     expect(servicesText).toContain('neither your questions nor the answers are saved');
   });
 
+  // The Fruit Fly brain panel remembers open or closed in localStorage (fmm.flyBrain).
+  it('list the Fruit Fly brain panel setting among what the browser keeps', () => {
+    const browser = POLICIES.privacy.sections.find((s) => s.id === 'your-browser')!;
+    const browserText = allText({ ...POLICIES.privacy, intro: '', sections: [browser] });
+    expect(browserText).toContain('whether the Fruit Fly brain panel is open or closed');
+  });
+
   it('were last changed on 5 October 2026, when game review began saving replays', () => {
     expect(POLICY_UPDATED).toBe('5 October 2026');
   });

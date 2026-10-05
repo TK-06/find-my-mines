@@ -13,6 +13,9 @@ import {
   type SolverView,
 } from '@fmm/shared';
 import { loadFlyBrain } from './load.js';
+import { FLY_STEPS } from './brain.js';
+import type { FlyBrain } from './brain.js';
+import { flyFeatures } from './features.js';
 import { FLY_TEMPERATURE, flyLine, flyMove } from './play.js';
 
 const key = (cell: CellRef) => `${cell.row}:${cell.col}`;
@@ -76,6 +79,39 @@ describe('flyMove', () => {
     for (const level of levels) {
       expect(flyMove(brain, view, level, createRng(8))).toEqual(flyMove(brain, view, level, createRng(8)));
     }
+  });
+
+  it('traces the picked cell without changing the move, scores, or candidate order', () => {
+    const { view } = midGame(31);
+    const plain = flyMove(brain, view, 'medium', createRng(47))!;
+    const traced = flyMove(brain, view, 'medium', createRng(47), { trace: true })!;
+
+    expect(traced.pick).toEqual(plain.pick);
+    expect(traced.scores).toEqual(plain.scores);
+    expect(traced.candidates).toEqual(plain.candidates);
+    expect(plain).not.toHaveProperty('trace');
+    expect(traced.trace).toBeInstanceOf(Float64Array);
+    expect(traced.trace).toHaveLength(FLY_STEPS * 244);
+    expect([...traced.trace!]).toEqual([...brain.trace(flyFeatures(view, [traced.pick])[0]!)]);
+  });
+
+  it('keeps the fly move if only the optional trace fails', () => {
+    const { view } = midGame(72);
+    const plain = flyMove(brain, view, 'medium', createRng(91))!;
+    const traceFailure = new Error('trace unavailable');
+    const brokenTrace = {
+      score: brain.score.bind(brain),
+      trace: () => {
+        throw traceFailure;
+      },
+    } as unknown as FlyBrain;
+    const traced = flyMove(brokenTrace, view, 'medium', createRng(91), { trace: true })!;
+
+    expect(traced.pick).toEqual(plain.pick);
+    expect(traced.scores).toEqual(plain.scores);
+    expect(traced.candidates).toEqual(plain.candidates);
+    expect(traced.trace).toBeUndefined();
+    expect(traced.traceError).toBe(traceFailure);
   });
 
   it('gets sleepier as the level gets easier: more variety, same ordering of temperatures', () => {

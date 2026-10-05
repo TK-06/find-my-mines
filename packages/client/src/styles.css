@@ -1634,6 +1634,51 @@ button.hint-why-toggle[aria-expanded='true'] { background: color-mix(in srgb, va
 }
 .board .cell.hinted:hover::after { border-color: var(--signal-ink); }
 
+/* ── the Fruit Fly's smell map, on the board ────────────────────────────── */
+/* The cells the fly is choosing between, tinted by its readout score: the
+   score is min-maxed to 0–1 in --fly, so the strongest smell is the boldest
+   tint. The picked cell wears a ring, not another colour, so it reads on top. */
+.board .cell.fly-scored:not(.revealed) {
+  background: color-mix(in srgb, var(--signal) calc(10% + var(--fly) * 50%), var(--cover));
+  border-color: color-mix(in srgb, var(--signal) calc(18% + var(--fly) * 55%), var(--rule));
+}
+.board .cell.fly-pick:not(.revealed)::after {
+  content: '';
+  width: 36%;
+  height: 36%;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+}
+
+/* ── the Fruit Fly's brain: beside the board, in its own room ───────────── */
+/* The dark panel the review coach uses, with a canvas in place of the log. */
+.fly-brain {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  color: var(--panel-ink);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-line);
+  border-radius: var(--r);
+}
+.fly-brain-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fly-brain-head h3 { margin: 0; font-family: var(--display); font-stretch: 112%; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; }
+.fly-brain-head h3 span { font-family: var(--body); font-stretch: 100%; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--panel-muted); }
+.fly-toggle { min-height: 34px; padding: 4px 10px; font-size: 12px; }
+.fly-brain .fly-toggle { color: var(--panel-ink); border-color: var(--panel-line); }
+.fly-brain .fly-toggle:hover:not(:disabled) { background: var(--panel-bubble); border-color: var(--panel-muted); }
+.fly-canvas { display: block; width: 100%; aspect-ratio: 5 / 4; background: #101214; border: 1px solid var(--panel-line); border-radius: 4px; }
+.fly-key { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; list-style: none; font-size: 11px; color: var(--panel-muted); }
+.fly-key i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; }
+.fly-live { margin: 0; font-size: 13px; color: var(--panel-ink); }
+.fly-credit { margin: 0; font-size: 11px; line-height: 1.5; color: var(--panel-muted); }
+.fly-credit a { color: var(--panel-ink); }
+@media (max-width: 640px) {
+  /* A real touch target for the phone's show/hide toggle. */
+  .fly-toggle { min-height: 44px; padding: 10px 14px; font-size: 13px; }
+}
+
 /* Room chat, under the scoreboard. */
 .room-side { min-width: 0; }
 .room-chat { display: grid; gap: 10px; min-width: 0; padding: 16px; }

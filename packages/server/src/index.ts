@@ -248,6 +248,7 @@ const bots = new BotController({
     };
     io.to(roomId).emit('room:message', message);
   },
+  flyThought: (roomId, payload) => io.to(roomId).emit('ai:flyThought', payload),
   report: (error) => {
     console.error('[bot] a computer move failed:', error);
     log.add('error', `a computer move failed — ${error instanceof Error ? error.message : String(error)}`);

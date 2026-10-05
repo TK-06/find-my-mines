@@ -1,13 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLASSIC_PRESET, type BotSetup, type PublicMatchState, type Rng } from '@fmm/shared';
 import { MatchManager, type MatchBroadcaster } from '../match/matchManager.js';
-import { BOT_REMATCH_DELAY_MS, BotController, type BotAdvisor, type BotJev } from './botController.js';
+import { BOT_REMATCH_DELAY_MS, BotController, flyThoughtHoldMs, type BotAdvisor, type BotJev } from './botController.js';
 import type { FlyBrain } from './fly/brain.js';
 
 const BOT = 'bot:test0001';
 const FLY: BotSetup = { level: 'hard', model: 'fly' };
 const JEV: BotSetup = { level: 'hard', model: 'jev' };
 const HUMAN = 'human';
+
+interface TestFlyThought {
+  roomId: string;
+  botId: string;
+  move: number;
+  pick: { row: number; col: number };
+  steps: number;
+  neurons: number;
+  rates: string;
+  candidates: { row: number; col: number; score: number }[];
+}
+
+interface RecordedFlyThought {
+  roomId: string;
+  payload: TestFlyThought;
+  revealed: { row: number; col: number }[];
+  at: number;
+}
 
 /**
  * A real room with one person and one bot, driven by fake timers. The room's
@@ -23,10 +41,12 @@ function setup(
     rng?: Rng;
     /** The Fruit Fly's brain; omitted, the controller loads the real one. */
     fly?: FlyBrain | null;
+    onFlyThought?: (roomId: string, payload: TestFlyThought, room: MatchManager) => void;
   } = {},
 ) {
   const said: string[] = [];
   const errors: unknown[] = [];
+  const thoughts: RecordedFlyThought[] = [];
   const holder: { controller?: BotController } = {};
   const ping = () => holder.controller?.update('R1');
   const out: MatchBroadcaster = {
@@ -54,6 +74,20 @@ function setup(
     report: (error) => errors.push(error),
     ...(options.rng ? { rng: options.rng } : {}),
     ...(options.fly !== undefined ? { fly: options.fly } : {}),
+    ...(options.onFlyThought
+      ? {
+          flyThought: (roomId: string, payload: TestFlyThought) => {
+            const state = room.publicState();
+            thoughts.push({
+              roomId,
+              payload,
+              revealed: state.revealed.map(({ row, col }) => ({ row, col })),
+              at: Date.now(),
+            });
+            options.onFlyThought?.(roomId, payload, room);
+          },
+        }
+      : {}),
   });
   holder.controller = controller;
 
@@ -61,7 +95,7 @@ function setup(
   expect(room.addBot(BOT, options.bot ?? { level: 'medium', model: 'ai' })).toBe(true);
   controller.adopt('R1');
   room.start(HUMAN);
-  return { room, controller, said, errors };
+  return { room, controller, said, errors, thoughts };
 }
 
 const botCells = (state: PublicMatchState) => state.revealed.filter((c) => c.byPlayerId === BOT);
@@ -82,6 +116,11 @@ async function untilBotTurn(room: MatchManager): Promise<void> {
   expect(room.publicState().currentPlayerId).toBe(BOT);
 }
 
+async function untilThought(thoughts: readonly RecordedFlyThought[]): Promise<void> {
+  for (let i = 0; i < 200 && thoughts.length === 0; i++) await vi.advanceTimersByTimeAsync(25);
+  expect(thoughts.length).toBeGreaterThan(0);
+}
+
 beforeEach(() => {
   vi.useFakeTimers({
     toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'clearImmediate', 'Date'],
@@ -90,6 +129,14 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('fly thought timing', () => {
+  it('holds for 1.2 seconds only when the advisor margin remains afterwards', () => {
+    expect(flyThoughtHoldMs(2_699)).toBe(0);
+    expect(flyThoughtHoldMs(2_700)).toBe(1_200);
+    expect(flyThoughtHoldMs(Number.NaN)).toBe(0);
+  });
 });
 
 describe('BotController', () => {
@@ -190,6 +237,63 @@ describe('BotController', () => {
 });
 
 describe('BotController · Fruit Fly', () => {
+  it('broadcasts the picked public-board thought, then reveals that cell after the animation hold', async () => {
+    const { room, thoughts, errors } = setup({
+      bot: FLY,
+      rng: () => 0,
+      onFlyThought: () => undefined,
+    });
+    await untilBotTurn(room);
+    await untilThought(thoughts);
+
+    expect(thoughts).toHaveLength(1);
+    const { payload } = thoughts[0]!;
+    expect(thoughts[0]!.roomId).toBe('R1');
+    expect(payload.roomId).toBe('R1');
+    expect(payload.botId).toBe(BOT);
+    expect(payload.move).toBe(thoughts[0]!.revealed.length);
+    expect(payload.steps).toBe(16);
+    expect(payload.neurons).toBe(244);
+    expect(Buffer.from(payload.rates, 'base64')).toHaveLength(16 * 244);
+    expect(payload.candidates.length).toBeLessThanOrEqual(40);
+    expect(payload.candidates.some(({ row, col }) => row === payload.pick.row && col === payload.pick.col)).toBe(true);
+    const open = new Set(thoughts[0]!.revealed.map(({ row, col }) => `${row}:${col}`));
+    for (const cell of payload.candidates) expect(open.has(`${cell.row}:${cell.col}`)).toBe(false);
+    expect(botCells(room.publicState())).toEqual([]);
+
+    const elapsed = Date.now() - thoughts[0]!.at;
+    await vi.advanceTimersByTimeAsync(Math.max(0, 1_199 - elapsed));
+    expect(botCells(room.publicState())).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const revealed = room.publicState().revealed[payload.move];
+    expect({ row: revealed?.row, col: revealed?.col, byPlayerId: revealed?.byPlayerId }).toEqual({
+      ...payload.pick,
+      byPlayerId: BOT,
+    });
+    expect(errors).toEqual([]);
+  });
+
+  it('does not reveal after the thought hold when the room was reset', async () => {
+    const { room, errors, thoughts } = setup({
+      bot: FLY,
+      rng: () => 0,
+      onFlyThought: (_roomId, _payload, current) => {
+        setTimeout(() => current.resetAll(), 600);
+      },
+    });
+    await untilBotTurn(room);
+    await untilThought(thoughts);
+    for (let i = 0; i < 100 && room.publicState().status === 'playing'; i++) {
+      await vi.advanceTimersByTimeAsync(25);
+    }
+    await vi.advanceTimersByTimeAsync(700);
+
+    expect(room.publicState().status).toBe('waiting');
+    expect(botCells(room.publicState())).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
   it('plays its own turn through the fly circuit, under its own name', async () => {
     const { room, said, errors } = setup({ bot: FLY });
     expect(room.publicState().players.find((p) => p.id === BOT)?.nickname).toBe('Fruit Fly · Hard');
