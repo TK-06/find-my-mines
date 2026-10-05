@@ -20,8 +20,19 @@ import { ShareRoom } from './components/ShareRoom.js';
 import { SiteFooter } from './components/SiteFooter.js';
 import { SoundControl } from './components/SoundControl.js';
 import { PostInviteButton, WorldChat } from './components/WorldChat.js';
+import { replayForPopup } from './data/latestReplay.js';
 import { isPolicy } from './data/policies.js';
-import { NavBar, joinCodeFromPath, pathFor, pathForPlayer, playerNameFromPath, useRoute, type Route } from './router.js';
+import {
+  NavBar,
+  joinCodeFromPath,
+  pathFor,
+  pathForPlayer,
+  pathForReview,
+  playerNameFromPath,
+  reviewTargetFromPath,
+  useRoute,
+  type Route,
+} from './router.js';
 import { AuthScreen } from './screens/AuthScreen.js';
 import { GameLogScreen } from './screens/GameLogScreen.js';
 import { LeaderboardScreen } from './screens/LeaderboardScreen.js';
@@ -38,6 +49,10 @@ import { forgetStoredGuest, storedGuestName, useGame } from './useGame.js';
 // Puzzle mode loads on first visit: most players never open it, and its board
 // and solver-backed hint need not weigh on the main game's first load.
 const PuzzleScreen = lazy(() => import('./screens/PuzzleScreen.js').then((m) => ({ default: m.PuzzleScreen })));
+
+// The review screen is the same: opened from a result popup or a match in the
+// log, never on the way to a first game, so it loads as its own chunk.
+const ReviewScreen = lazy(() => import('./screens/ReviewScreen.js').then((m) => ({ default: m.ReviewScreen })));
 
 export function App() {
   const {
@@ -90,6 +105,10 @@ export function App() {
     lobbyMessages,
     sayInLobby,
     postInvite,
+    latestReplay,
+    matchCount,
+    coachStatus,
+    askCoach,
   } = useGame();
 
   // Up here with the other hooks, before any early return. Inert outside a
@@ -261,6 +280,7 @@ export function App() {
           onInvite={inviteFriend}
           onViewProfile={(name) => navigate('player', pathForPlayer(name))}
           onOpenGameLog={() => navigate('games')}
+          onOpenReview={(matchId) => navigate('review', pathForReview(matchId))}
           guest={guestProfile}
           onForgetGuest={forgetGuestData}
         />
@@ -278,8 +298,39 @@ export function App() {
           key={playerName}
           username={playerName}
           onOpenGameLog={() => navigate('games')}
+          onOpenReview={(matchId) => navigate('review', pathForReview(matchId))}
           onOpenOwnProfile={() => navigate('profile')}
         />
+        {inviteToasts}
+      </Shell>
+    );
+  }
+
+  // A game's review, at /review/latest (the game this tab just finished, from
+  // memory) or /review/<match id>. It is only another page: the player's seat
+  // and room stay as they were, the rematch vote carries on, and the result
+  // popup is back when they return to the game.
+  const reviewTarget = route === 'review' ? reviewTargetFromPath(path) : null;
+  if (route === 'review' && reviewTarget) {
+    return (
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+        <LoadBoundary what="the review">
+          <Suspense
+            fallback={
+              <div className="card empty-state" role="status">
+                <p className="muted">Loading the review…</p>
+              </div>
+            }
+          >
+            <ReviewScreen
+              target={reviewTarget}
+              latest={latestReplay}
+              connected={connected}
+              coachApi={{ status: coachStatus, ask: askCoach }}
+              onNavigate={navigate}
+            />
+          </Suspense>
+        </LoadBoundary>
         {inviteToasts}
       </Shell>
     );
@@ -318,7 +369,7 @@ export function App() {
   if (route === 'games') {
     return (
       <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
-        <GameLogScreen />
+        <GameLogScreen onOpenReview={(matchId) => navigate('review', pathForReview(matchId))} />
         {inviteToasts}
       </Shell>
     );
@@ -572,6 +623,8 @@ export function App() {
           ranked={state.config.mode === 'ranked'}
           seats={state.players}
           guestChange={guestChange}
+          replay={replayForPopup(latestReplay, state.roomId, matchCount)}
+          onReview={() => navigate('review', pathForReview('latest'))}
           onStay={dismissForfeit}
           onLeave={leaveRoom}
         />
@@ -585,6 +638,8 @@ export function App() {
           onRematch={rematch}
           onLeave={leaveRoom}
           guestChange={guestChange}
+          replay={replayForPopup(latestReplay, state.roomId, matchCount)}
+          onReview={() => navigate('review', pathForReview('latest'))}
         />
       )}
     </Shell>

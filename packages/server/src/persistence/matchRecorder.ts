@@ -1,5 +1,10 @@
+import type { Replay } from '@fmm/shared';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FinishedMatch } from '../match/matchManager.js';
 import { admin } from '../supabase.js';
+
+/** What the recorder needs from the database client, so a test can hand it a stand-in. */
+type Db = Pick<SupabaseClient, 'from' | 'rpc'>;
 
 /**
  * Writes a finished match to Supabase and applies rating changes.
@@ -9,23 +14,34 @@ import { admin } from '../supabase.js';
  * result. A failed write is logged, never thrown — losing a history row must
  * not take the game server down mid-demo.
  *
+ * The replay (the mines and the order the cells were opened) is saved with the
+ * match, in a column migration 0006 adds. Until that has been run the column is
+ * not there and the insert fails — so it is asked again without the replay, and
+ * recording never breaks over it.
+ *
  * Returns the saved match's id, or null when nothing was written.
  */
-export async function recordMatch(match: FinishedMatch): Promise<string | null> {
-  const db = admin;
+export async function recordMatch(
+  match: FinishedMatch,
+  replay: Replay | null = null,
+  db: Db | null = admin,
+): Promise<string | null> {
   if (!db) return null;
 
   try {
-    const { data: row, error: matchError } = await db
-      .from('matches')
-      .insert({
-        room_id: match.roomId,
-        mode: match.mode,
-        config: match.config,
-        winner_profile_id: match.winnerProfileId,
-      })
-      .select('id')
-      .single();
+    const base = {
+      room_id: match.roomId,
+      mode: match.mode,
+      config: match.config,
+      winner_profile_id: match.winnerProfileId,
+    };
+
+    let { data: row, error: matchError } = await insertMatch(db, replay ? { ...base, replay } : base);
+    if (matchError && replay) {
+      // No replay column yet (migration 0006 not applied), or the replay was refused: save the match without it.
+      warnWithoutReplay(matchError);
+      ({ data: row, error: matchError } = await insertMatch(db, base));
+    }
 
     if (matchError || !row) {
       console.error('[persist] could not write match:', matchError?.message);
@@ -70,4 +86,20 @@ export async function recordMatch(match: FinishedMatch): Promise<string | null> 
     console.error('[persist] unexpected failure:', (error as Error).message);
     return null;
   }
+}
+
+function insertMatch(db: Db, values: Record<string, unknown>) {
+  return db.from('matches').insert(values).select('id').single();
+}
+
+let warnedWithoutReplay = false;
+
+/** Once, not per match: a database without migration 0006 would otherwise repeat this after every game. */
+function warnWithoutReplay(error: { code?: string; message: string }): void {
+  if (warnedWithoutReplay) return;
+  warnedWithoutReplay = true;
+  console.warn(
+    `[persist] could not save the replay (${error.message}); saving matches without it. ` +
+      'If the column is missing, run supabase/migrations/0006_match_replays.sql.',
+  );
 }

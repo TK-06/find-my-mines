@@ -43,6 +43,8 @@ export interface ProfileScreenProps {
   /** Someone else's public profile, from a name in the Friends card. */
   onViewProfile: (username: string) => void;
   onOpenGameLog: () => void;
+  /** Opens a saved match's review, from the Review button on a recent match. */
+  onOpenReview: (matchId: string) => void;
   /** The guest this browser remembers, unofficial rating and all; null for anyone else. */
   guest: GuestProfile | null;
   /** "Forget me": the cookie and the guest match history go. */
@@ -66,6 +68,7 @@ export function ProfileScreen({
   onInvite,
   onViewProfile,
   onOpenGameLog,
+  onOpenReview,
   guest,
   onForgetGuest,
 }: ProfileScreenProps) {
@@ -206,7 +209,7 @@ export function ProfileScreen({
 
         <RatingChart series={series} sinceJoining={profile.elo - STARTING_ELO} />
         <ActivityHeatmap seats={history} today={today} />
-        <RecentMatches matches={recent} userId={userId} onOpenGameLog={onOpenGameLog} />
+        <RecentMatches matches={recent} userId={userId} onOpenGameLog={onOpenGameLog} onOpenReview={onOpenReview} />
       </div>
     </div>
   );

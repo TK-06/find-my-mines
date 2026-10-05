@@ -51,7 +51,7 @@ export interface Advice {
 }
 
 export interface ChatTurn {
-  role: 'system' | 'user';
+  role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
@@ -159,7 +159,7 @@ export function supportsStrictSchema(model: string): boolean {
 }
 
 /** gpt-oss reasons before it answers; Groq lets us keep that short and out of the reply. */
-function isGptOss(model: string): boolean {
+export function isGptOss(model: string): boolean {
   return model.startsWith('openai/gpt-oss-');
 }
 
@@ -192,7 +192,7 @@ export function replyContent(body: unknown): string | null {
 }
 
 /** A JSON object from the reply — whole, or the first {...} inside chatter or a code fence. */
-function parseObject(raw: string): Record<string, unknown> | null {
+export function parseObject(raw: string): Record<string, unknown> | null {
   const attempt = (text: string): Record<string, unknown> | null => {
     try {
       const value: unknown = JSON.parse(text);

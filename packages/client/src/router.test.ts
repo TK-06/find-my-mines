@@ -5,7 +5,9 @@ import {
   joinPathFor,
   pathFor,
   pathForPlayer,
+  pathForReview,
   playerNameFromPath,
+  reviewTargetFromPath,
   routeFromPath,
   type Route,
 } from './router.js';
@@ -108,5 +110,46 @@ describe('player profiles: /u/<username>', () => {
       expect(playerNameFromPath(path)).toBeNull();
     }
     expect(routeFromPath('/u')).toBe('game');
+  });
+});
+
+describe('game review: /review/latest and /review/<match id>', () => {
+  const ID = '6a2b1f2e-0000-4000-8000-000000000001';
+
+  it('opens the review screen for the game just played, and for a saved match', () => {
+    expect(routeFromPath('/review/latest')).toBe('review');
+    expect(routeFromPath('/review/latest/')).toBe('review');
+    expect(routeFromPath(`/review/${ID}`)).toBe('review');
+    expect(routeFromPath(`/review/${ID}/`)).toBe('review');
+  });
+
+  it('reads what the path asks for', () => {
+    expect(reviewTargetFromPath('/review/latest')).toBe('latest');
+    expect(reviewTargetFromPath(`/review/${ID}`)).toBe(ID);
+    // A match id is the same id in capitals; it is read in lower case.
+    expect(reviewTargetFromPath(`/review/${ID.toUpperCase()}`)).toBe(ID);
+  });
+
+  it('builds the path and reads it back', () => {
+    expect(pathForReview('latest')).toBe('/review/latest');
+    expect(pathForReview(ID)).toBe(`/review/${ID}`);
+    expect(reviewTargetFromPath(pathForReview('latest'))).toBe('latest');
+    expect(reviewTargetFromPath(pathForReview(ID))).toBe(ID);
+  });
+
+  it('names nothing for a bare /review, another word, an extra segment, a made-up id or a broken escape', () => {
+    for (const path of ['/review', '/review/', '/review/other', '/review/123', `/review/${ID}/extra`, `/review/${ID}0`, '/review/%E0%A4%A', '/reviews/latest', '/games/review/latest']) {
+      expect(reviewTargetFromPath(path), path).toBeNull();
+    }
+  });
+
+  it('sends a path that is not a review to the game, as every unknown path goes', () => {
+    expect(routeFromPath('/review')).toBe('game');
+    expect(routeFromPath('/review/other')).toBe('game');
+  });
+
+  it('does not take a profile or a join link for a review', () => {
+    expect(routeFromPath('/u/latest')).toBe('player');
+    expect(routeFromPath('/join/ABCD')).toBe('game');
   });
 });

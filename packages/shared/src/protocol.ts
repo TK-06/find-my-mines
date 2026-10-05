@@ -25,6 +25,7 @@ import type {
   Seat,
 } from './types.js';
 import type { PlayerReport, ReportReason, ReportStatus } from './reports.js';
+import type { Replay } from './replay.js';
 
 /**
  * The socket contract between client and server.
@@ -63,6 +64,44 @@ export interface RoomLookupResult {
   /** The room as the game list would show it. Set when ok. */
   room?: RoomSummary;
   /** Why not — usually that the room no longer exists. */
+  error?: string;
+}
+
+/**
+ * Which finished game a review request is about: the id the server keeps the
+ * replay under in memory (from `match:replay`), the id of the saved match, or
+ * both. Either is enough; the replay itself is never taken from the client.
+ */
+export interface ReviewRef {
+  replayId?: string;
+  matchId?: string;
+}
+
+/** The finished match's replay, sent to the whole room once the match is over. */
+export interface MatchReplayNotice {
+  roomId: string;
+  /** What the server keeps the replay under in memory, for the coach. */
+  replayId: string;
+  /** The saved match's id, when it is known yet; `match:recorded` says it later. */
+  matchId: string | null;
+  replay: Replay;
+  /** The coach can answer questions about this game (the server has a Groq key for it). */
+  coach: boolean;
+}
+
+/** Whether the coach can be asked about a game, and how many questions this person has left. */
+export interface ReviewCoachResult {
+  ok: boolean;
+  available: boolean;
+  questionsLeft?: number;
+  error?: string;
+}
+
+/** The coach's answer. A refusal or a failure spends no question, and says why in `error`. */
+export interface ReviewAskResult {
+  ok: boolean;
+  answer?: string;
+  questionsLeft?: number;
   error?: string;
 }
 
@@ -170,6 +209,17 @@ export interface ClientToServerEvents {
   'queue:join': (payload: { mode: RoomMode }) => void;
   'queue:leave': () => void;
 
+  /**
+   * Review coach: is it available for this finished game, and how many of the
+   * questions allowed per game this person has left.
+   */
+  'review:coach': (payload: ReviewRef, ack: (result: ReviewCoachResult) => void) => void;
+  /** Ask the coach about a finished game. It answers only from the server's own record of it. */
+  'review:ask': (
+    payload: ReviewRef & { question: string },
+    ack: (result: ReviewAskResult) => void,
+  ) => void;
+
   /** Host only. Starts the first match, or the next one after a match ends. */
   'game:start': () => void;
   'game:reveal': (payload: { row: number; col: number }) => void;
@@ -230,6 +280,14 @@ export interface ServerToClientEvents {
    * guest's browser remember its own games for the game log.
    */
   'match:recorded': (payload: { matchId: string }) => void;
+
+  /**
+   * The replay of the match that just ended (or was forfeited): where every
+   * mine was and the order the cells were opened. Sent to the room — players
+   * and spectators — only AFTER the match is over, never before, since it
+   * carries the mines.
+   */
+  'match:replay': (payload: MatchReplayNotice) => void;
 
   /** A friend invited you to the room they are in. Sent to each of your tabs. */
   'friend:invited': (invite: FriendInvite) => void;

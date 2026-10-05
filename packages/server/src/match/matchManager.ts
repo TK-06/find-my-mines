@@ -11,7 +11,9 @@ import {
   isRoomFull,
   joinRequestError,
   nextInTurn,
+  parseReplay,
   pickOne,
+  buildReplay,
   rateMatch,
   revealCell,
   type BotSetup,
@@ -21,6 +23,7 @@ import {
   type MinePosition,
   type PlayerPublic,
   type PublicMatchState,
+  type Replay,
   type RevealedCell,
   type RoomConfig,
   type RoomOrigin,
@@ -84,11 +87,19 @@ export interface MatchBroadcaster {
   cellRevealed(cell: RevealedCell, state: PublicMatchState): void;
   turnChanged(currentPlayerId: string, secondsLeft: number): void;
   turnTick(secondsLeft: number): void;
-  matchEnded(state: PublicMatchState): void;
+  /**
+   * The match is over. `replay` is the server's record of it (every mine and
+   * the order the cells were opened), for the room — now that nobody can use
+   * the mines any more — and for the match record. Null if it could not be built.
+   */
+  matchEnded(state: PublicMatchState, replay: Replay | null): void;
   matchReset(state: PublicMatchState): void;
   stateSync(state: PublicMatchState): void;
-  /** The last opponent left mid-match. `result` is set when there is a rating to persist. */
-  matchForfeited(notice: ForfeitNotice, result: FinishedMatch | null): void;
+  /**
+   * The last opponent left mid-match. `result` is set when there is a rating to
+   * persist; `replay` is as long as the match lasted.
+   */
+  matchForfeited(notice: ForfeitNotice, result: FinishedMatch | null, replay: Replay | null): void;
   /** A room-wide toast. */
   notice(message: string): void;
   error(playerId: string, code: string, message: string): void;
@@ -120,6 +131,12 @@ export class MatchManager {
   private currentPlayerId: string | null = null;
   private winnerId: string | null = null;
   private revealed: RevealedCell[] = [];
+  /**
+   * Who played the current (or just finished) match, in turn order, under the
+   * id each is known by now — kept even after a seat leaves, since their moves
+   * stay in the record. Only ever feeds the replay.
+   */
+  private matchSeats: { id: string; name: string; bot: boolean }[] = [];
   private rematchVotes = new Set<string>();
   private seq = 0;
 
@@ -386,6 +403,9 @@ export class MatchManager {
     for (const cell of this.revealed) {
       if (cell.byPlayerId === oldId) cell.byPlayerId = newId;
     }
+    for (const seat of this.matchSeats) {
+      if (seat.id === oldId) seat.id = newId;
+    }
 
     this.out.notice(`${player.nickname} is back.`);
     this.out.stateSync(this.publicState());
@@ -480,9 +500,11 @@ export class MatchManager {
       })),
     };
     const result = this.takeResult();
+    // Before the board is dropped: the replay is as long as the match lasted.
+    const replay = this.buildMatchReplay();
 
     this.abandonMatch();
-    this.out.matchForfeited(notice, result);
+    this.out.matchForfeited(notice, result, replay);
   }
 
   /** Fills free seats from the spectators who may take one, oldest first. */
@@ -531,6 +553,7 @@ export class MatchManager {
       bombCount: this.config.mineCount,
     });
     this.revealed = [];
+    this.matchSeats = seated.map((p) => ({ id: p.id, name: p.nickname, bot: p.bot !== undefined }));
     this.winnerId = null;
     this.rematchVotes.clear();
     this.hintsUsed.clear();
@@ -571,8 +594,33 @@ export class MatchManager {
 
     this.applyRatings(seated);
 
-    this.out.matchEnded(this.publicState());
+    this.out.matchEnded(this.publicState(), this.buildMatchReplay());
     this.out.changed();
+  }
+
+  /**
+   * The record of the match so far: the board's mines, who sat where, and every
+   * cell in the order it was opened. Only asked for once the match is over
+   * (it ended, or a forfeit ended it), because it carries the mines; the
+   * result goes to the room and into the match record, never to a live game.
+   * Null if there is no board or the record does not hold together.
+   */
+  private buildMatchReplay(): Replay | null {
+    if (!this.board) return null;
+    const seatOf = new Map(this.matchSeats.map((seat, index) => [seat.id, index]));
+    return parseReplay(
+      buildReplay({
+        rows: this.board.rows,
+        cols: this.board.cols,
+        bombs: this.board.bombs,
+        seats: this.matchSeats.map(({ name, bot }) => ({ name, bot })),
+        moves: this.revealed.map((cell) => ({
+          row: cell.row,
+          col: cell.col,
+          seat: seatOf.get(cell.byPlayerId) ?? 0,
+        })),
+      }),
+    );
   }
 
   /**

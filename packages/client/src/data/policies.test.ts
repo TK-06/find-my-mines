@@ -3,6 +3,7 @@ import {
   CONTACT_EMAIL,
   POLICIES,
   POLICY_ORDER,
+  POLICY_UPDATED,
   contactMailto,
   inlineParts,
   isPolicy,
@@ -90,5 +91,27 @@ describe('policy pages', () => {
       const text = allText(POLICIES[id]);
       for (const word of named) expect(text).not.toMatch(new RegExp(`\\b${word}\\b`, 'i'));
     }
+  });
+
+  // Game review saves the order of moves and where the mines were, and sends
+  // typed coach questions to Groq with the game's facts. The privacy page has to say so.
+  it('say what game review stores and what the coach sends', () => {
+    const records = POLICIES.privacy.sections.find((s) => s.id === 'matches')!;
+    const recordsText = allText({ ...POLICIES.privacy, intro: '', sections: [records] });
+    expect(recordsText).toMatch(/order .*slots were opened/);
+    expect(recordsText).toContain('where every mine was');
+    expect(recordsText).toContain('public');
+
+    const services = POLICIES.privacy.sections.find((s) => s.id === 'services')!;
+    const servicesText = allText({ ...POLICIES.privacy, intro: '', sections: [services] });
+    expect(servicesText).toContain('coach');
+    expect(servicesText).toContain('Groq');
+    expect(servicesText).toContain('the players’ names as shown in the game');
+    expect(servicesText).toContain('are limited');
+    expect(servicesText).toContain('neither your questions nor the answers are saved');
+  });
+
+  it('were last changed on 5 October 2026, when game review began saving replays', () => {
+    expect(POLICY_UPDATED).toBe('5 October 2026');
   });
 });

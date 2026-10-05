@@ -14,7 +14,7 @@ type Scope = 'all' | 'mine';
 type ModeFilter = 'all' | 'ranked' | 'casual';
 
 /** Public match history. Anyone can read it; guests included in the seats. */
-export function GameLogScreen() {
+export function GameLogScreen({ onOpenReview }: { onOpenReview?: (matchId: string) => void }) {
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [guestMatches, setGuestMatches] = useState<GuestMatch[]>(() => loadGuestMatches());
@@ -137,6 +137,7 @@ export function GameLogScreen() {
               match={match}
               highlightProfileId={userId}
               highlightGuestName={userId ? null : (guestNames.get(match.id) ?? null)}
+              onOpenReview={onOpenReview}
             />
           ))}
         </ul>

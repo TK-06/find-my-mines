@@ -64,13 +64,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Tracks the latest room state a socket has been told about. */
 function track(socket) {
-  const view = { state: null, ended: null, closed: null };
+  // `replays` collects every match:replay, noting whether the match was already
+  // over (ended, or forfeited) when it arrived: it must never come earlier.
+  const view = { state: null, ended: null, closed: null, forfeited: false, replays: [] };
   const set = (s) => {
     view.state = s;
   };
   socket.on('state:sync', set);
   socket.on('match:start', (s) => {
     view.ended = null;
+    view.forfeited = false;
     set(s);
   });
   socket.on('match:reset', set);
@@ -78,6 +81,12 @@ function track(socket) {
   socket.on('match:ended', (s) => {
     view.ended = s;
     set(s);
+  });
+  socket.on('match:forfeit', () => {
+    view.forfeited = true;
+  });
+  socket.on('match:replay', (payload) => {
+    view.replays.push({ payload, afterEnd: view.ended !== null || view.forfeited });
   });
   socket.on('turn:changed', ({ currentPlayerId, secondsLeft }) => {
     if (view.state) view.state = { ...view.state, currentPlayerId, secondsLeft };
@@ -470,6 +479,39 @@ if (ended) {
   check('cumulative totals were banked', ended.players.every((p) => p.totalScore === p.score));
   check('spectators saw the finished match', carolView.ended?.winnerId === ended.winnerId);
 
+  // ── the replay: only after the match, and true to what happened ───────────
+  await sleep(250);
+  const replayMsg = aliceView.replays[0];
+  const replay = replayMsg?.payload.replay;
+  check('exactly one match:replay reached a player, and not before match:ended',
+    aliceView.replays.length === 1 && replayMsg.afterEnd === true,
+    `${aliceView.replays.length} received, afterEnd=${replayMsg?.afterEnd}`);
+  check('the replay carries every mine: as many as the board has',
+    Array.isArray(replay?.mines) && replay.mines.length === ended.bombCount && new Set(replay.mines).size === ended.bombCount,
+    `${replay?.mines?.length} of ${ended.bombCount}`);
+  check('every mine the players found is among the replay’s mines',
+    ended.revealed.filter((c) => c.kind === 'bomb').every((c) => replay?.mines.includes(c.row * ended.cols + c.col)));
+  check('the replay has one move per revealed cell, in the order they were opened',
+    replay?.moves.length === ended.revealed.length &&
+      ended.revealed.every((c, k) => replay.moves[k].i === c.row * ended.cols + c.col),
+    `${replay?.moves?.length} moves, ${ended.revealed.length} revealed`);
+  check('each move names the seat that made it',
+    ended.revealed.every((c, k) => replay?.moves[k].s === ended.players.findIndex((p) => p.id === c.byPlayerId)));
+  check('the replay’s seats are the players, in turn order',
+    JSON.stringify(replay?.seats) === JSON.stringify(ended.players.map((p) => ({ name: p.nickname, bot: false }))),
+    JSON.stringify(replay?.seats));
+  check('the replay says the board size and mine count',
+    replay?.v === 1 && replay.rows === ended.rows && replay.cols === ended.cols && replay.mineCount === ended.bombCount);
+  check('the replay arrives with an id for the coach, no saved match yet unless there is a database',
+    typeof replayMsg?.payload.replayId === 'string' && replayMsg.payload.replayId.length >= 16 &&
+      (replayMsg.payload.matchId === null || typeof replayMsg.payload.matchId === 'string') &&
+      typeof replayMsg.payload.coach === 'boolean' && replayMsg.payload.roomId === roomId);
+  check('spectators get the replay too, after the end, and the same one',
+    carolView.replays.length === 1 && carolView.replays[0].afterEnd === true &&
+      JSON.stringify(carolView.replays[0].payload.replay) === JSON.stringify(replay));
+  check('the match start, the moves and the end never carried the mines',
+    !JSON.stringify(ended).includes('"mines"') && !JSON.stringify(start).includes('"mines"'));
+
   // ── rematch ───────────────────────────────────────────────────────────────
   section('rematch');
 
@@ -843,6 +885,17 @@ section('forfeit and leaving');
   check('the room goes back to waiting after a forfeit', p1View.state?.status === 'waiting',
     p1View.state?.status);
   check('the leaver gets no room updates after leaving', lateToLeaver === 0, `${lateToLeaver} late`);
+
+  // A forfeit ends the match too, so the replay comes then — and only then.
+  const forfeitReplay = p1View.replays[0];
+  const fr = forfeitReplay?.payload.replay;
+  check('a forfeit sends the replay of the match, and only after the forfeit',
+    p1View.replays.length === 1 && forfeitReplay.afterEnd === true && forfeitReplay.payload.roomId === room.roomId,
+    `${p1View.replays.length} received, afterEnd=${forfeitReplay?.afterEnd}`);
+  check('the forfeit replay has every mine, both seats and the moves made before the leaver walked out',
+    fr?.mines?.length === 11 && fr.mineCount === 11 && fr.seats.map((s) => s.name).join() === 'Fern,Gus' &&
+      Array.isArray(fr.moves) && fr.moves.length === 0,
+    JSON.stringify({ mines: fr?.mines?.length, seats: fr?.seats, moves: fr?.moves?.length }));
 
   // Finish a real match, have one side vote rematch, then the other leaves.
   await emitAck(p2, 'room:join', { roomId: room.roomId });
@@ -2178,6 +2231,94 @@ section('player reports');
   await sleep(150);
 }
 
+// ── review coach ────────────────────────────────────────────────────────────
+section('review coach');
+
+// The server may or may not have a Groq key: this checks the protocol either
+// way, and never anything about what the model says.
+{
+  const first = aliceView.replays[0]?.payload;
+  const replayId = first?.replayId;
+  const askLong = (socket, payload) =>
+    new Promise((resolve) =>
+      socket.timeout(25000).emit('review:ask', payload, (err, result) =>
+        resolve(err ? { ok: false, error: 'no ack for review:ask' } : result),
+      ),
+    );
+  const clean = (res) => res?.ok === false && typeof res.error === 'string' && !res.error.startsWith('no ack');
+
+  const asker = await connect();
+  await setName(asker, 'Coachee');
+
+  const JUNK = [undefined, null, 42, 'text', [], {}, { replayId: {} }, { replayId: '' }, { replayId: 'x'.repeat(300) },
+    { matchId: 'latest' }, { matchId: "x' or 1=1 --" }, { matchId: [] }];
+  const coachJunk = [];
+  const askJunk = [];
+  for (const junk of JUNK) {
+    coachJunk.push(await emitAck(asker, 'review:coach', junk));
+    askJunk.push(await emitAck(asker, 'review:ask', junk));
+  }
+  check('review:coach with junk is a clean ok: false', coachJunk.every((r) => clean(r) && r.available === false),
+    JSON.stringify(coachJunk.find((r) => !(clean(r) && r.available === false))));
+  check('review:ask with junk is a clean ok: false', askJunk.every(clean),
+    JSON.stringify(askJunk.find((r) => !clean(r))));
+
+  const unknown = { replayId: 'no-such-replay' };
+  check('review:coach for a game the server never held is ok: false', clean(await emitAck(asker, 'review:coach', unknown)));
+  check('review:ask for a game the server never held is ok: false',
+    clean(await emitAck(asker, 'review:ask', { ...unknown, question: 'Where did the game turn?' })));
+  // The server has no database here to load a saved match from, and a client
+  // can never hand it a replay to be believed.
+  check('a client-sent replay is never believed: no stored game, no answer',
+    clean(await emitAck(asker, 'review:ask', {
+      ...unknown, replay: aliceView.replays[0]?.payload.replay, question: 'Where did the game turn?',
+    })));
+  check('a match id the server cannot load is ok: false',
+    clean(await emitAck(asker, 'review:ask', { matchId: '6a2b1f2e-0000-4000-8000-000000000001', question: 'Hi?' })));
+
+  check('the server had a replay id to ask about', typeof replayId === 'string' && replayId.length > 0);
+  const status = await emitAck(asker, 'review:coach', { replayId });
+  check('review:coach for a real game answers cleanly: on with a count, or off with a reason',
+    typeof status.available === 'boolean' && status.ok === status.available &&
+      (status.available ? Number.isInteger(status.questionsLeft) : clean(status)),
+    JSON.stringify(status));
+  check('review:coach agrees with what match:replay said about the coach', status.available === first?.coach,
+    `coach ${first?.coach}, available ${status.available}`);
+
+  // Questions that are not questions are refused before anything is asked of the model.
+  check('an empty question is refused', clean(await emitAck(asker, 'review:ask', { replayId, question: '' })));
+  check('a question that is not text is refused', clean(await emitAck(asker, 'review:ask', { replayId, question: { a: 1 } })));
+  check('a question over 280 characters is refused', clean(await emitAck(asker, 'review:ask', { replayId, question: 'x'.repeat(281) })));
+
+  // Two questions at once: the second is inside the three-second gap. (The ones
+  // above, to games that were never there, spent the gap too: wait it out first,
+  // so the first of this pair is really put to the model.)
+  await sleep(3200);
+  const [one, two] = await Promise.all([
+    askLong(asker, { replayId, question: 'Where did the game turn?' }),
+    askLong(asker, { replayId, question: 'How do I spot a sure mine?' }),
+  ]);
+  if (!status.available) {
+    check('review:ask without a coach is a clean ok: false', clean(one) && clean(two), JSON.stringify([one, two]));
+  } else {
+    const fine = (r) =>
+      (r.ok === true && typeof r.answer === 'string' && r.answer.length > 0 && r.answer.length <= 600 &&
+        Number.isInteger(r.questionsLeft) && r.questionsLeft >= 0 && r.questionsLeft <= 10) ||
+      clean(r);
+    check('review:ask answers, or says the coach is busy, and nothing else', fine(one),
+      `ok=${one.ok} left=${one.questionsLeft} error=${one.error ?? ''}`);
+    check('a second question inside the gap is refused', clean(two), `ok=${two.ok} error=${two.error ?? ''}`);
+    // An answer counts (9 left); a busy coach costs nothing (still 10), and so does an answer the
+    // server threw out. Either way review:coach says what the ack of the question said.
+    const after = await emitAck(asker, 'review:coach', { replayId });
+    check('the count after a question is what its answer said, and a busy coach costs nothing',
+      after.ok === true &&
+        (one.ok === true ? after.questionsLeft === one.questionsLeft && one.questionsLeft >= 9 : after.questionsLeft === 10),
+      `ok=${one.ok} said ${one.questionsLeft}, now ${after.questionsLeft}`);
+  }
+  asker.close();
+}
+
 // ── malformed messages never take the server down ───────────────────────────
 section('malformed messages');
 
@@ -2187,12 +2328,13 @@ const CLIENT_EVENTS = [
   'player:join', 'room:create', 'room:join', 'room:spectate', 'room:lookup', 'room:leave',
   'room:requestJoin', 'room:cancelRequest', 'room:answerRequest', 'room:kick',
   'friend:invite', 'ai:play', 'ai:about', 'ai:hint', 'room:say', 'lobby:say', 'lobby:invite', 'player:report',
+  'review:coach', 'review:ask',
   'queue:join', 'queue:leave', 'game:start', 'game:reveal', 'game:rematch',
 ];
 const ADMIN_EVENTS = ['admin:kick', 'admin:ban', 'admin:closeRoom', 'admin:watch', 'admin:mines', 'admin:clearChat', 'admin:report'];
 const BAD_ARGS = [
   [], [undefined], [null], [42], ['text'], [[]], [{}],
-  [{ roomId: {}, nickname: {}, name: [], config: 'x', mode: 7, row: 'a', col: null, targetId: [], note: 'x', level: {}, text: [], reason: {}, details: [], guestId: 7, id: {}, status: [] }],
+  [{ roomId: {}, nickname: {}, name: [], config: 'x', mode: 7, row: 'a', col: null, targetId: [], note: 'x', level: {}, text: [], reason: {}, details: [], guestId: 7, id: {}, status: [], replayId: 7, matchId: {}, question: [] }],
   [{}, 5], [null, 'not a function'],
 ];
 

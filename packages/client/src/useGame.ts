@@ -20,6 +20,9 @@ import {
   type ReportReason,
   type RoomMode,
   type RoomSummary,
+  type ReviewAskResult,
+  type ReviewCoachResult,
+  type ReviewRef,
   type ServerToClientEvents,
 } from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -42,6 +45,8 @@ import {
   type UnofficialChange,
 } from './data/guestCookie.js';
 import { clearGuestMatches, rememberGuestMatch } from './data/guestHistory.js';
+import { latestFromNotice, withMatchId, type LatestReplay } from './data/latestReplay.js';
+import { seatOfMe } from './data/reviewModel.js';
 import { addLobbyMessage, lobbyHistory } from './data/worldChat.js';
 import { socket } from './socket.js';
 
@@ -108,6 +113,16 @@ export function useGame() {
   const [roomMessages, setRoomMessages] = useState<ChatMessage[]>([]);
   /** The lobby's world chat, oldest first: the server's history, then each new line. */
   const [lobbyMessages, setLobbyMessages] = useState<LobbyMessage[]>([]);
+  /**
+   * The replay of the game this tab last finished (or watched finish), kept for
+   * its review. It outlives the room: leaving does not take it away.
+   */
+  const [latestReplay, setLatestReplay] = useState<LatestReplay | null>(null);
+  /** How many matches have started in this tab, so a replay can be matched to the game it belongs to. */
+  const [matchCount, setMatchCount] = useState(0);
+  const matchCountRef = useRef(0);
+  /** The newest room snapshot, for socket listeners that would otherwise see an old render's. */
+  const stateRef = useRef<PublicMatchState | null>(null);
   const [error, setError] = useState<string | null>(null);
   /**
    * The guest remembered by this browser (the `fmm_guest` cookie), with their
@@ -239,6 +254,7 @@ export function useGame() {
         playingSnapshot.current = null;
         countGuestResult(next.players, next.config.mode === 'ranked');
       }
+      stateRef.current = next;
       setState(next);
       const me = next.players.find((p) => p.id === playerIdRef.current);
       if (me) setElo(me.elo);
@@ -260,6 +276,10 @@ export function useGame() {
     socket.on('disconnect', onDisconnect);
     socket.on('state:sync', accept);
     socket.on('match:start', (next) => {
+      if (next.roomId === activeRoom.current) {
+        matchCountRef.current += 1;
+        setMatchCount(matchCountRef.current);
+      }
       setForfeit(null);
       accept(next);
     });
@@ -307,9 +327,28 @@ export function useGame() {
       setRequestResolution(resolution);
     });
 
-    // A guest's browser remembers its own saved matches for the game log. An
-    // account's matches are found by its profile id instead.
+    // The finished match's replay: where the mines were and how the cells were
+    // opened. It only ever arrives after the match is over. Kept for the review
+    // page, with which seat was ours and how the room was set up, read now
+    // because the room may be gone by the time the page is opened.
+    socket.on('match:replay', (notice) => {
+      if (notice.roomId !== activeRoom.current) return;
+      const room = stateRef.current?.roomId === notice.roomId ? stateRef.current : null;
+      setLatestReplay(
+        latestFromNotice(notice, {
+          matchCount: matchCountRef.current,
+          mode: room?.config.mode ?? null,
+          you: room ? seatOfMe(notice.replay, room.players, playerIdRef.current) : null,
+          now: Date.now(),
+        }),
+      );
+    });
+
+    // The saved match's id links the game just played to its record, so its
+    // review can be opened by either. A guest's browser also remembers its own
+    // saved matches for the game log; an account's are found by its profile id.
     socket.on('match:recorded', ({ matchId }) => {
+      setLatestReplay((latest) => withMatchId(latest, matchId));
       if (!isGuestRef.current || suppressRemember.current) return;
       rememberGuestMatch({ matchId, nickname: myNicknameRef.current, at: Date.now() });
     });
@@ -383,6 +422,7 @@ export function useGame() {
       socket.off('player:removed');
       socket.off('room:requestResolved');
       socket.off('match:recorded');
+      socket.off('match:replay');
       socket.off('room:closed');
       socket.off('turn:changed');
       socket.off('turn:tick');
@@ -647,6 +687,40 @@ export function useGame() {
   }, []);
 
   /**
+   * Is the coach on for this finished game, and how many questions are left?
+   * Null when the server did not answer. Timed, so a lost answer cannot leave
+   * the panel waiting for ever.
+   */
+  const coachStatus = useCallback(
+    (ref: ReviewRef) =>
+      new Promise<ReviewCoachResult | null>((resolve) =>
+        socket
+          .timeout(10_000)
+          .emit('review:coach', ref, (err: Error | null, result: ReviewCoachResult) =>
+            resolve(err || !result ? null : result),
+          ),
+      ),
+    [],
+  );
+
+  /**
+   * One question to the coach about a finished game. The server answers from its
+   * own record of the game; a refusal or a busy coach comes back as `error` and
+   * costs no question. Timed generously: the model may take several seconds.
+   */
+  const askCoach = useCallback(
+    (ref: ReviewRef, question: string) =>
+      new Promise<ReviewAskResult | null>((resolve) =>
+        socket
+          .timeout(20_000)
+          .emit('review:ask', { ...ref, question }, (err: Error | null, result: ReviewAskResult) =>
+            resolve(err || !result ? null : result),
+          ),
+      ),
+    [],
+  );
+
+  /**
    * Say something in the room's chat. Nothing is shown until the server sends
    * the line back to the whole room, us included — it may refuse (too fast,
    * not in a room) and says why in `error`.
@@ -759,5 +833,9 @@ export function useGame() {
     lobbyMessages,
     sayInLobby,
     postInvite,
+    latestReplay,
+    matchCount,
+    coachStatus,
+    askCoach,
   };
 }

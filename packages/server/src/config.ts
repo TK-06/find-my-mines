@@ -71,6 +71,17 @@ export const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? '';
  */
 export const GROQ_API_KEY = process.env.GROQ_API_KEY ?? '';
 
+/**
+ * Optional second Groq key, for the review coach alone. With one, the coach has
+ * its own per-minute budget and never touches the AI opponents' calls. Without
+ * one, the coach is available whenever GROQ_API_KEY is, but uses only the first
+ * half of that key's minute so the computer opponents keep priority.
+ *
+ * A SECRET like GROQ_API_KEY: server-only, never logged, never sent to a
+ * client, never given a VITE_ prefix.
+ */
+export const GROQ_COACH_API_KEY = process.env.GROQ_COACH_API_KEY ?? '';
+
 /** Which Groq model advises the bot. See `npm run ai:eval` for how they compare. */
 export const AI_MODEL = process.env.AI_MODEL?.trim() || 'openai/gpt-oss-20b';
 

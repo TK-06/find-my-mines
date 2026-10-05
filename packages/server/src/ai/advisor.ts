@@ -1,4 +1,5 @@
 import type { HintReason } from '@fmm/shared';
+import { buildCoachRequestBody, parseCoachReply } from './coachPrompt.js';
 import {
   buildRequestBody,
   buildWhyRequestBody,
@@ -6,6 +7,7 @@ import {
   parseWhyReply,
   replyContent,
   type Advice,
+  type ChatTurn,
   type PromptInput,
 } from './prompt.js';
 
@@ -264,6 +266,9 @@ const BOT_FALLBACK = "the bot plays the solver's pick";
 /** What a failed call costs a hint, for the log line. */
 const HINT_FALLBACK = 'the hint keeps its plain explanation';
 
+/** What a failed call costs a coach question, for the log line. */
+const COACH_FALLBACK = 'the coach answers that it is busy';
+
 /** The game's advisor: budgeted, backing off on 429, quiet about its failures. */
 export class Advisor {
   readonly model: string;
@@ -318,6 +323,27 @@ export class Advisor {
       read: (content) => parseWhyReply(content, reason),
     });
     return this.settle(outcome, timeoutMs, HINT_FALLBACK);
+  }
+
+  /**
+   * The coach's answer to a question about a finished game, or null — straight
+   * away when the budget (or the share of it `reserve` leaves the coach) is
+   * spent or Groq asked us to wait, otherwise within `timeoutMs`. The text is
+   * only what the model said: checking it against the game is the caller's job
+   * (see `checkCoachAnswer`), so a non-null answer is not yet safe to show.
+   */
+  async coach(messages: readonly ChatTurn[], timeoutMs: number, reserve: number): Promise<string | null> {
+    if (timeoutMs <= 0) return null;
+    if (!this.budget.take(this.now(), reserve)) return null;
+
+    const outcome = await callGroq({
+      apiKey: this.options.apiKey,
+      body: buildCoachRequestBody(this.model, messages),
+      timeoutMs,
+      fetch: this.options.fetch,
+      read: (content) => parseCoachReply(content),
+    });
+    return this.settle(outcome, timeoutMs, COACH_FALLBACK);
   }
 
   /** Books what a call cost, backs off when asked to, and hands back the answer if there was one. */

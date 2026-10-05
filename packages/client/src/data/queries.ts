@@ -1,3 +1,4 @@
+import { isMatchId, parseReplay, type Replay } from '@fmm/shared';
 import { supabase } from '../auth/supabase.js';
 import { isMissingColumn } from './avatar.js';
 
@@ -50,6 +51,11 @@ export interface MatchRow {
   config: { rows?: number; cols?: number; mineCount?: number; maxPlayers?: number | null };
   winner_profile_id: string | null;
   created_at: string;
+  /**
+   * The match was saved with its replay, so it can be reviewed. False for older
+   * matches, and for every match until migration 0006 adds the column.
+   */
+  has_replay: boolean;
   players: MatchPlayerRow[];
 }
 
@@ -144,11 +150,10 @@ export async function updateUsername(
 export async function fetchRecentMatches(limit = 40): Promise<MatchRow[]> {
   if (!supabase) return [];
 
-  const { data: matches, error } = await supabase
-    .from('matches')
-    .select('id, room_id, mode, config, winner_profile_id, created_at')
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const client = supabase;
+  const { data: matches, error } = await withReplayFlag((columns) =>
+    client.from('matches').select(columns).order('created_at', { ascending: false }).limit(limit),
+  );
 
   if (error || !matches?.length) {
     if (error) console.error('[games] load failed:', error.message);
@@ -165,10 +170,38 @@ export async function fetchRecentMatches(limit = 40): Promise<MatchRow[]> {
     byMatch.set(seat.match_id, list);
   }
 
-  return matches.map((match) => ({
-    ...(match as Omit<MatchRow, 'players'>),
-    players: byMatch.get(match.id as string) ?? [],
-  }));
+  return matches.map((match) => toMatchRow(match, byMatch));
+}
+
+/**
+ * The columns a match list reads. `has_replay` is the generated column from
+ * migration 0006; the replay itself is never read here, so a list does not
+ * download a replay per match.
+ */
+const MATCH_COLUMNS = 'id, room_id, mode, config, winner_profile_id, created_at';
+
+type DbError = { code?: string; message: string };
+
+/**
+ * Reads matches with the `has_replay` flag. Until migration 0006 the column does
+ * not exist and asking for it fails the whole read, so it is asked again
+ * without it: the matches still list, and none of them offers a review.
+ */
+async function withReplayFlag(
+  read: (columns: string) => PromiseLike<{ data: unknown; error: DbError | null }>,
+): Promise<{ data: Record<string, unknown>[] | null; error: DbError | null }> {
+  let result = await read(`${MATCH_COLUMNS}, has_replay`);
+  if (isMissingColumn(result.error)) result = await read(MATCH_COLUMNS);
+  return { data: (result.data ?? null) as Record<string, unknown>[] | null, error: result.error };
+}
+
+/** A match row as the pages use it: its seats attached, and the flag a plain boolean (false when absent). */
+function toMatchRow(match: Record<string, unknown>, seats: Map<string, MatchPlayerRow[]>): MatchRow {
+  return {
+    ...(match as Omit<MatchRow, 'players' | 'has_replay'>),
+    has_replay: match.has_replay === true,
+    players: seats.get(match.id as string) ?? [],
+  };
 }
 
 /**
@@ -206,11 +239,10 @@ export async function fetchMatchesForProfile(userId: string, limit = 20): Promis
 export async function fetchMatchesByIds(ids: string[]): Promise<MatchRow[]> {
   if (!supabase || ids.length === 0) return [];
 
-  const { data: matches } = await supabase
-    .from('matches')
-    .select('id, room_id, mode, config, winner_profile_id, created_at')
-    .in('id', ids)
-    .order('created_at', { ascending: false });
+  const client = supabase;
+  const { data: matches } = await withReplayFlag((columns) =>
+    client.from('matches').select(columns).in('id', ids).order('created_at', { ascending: false }),
+  );
 
   const { data: allSeats } = await supabase.from('match_players').select('*').in('match_id', ids);
 
@@ -221,10 +253,36 @@ export async function fetchMatchesByIds(ids: string[]): Promise<MatchRow[]> {
     byMatch.set(seat.match_id, list);
   }
 
-  return (matches ?? []).map((match) => ({
-    ...(match as Omit<MatchRow, 'players'>),
-    players: byMatch.get(match.id as string) ?? [],
-  }));
+  return (matches ?? []).map((match) => toMatchRow(match, byMatch));
+}
+
+/** What reading a saved match's replay came to. Each outcome has its own honest empty state on the review page. */
+export type ReplayLoad =
+  | { status: 'ok'; replay: Replay }
+  /** No database is configured: nothing to read from. */
+  | { status: 'off' }
+  /** The match has no replay: an older game, a replay that did not hold together, or no column yet (migration 0006). */
+  | { status: 'none' }
+  /** The read itself failed. */
+  | { status: 'error' };
+
+/**
+ * The replay saved with one match, read with the anon key (matches are public)
+ * and checked before anything uses it. Never throws.
+ */
+export async function fetchReplay(matchId: string): Promise<ReplayLoad> {
+  if (!supabase) return { status: 'off' };
+  if (!isMatchId(matchId)) return { status: 'none' };
+
+  const { data, error } = await supabase.from('matches').select('replay').eq('id', matchId).maybeSingle();
+  // Before migration 0006 there is no replay column: nothing was ever saved.
+  if (isMissingColumn(error)) return { status: 'none' };
+  if (error) {
+    console.error('[review] replay load failed:', error.message);
+    return { status: 'error' };
+  }
+  const replay = parseReplay((data as { replay?: unknown } | null)?.replay);
+  return replay ? { status: 'ok', replay } : { status: 'none' };
 }
 
 /** One of your seats, with the match it was in. Feeds the profile's charts and tiles. */

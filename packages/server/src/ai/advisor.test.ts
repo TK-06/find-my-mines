@@ -9,7 +9,7 @@ import {
   createAdvisor,
   retryAfterMs,
 } from './advisor.js';
-import type { PromptInput } from './prompt.js';
+import type { ChatTurn, PromptInput } from './prompt.js';
 
 const KEY = 'gsk_test_secret_value';
 
@@ -397,5 +397,107 @@ describe('Advisor.explain', () => {
       throw new TypeError('fetch failed');
     });
     expect(await advisor.explain(REASON, PLAIN, 1_000)).toBeNull();
+  });
+});
+
+describe('Advisor.coach', () => {
+  const MESSAGES: ChatTurn[] = [
+    { role: 'system', content: 'You are the coach.' },
+    { role: 'user', content: 'Facts… "Where did the game turn?"' },
+  ];
+  const ANSWER = 'It turned on move 9, when Ann passed over a sure mine.';
+  const reply = () => completion(JSON.stringify({ answer: ANSWER }), 900);
+
+  it('returns what the model said, unchecked: that is the caller’s job', async () => {
+    const groq = fakeGroq(reply);
+    const { advisor } = advisorWith(groq.fetch);
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBe(ANSWER);
+    // Even an answer the facts would not back up comes through; checkCoachAnswer decides.
+    const odd = fakeGroq(() => completion(JSON.stringify({ answer: 'Move 99 is where it turned.' })));
+    expect(await advisorWith(odd.fetch).advisor.coach(MESSAGES, 1_000, 0)).toBe('Move 99 is where it turned.');
+  });
+
+  it('posts the messages as given, with the key as a bearer token', async () => {
+    const groq = fakeGroq(reply);
+    const { advisor } = advisorWith(groq.fetch);
+    await advisor.coach(MESSAGES, 1_000, 0);
+
+    const [call] = groq.calls;
+    expect(call?.url).toBe(GROQ_URL);
+    expect((call?.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
+    const body = JSON.parse(String(call?.init.body)) as { messages: ChatTurn[]; model: string };
+    expect(body.messages).toEqual(MESSAGES);
+    expect(body.model).toBe('openai/gpt-oss-20b');
+  });
+
+  it('is null for a reply that is no answer, and says so without the key', async () => {
+    const empty = fakeGroq(() => completion('{"nope": 1}'));
+    const { advisor, warnings } = advisorWith(empty.fetch);
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/coach answers that it is busy/);
+    expect(warnings[0]).not.toContain(KEY);
+  });
+
+  it('leaves the reserved share of the minute to the bot', async () => {
+    const groq = fakeGroq(reply);
+    const { advisor } = advisorWith(groq.fetch, new RateBudget(2));
+    expect(await advisor.coach(MESSAGES, 1_000, 0.5)).toBe(ANSWER);
+    // One call of two is spent: the rest is the bot's.
+    expect(await advisor.coach(MESSAGES, 1_000, 0.5)).toBeNull();
+    expect(groq.calls).toHaveLength(1);
+    // A coach with a budget of its own (no reserve) may use all of it.
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBe(ANSWER);
+    expect(groq.calls).toHaveLength(2);
+  });
+
+  it('counts its tokens: a long answer to a long question uses up the minute', async () => {
+    const groq = fakeGroq(() => completion(JSON.stringify({ answer: ANSWER }), 5_900));
+    const { advisor } = advisorWith(groq.fetch);
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBe(ANSWER);
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBe(ANSWER);
+    // 11,800 tokens in the minute against a limit of 6,000.
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBeNull();
+    expect(groq.calls).toHaveLength(2);
+  });
+
+  it('backs off after a 429, together with everything else on the key', async () => {
+    const groq = fakeGroq(() => new Response('{}', { status: 429, headers: { 'retry-after': '20' } }));
+    const { advisor, clock } = advisorWith(groq.fetch);
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBeNull();
+    clock.now = 5_000;
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBeNull();
+    expect(await advisor.choose(INPUT, 1_000)).toBeNull();
+    expect(groq.calls).toHaveLength(1);
+  });
+
+  it('gives up at the timeout and aborts the request', async () => {
+    let aborted = false;
+    const hang: FakeFetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    const { advisor } = advisorWith(hang);
+    const started = Date.now();
+    expect(await advisor.coach(MESSAGES, 30, 0)).toBeNull();
+    expect(aborted).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('returns null when the network fails, without throwing', async () => {
+    const { advisor } = advisorWith(async () => {
+      throw new TypeError('fetch failed');
+    });
+    expect(await advisor.coach(MESSAGES, 1_000, 0)).toBeNull();
+  });
+
+  it('does not call at all when there is no time to wait', async () => {
+    const groq = fakeGroq(reply);
+    const { advisor } = advisorWith(groq.fetch);
+    expect(await advisor.coach(MESSAGES, 0, 0)).toBeNull();
+    expect(groq.calls).toHaveLength(0);
   });
 });

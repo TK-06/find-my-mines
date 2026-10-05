@@ -130,7 +130,8 @@ const privacy: Policy = {
         'When a match ends, the game server saves a record of it:',
         [
           'the room code, the board settings, whether it was casual or ranked, who won, and when it was saved;',
-          'for each player: the name they played under, whether they were a guest, their score, their finishing place, win, loss or draw, and their rating before and after.',
+          'for each player: the name they played under, whether they were a guest, their score, their finishing place, win, loss or draw, and their rating before and after;',
+          'the order the slots were opened in, by which player, and where every mine was. This is what lets a finished game be played back and reviewed. It is public, like the scores, and says nothing about the players beyond the names they played under.',
         ],
         'Casual and ranked matches are both saved, and so are guests. A record keeps the name each player used at the time, even if they change it later. Match records are public — anyone can read the match log.',
       ],
@@ -228,6 +229,7 @@ const privacy: Policy = {
         'Supabase runs our database and sign-in, stores profile pictures, and sends the email that confirms a new account. Your account data is stored with Supabase, which keeps its own technical logs as part of running the service.',
         'The website and the game server run on hosting services, which see ordinary network traffic, such as your IP address, when you connect.',
         'In games against the computer, the game server asks AI services for help: Groq (for the AI opponent’s moves and chat lines, and the wording of a hint’s “Why?”) and TypeSafe AI (for the JEV opponent’s moves). The server sends them only what is on the board — the board size, the open cells and their numbers, the scores, and the cells it is choosing between, or for a “Why?” a short description of the numbers around the hinted cell. Nothing you typed (your name or chat messages), and nothing that identifies you, is sent. Puzzle mode sends nothing at all.',
+        'When you review a finished game, you can ask its coach questions. A question you type is sent to Groq along with the facts of that game — the moves, the odds of each move, and the players’ names as shown in the game — so it can answer from them. Questions are limited (ten per game, and one every few seconds), and neither your questions nor the answers are saved by the game server; they disappear when you leave the page.',
       ],
     },
     {

@@ -1,5 +1,6 @@
 import { deltaTone, describeBoard, formatDelta, orderSeats, relativeTime } from '../data/format.js';
 import type { MatchRow } from '../data/queries.js';
+import { ReviewLink } from './review/ReviewLink.js';
 
 interface Props {
   match: MatchRow;
@@ -7,10 +8,12 @@ interface Props {
   highlightProfileId?: string | null;
   /** For a guest's own match: the guest seat with this name is "you". */
   highlightGuestName?: string | null;
+  /** Opens a match's review without a page reload. */
+  onOpenReview?: (matchId: string) => void;
 }
 
 /** One finished match: board, mode, and every seat with its result. */
-export function MatchCard({ match, highlightProfileId, highlightGuestName }: Props) {
+export function MatchCard({ match, highlightProfileId, highlightGuestName, onOpenReview }: Props) {
   const seats = orderSeats(match.players);
 
   return (
@@ -20,6 +23,9 @@ export function MatchCard({ match, highlightProfileId, highlightGuestName }: Pro
         <span className={`tag mode-${match.mode}`}>{match.mode}</span>
         <span className="muted">{describeBoard(match.config)}</span>
         <span className="muted match-when">{relativeTime(match.created_at)}</span>
+        <span className="match-review">
+          <ReviewLink matchId={match.id} hasReplay={match.has_replay} onOpen={onOpenReview} />
+        </span>
       </div>
 
       {seats.length === 0 ? (

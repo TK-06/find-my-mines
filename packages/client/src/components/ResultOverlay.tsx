@@ -1,6 +1,8 @@
 import type { ForfeitNotice, PlayerPublic, PublicMatchState } from '@fmm/shared';
 import { eloChangeText, eloChangeTone } from '../data/format.js';
 import type { UnofficialChange } from '../data/guestCookie.js';
+import type { LatestReplay } from '../data/latestReplay.js';
+import { ReviewTeaser } from './review/ReviewTeaser.js';
 
 interface Props {
   state: PublicMatchState;
@@ -10,6 +12,10 @@ interface Props {
   onLeave: () => void;
   /** A guest's own, unofficial change for this match, once the browser has worked it out. */
   guestChange?: UnofficialChange | null;
+  /** The replay of the match that just ended, once it has arrived: it earns the popup its Review game card. */
+  replay?: LatestReplay | null;
+  /** Opens the game's review. The popup comes back when you return to the game. */
+  onReview?: () => void;
 }
 
 /**
@@ -63,7 +69,7 @@ function EloTag({ delta }: { delta: number }) {
  * Each player independently picks Rematch or Leave. Leaving shrinks the vote
  * pool, so one person walking away never deadlocks the others.
  */
-export function ResultOverlay({ state, myId, isSpectator, onRematch, onLeave, guestChange }: Props) {
+export function ResultOverlay({ state, myId, isSpectator, onRematch, onLeave, guestChange, replay, onReview }: Props) {
   const iWon = state.winnerId !== null && state.winnerId === myId;
   const draw = state.winnerId === null;
   const alreadyVoted = myId !== null && state.rematchVotes.includes(myId);
@@ -113,6 +119,8 @@ export function ResultOverlay({ state, myId, isSpectator, onRematch, onLeave, gu
             </div>
           ))}
         </div>
+
+        {replay && onReview && <ReviewTeaser latest={replay} spectator={isSpectator} onReview={onReview} />}
 
         {isSpectator ? (
           <button className="ghost wide" onClick={onLeave}>
@@ -164,6 +172,8 @@ export function ForfeitOverlay({
   ranked,
   seats,
   guestChange,
+  replay,
+  onReview,
   onStay,
   onLeave,
 }: {
@@ -175,6 +185,9 @@ export function ForfeitOverlay({
   seats: PlayerPublic[];
   /** A guest's own, unofficial change for this match, once the browser has worked it out. */
   guestChange?: UnofficialChange | null;
+  /** The replay of the match that was cut short, once it has arrived. */
+  replay?: LatestReplay | null;
+  onReview?: () => void;
   onStay: () => void;
   onLeave: () => void;
 }) {
@@ -216,6 +229,15 @@ export function ForfeitOverlay({
             </div>
           ))}
         </div>
+
+        {replay && onReview && (
+          <ReviewTeaser
+            latest={replay}
+            // Someone who was not one of the two players only watched.
+            spectator={!notice.players.some((p) => p.id === myId)}
+            onReview={onReview}
+          />
+        )}
 
         <div className="result-actions">
           <button onClick={onStay}>Stay in room</button>

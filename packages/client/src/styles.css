@@ -2522,3 +2522,557 @@ button.online-name[aria-expanded="true"] {
 .switch-input:checked + .switch-track::after { background: var(--paper); transform: translateX(16px); }
 .switch-input:focus-visible + .switch-track { outline: 2px solid var(--signal); outline-offset: 2px; }
 /* ── end: sound and vibration ── */
+
+/* ── game review ─────────────────────────────────────────── */
+/* The review page (screens/ReviewScreen.tsx and components/review/), the
+   Review game card on the result popup, and the Review button on the game log
+   and the profiles. Colours come from the app's own tokens, so light and dark
+   both work; only the rating colours and the dark panel are new. */
+
+:root {
+  /* A move's rating: green Best, blue Good, orange Risky, red Blunder / Missed. */
+  --rate-best-fg: #1f7a4d;
+  --rate-best-bg: #e3f1ea;
+  --rate-good-fg: #2a55c0;
+  --rate-good-bg: #e6ecfa;
+  --rate-risky-fg: #a8400f;
+  --rate-risky-bg: #fff0e8;
+  --rate-bad-fg: #c42b2b;
+  --rate-bad-bg: #fbe5e5;
+
+  /* The dark panel: the coach, and the teaser card on the result popup. */
+  --panel-bg: #16181b;
+  --panel-ink: #e9ebee;
+  --panel-muted: #9aa1ab;
+  --panel-line: #2d3238;
+  --panel-bubble: #23282d;
+}
+:root[data-theme='dark'] {
+  --rate-best-fg: #4cc38a;
+  --rate-best-bg: #14291f;
+  --rate-good-fg: #7ea2ff;
+  --rate-good-bg: #172036;
+  --rate-risky-fg: #ff9a6c;
+  --rate-risky-bg: #33200f;
+  --rate-bad-fg: #ff7b7b;
+  --rate-bad-bg: #381a1a;
+
+  --panel-bg: #0c0d0f;
+  --panel-bubble: #1a1d21;
+}
+
+/* Who found a mine: your own seat is signal orange, the others take ink, slate
+   and then a colour each, so a free-for-all can tell its players apart. */
+.tone-you { --tone: var(--signal); --on-tone: var(--signal-ink); }
+.tone-p0 { --tone: var(--ink); --on-tone: var(--paper); }
+.tone-p1 { --tone: var(--slate); --on-tone: var(--paper); }
+.tone-p2 { --tone: var(--n1); --on-tone: var(--paper); }
+.tone-p3 { --tone: var(--n2); --on-tone: var(--paper); }
+.tone-p4 { --tone: var(--n4); --on-tone: var(--paper); }
+.tone-p5 { --tone: var(--n6); --on-tone: var(--paper); }
+.rv-dot {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--tone, var(--slate));
+}
+
+.rate-best { --chip-fg: var(--rate-best-fg); --chip-bg: var(--rate-best-bg); }
+.rate-good { --chip-fg: var(--rate-good-fg); --chip-bg: var(--rate-good-bg); }
+.rate-risky { --chip-fg: var(--rate-risky-fg); --chip-bg: var(--rate-risky-bg); }
+.rate-blunder, .rate-missed { --chip-fg: var(--rate-bad-fg); --chip-bg: var(--rate-bad-bg); }
+.rv-chip {
+  display: inline-block;
+  justify-self: start;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--chip-fg);
+  background: var(--chip-bg);
+}
+
+/* ── the page ───────────────────────────────────────────── */
+.review { min-width: 0; }
+.rv-head { display: grid; gap: 4px; }
+.rv-back { justify-self: start; font-size: 13px; color: var(--slate); text-decoration: none; }
+.rv-back:hover { color: var(--ink); text-decoration: underline; }
+.rv-kicker {
+  font-family: var(--display);
+  font-stretch: 125%;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--slate);
+}
+.rv-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 20px; }
+.rv-title-rest { font-size: 15px; font-weight: 500; color: var(--slate); }
+.rv-progress progress { width: 100%; height: 6px; accent-color: var(--ink); }
+.rv-early { margin: 0; padding-left: 10px; border-left: 2px solid var(--rule); }
+.rv-section-title { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--slate); }
+
+/* One card per seat. */
+.rv-seats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rv-seat { display: grid; gap: 6px; padding: 14px 16px; }
+.rv-seat.is-you { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.rv-seat-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.rv-seat-figures { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.rv-accuracy { font-family: var(--mono); font-size: 32px; font-weight: 700; line-height: 1; }
+.rv-seat-score { margin-left: auto; font-family: var(--mono); font-size: 14px; font-weight: 600; }
+.rv-seat-note { margin: 0; }
+
+/* Key moments: cards that jump the board to their move. Sideways on a phone. */
+.rv-moments { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.rv-moment {
+  --kind: var(--slate);
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--kind);
+  border-radius: var(--r);
+}
+.rv-moment:hover:not(:disabled) { background: var(--sunken); border-color: var(--rule); border-left-color: var(--kind); }
+.rv-moment.kind-missed-sure { --kind: var(--rate-bad-fg); }
+.rv-moment.kind-run { --kind: var(--rate-best-fg); }
+.rv-moment.kind-lead-change { --kind: var(--rate-good-fg); }
+.rv-moment.kind-deciding { --kind: var(--ink); }
+.rv-moment-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.rv-moment-title { font-size: 13px; font-weight: 700; }
+.rv-moment-move { font-family: var(--mono); font-size: 12px; color: var(--slate); }
+.rv-moment-text { font-size: 13px; color: var(--slate); }
+
+/* The replay card, the move list inside it, and the coach beside it. */
+.rv-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.rv-main.with-coach { grid-template-columns: minmax(0, 1fr) 320px; }
+.rv-left {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+}
+.rv-replay { display: grid; gap: 14px; min-width: 0; }
+.rv-tabs { display: none; }
+
+.rv-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.rv-filter,
+.rv-filter:hover:not(:disabled) {
+  min-height: 36px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--rule);
+}
+.rv-filter:hover:not(:disabled) { background: var(--sunken); border-color: var(--slate); }
+.rv-filter.on, .rv-filter.on:hover:not(:disabled) { color: var(--paper); background: var(--ink); border-color: var(--ink); }
+
+.rv-stage { display: grid; grid-template-columns: minmax(0, 1fr) 230px; gap: 20px; align-items: start; }
+.rv-board-col { min-width: 0; }
+.rv-score { margin: 0 0 8px; font-family: var(--mono); font-size: 13px; }
+.rv-score .muted { margin-right: 6px; font-family: var(--body); }
+.rv-board-scroll { container-type: inline-size; min-width: 0; }
+.rv-info { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.rv-counter { font-family: var(--mono); font-size: 13px; color: var(--slate); }
+.rv-headline { font-size: 17px; font-weight: 700; line-height: 1.3; }
+.rv-detail { font-size: 14px; color: var(--slate); }
+
+/* The board: lettered columns and numbered rows like the game's, with its cells
+   as pictures. The cell size follows the room there is, down to 14px, so a
+   16 x 16 board still fits a 375px phone. */
+.rv-board {
+  --gap: 3px;
+  --cell: 34px;
+  width: max-content;
+  margin: 0 auto;
+  border-radius: 4px;
+  user-select: none;
+}
+@supports (width: 1cqw) {
+  .rv-board {
+    --cell: clamp(14px, calc((100cqw - 22px - var(--cols) * var(--gap)) / var(--cols)), 56px);
+  }
+}
+.rv-board:focus-visible { outline: 2px solid var(--signal); outline-offset: 6px; }
+.rv-grid {
+  display: grid;
+  grid-template-columns: 22px repeat(var(--cols), var(--cell));
+  grid-auto-rows: var(--cell);
+  grid-template-rows: 20px;
+  gap: var(--gap);
+}
+
+.rv-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--cell);
+  height: var(--cell);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: max(10px, calc(var(--cell) * 0.4));
+  color: var(--ink);
+}
+.rv-cell.covered { background: var(--cover); }
+/* Near-white to signal orange: the chance of a mine, in percent, is the share of orange. */
+.rv-cell.covered.tinted {
+  background: color-mix(in srgb, var(--signal) calc(var(--odds) * 1%), var(--surface));
+  border-color: color-mix(in srgb, var(--signal) calc(var(--odds) * 0.6%), var(--rule));
+}
+.rv-cell.open { background: transparent; border-style: dotted; }
+.rv-cell.open[data-n='1'] { color: var(--n1); }
+.rv-cell.open[data-n='2'] { color: var(--n2); }
+.rv-cell.open[data-n='3'] { color: var(--n3); }
+.rv-cell.open[data-n='4'] { color: var(--n4); }
+.rv-cell.open[data-n='5'] { color: var(--n5); }
+.rv-cell.open[data-n='6'] { color: var(--n6); }
+.rv-cell.open[data-n='7'] { color: var(--n7); }
+.rv-cell.open[data-n='8'] { color: var(--n8); }
+/* A found mine, filled with its finder's colour. */
+.rv-cell.found { background: var(--tone); border-color: var(--tone); color: var(--on-tone); }
+.rv-mark { width: 72%; height: 72%; }
+
+/* The slot that was opened on this move. */
+.rv-cell.now { z-index: 1; box-shadow: 0 0 0 3px var(--ink); }
+
+.rv-odds { font-size: max(8px, calc(var(--cell) * 0.3)); font-weight: 600; letter-spacing: -0.03em; }
+.rv-odds i { font-style: normal; opacity: 0.65; }
+.rv-cell[data-hot] .rv-odds { color: #16181b; }
+.rv-board.size-m .rv-odds i, .rv-board.size-l .rv-odds i { display: none; }
+
+/* Where a mine was: a small mark in the corner beside the percentage, or the
+   whole mine in the middle of a slot when the percentages are off. */
+.rv-mine { position: absolute; inset: 0; display: grid; place-items: center; }
+.rv-mine .pixel-mine { width: 70%; height: 70%; display: block; }
+.rv-board.with-odds .rv-mine { inset: auto 1px 1px auto; width: 38%; height: 38%; }
+.rv-board.with-odds .rv-mine .pixel-mine { width: 100%; height: 100%; }
+
+.rv-star {
+  position: absolute;
+  top: -5px;
+  left: -5px;
+  display: grid;
+  place-items: center;
+  width: max(14px, 42%);
+  height: max(14px, 42%);
+  border-radius: 50%;
+  color: var(--paper);
+  background: var(--ink);
+}
+.rv-star svg { width: 74%; height: 74%; }
+
+.rv-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 0; padding: 10px 0 0; list-style: none; font-size: 12px; color: var(--slate); border-top: 1px solid var(--rule); }
+.rv-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.lg {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+}
+.lg.open { border-style: dotted; color: var(--n2); }
+.lg.found { background: var(--tone); border-color: var(--tone); }
+.lg.odds { background: linear-gradient(90deg, var(--surface), var(--signal)); }
+.lg.minemark { background: var(--cover); }
+.lg.minemark::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
+.lg.star { border-radius: 50%; color: var(--paper); background: var(--ink); border-color: var(--ink); }
+.lg.ring { box-shadow: 0 0 0 2px var(--ink); margin: 0 2px; }
+
+/* Step buttons and the timeline of ticks. */
+.rv-nav { display: flex; align-items: center; gap: 8px; }
+.rv-step { flex: none; width: 44px; height: 44px; padding: 0; font-size: 22px; line-height: 1; }
+.rv-timeline { display: flex; flex: 1; gap: 1px; align-items: center; height: 44px; min-width: 0; }
+.rv-tick,
+.rv-tick:hover:not(:disabled) {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 2px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: var(--chip-fg);
+}
+.rv-tick:hover:not(:disabled) { opacity: 0.7; }
+/* A wider target than the tick itself: a finger cannot hit 2px. */
+.rv-tick::before { content: ''; position: absolute; inset: -12px -1px; }
+.rv-tick.current,
+.rv-tick.current:hover:not(:disabled) { height: 34px; opacity: 1; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); z-index: 1; }
+.rv-rating-key { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+
+/* The move list. */
+.rv-moves { min-width: 0; }
+.rv-movelist {
+  position: relative;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  background: var(--surface);
+}
+.rv-movelist ol { margin: 0; padding: 0; list-style: none; }
+.rv-move,
+.rv-move:hover:not(:disabled) {
+  display: grid;
+  grid-template-columns: 30px minmax(70px, 1fr) 40px 68px minmax(118px, 1.3fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+}
+.rv-move:hover:not(:disabled) { background: var(--sunken); }
+.rv-move.current,
+.rv-move.current:hover:not(:disabled) { background: var(--sunken); box-shadow: inset 3px 0 0 var(--ink); }
+.rv-move-n { font-family: var(--mono); color: var(--slate); }
+.rv-move-who { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-move-cell { font-family: var(--mono); font-weight: 700; }
+.rv-move-result { color: var(--slate); }
+.rv-move-odds { font-family: var(--mono); font-size: 12px; color: var(--slate); }
+
+/* The coach. */
+.rv-coach-wrap { min-width: 0; }
+.rv-coach {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 420px;
+  padding: 16px;
+  color: var(--panel-ink);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-line);
+  border-radius: var(--r);
+}
+.rv-coach-head h3 { margin: 0; font-family: var(--display); font-stretch: 112%; font-size: 13px; letter-spacing: 0.12em; }
+.rv-coach-head h3 span { font-family: var(--body); font-stretch: 100%; font-weight: 500; letter-spacing: 0; color: var(--panel-muted); }
+.rv-coach-log { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 140px; max-height: 360px; overflow-y: auto; }
+.rv-coach-hint { margin: 0; font-size: 13px; color: var(--panel-muted); }
+.rv-bubble {
+  max-width: 92%;
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  background: var(--panel-bubble);
+  border: 1px solid var(--panel-line);
+  border-radius: 12px;
+}
+.rv-bubble p { margin: 0; }
+.rv-bubble.from-you {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--signal) 24%, var(--panel-bg));
+  border-color: color-mix(in srgb, var(--signal) 60%, var(--panel-bg));
+}
+.rv-bubble.from-coach { align-self: flex-start; }
+.rv-bubble.failed { color: var(--panel-muted); border-style: dashed; }
+.rv-bubble.pending { color: var(--panel-muted); }
+.rv-bubble-links { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px !important; }
+.rv-link,
+.rv-link:hover:not(:disabled) {
+  padding: 4px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--signal);
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+}
+.rv-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rv-chip-ask,
+.rv-chip-ask:hover:not(:disabled) {
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  color: var(--panel-ink);
+  background: transparent;
+  border: 1px solid var(--panel-line);
+  border-radius: 999px;
+}
+.rv-chip-ask:hover:not(:disabled) { border-color: var(--signal); }
+.rv-coach-form { display: flex; gap: 8px; }
+.rv-coach-form input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  color: var(--panel-ink);
+  background: color-mix(in srgb, var(--panel-bg) 70%, black);
+  border-color: var(--panel-line);
+}
+.rv-coach-form input[type='text']:focus { border-color: var(--signal); }
+.rv-coach-form button,
+.rv-coach-form button:hover:not(:disabled) { min-width: 64px; color: #16181b; background: var(--signal); border-color: var(--signal); }
+.rv-coach-form button:hover:not(:disabled) { filter: brightness(1.08); }
+.rv-coach-problem { margin: 0; font-size: 13px; color: #ff9a9a; }
+.rv-coach-foot { margin: 0; font-size: 12px; color: var(--panel-muted); }
+
+/* The result popup's teaser: your accuracy, a key moment, and the way in. */
+.rv-teaser {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 4px;
+  padding: 14px 16px;
+  color: var(--panel-ink);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-line);
+  border-radius: var(--r);
+}
+.rv-teaser-figures { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.rv-teaser-accuracy { font-family: var(--mono); font-size: 40px; font-weight: 700; line-height: 1; color: var(--signal); }
+.rv-teaser-caption { font-size: 13px; color: var(--panel-muted); }
+.rv-teaser-wait { margin: 0; font-size: 13px; color: var(--panel-muted); }
+.rv-teaser-moment { margin: 0; font-size: 13px; line-height: 1.4; }
+.rv-teaser-button,
+.rv-teaser-button:hover:not(:disabled) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  color: #16181b;
+  background: var(--signal);
+  border-color: var(--signal);
+}
+.rv-teaser-button:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* The Review button on a saved match: orange-outlined, or dashed and disabled when no replay was saved. */
+.rv-review-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+  border: 1.5px solid var(--signal);
+  border-radius: var(--r);
+}
+.rv-review-btn svg { color: var(--signal); }
+a.rv-review-btn:hover { background: color-mix(in srgb, var(--signal) 12%, transparent); }
+.rv-review-btn.none { font-weight: 500; color: var(--slate); border: 1.5px dashed var(--rule); cursor: not-allowed; }
+.match-review { margin-left: auto; }
+.recent-table .review-cell { white-space: nowrap; }
+
+/* Tablets: the coach goes under the replay. */
+@media (max-width: 820px) {
+  .rv-main.with-coach { grid-template-columns: minmax(0, 1fr); }
+  .rv-stage { grid-template-columns: minmax(0, 1fr); }
+}
+@media (min-width: 821px) {
+  .rv-coach-wrap { position: sticky; top: 12px; }
+}
+
+/* Phones: everything stacks; the key moments scroll sideways; the move list
+   and the coach share a tabbed panel at the bottom. */
+@media (max-width: 640px) {
+  .rv-title { font-size: 17px; }
+  .rv-moments {
+    display: flex;
+    gap: 10px;
+    margin: 0 -16px;
+    padding: 0 16px 6px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+  }
+  .rv-moments li { flex: 0 0 78%; scroll-snap-align: start; }
+
+  .rv-left { display: contents; }
+  .rv-replay,
+  .rv-moves,
+  .rv-coach-wrap {
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--r);
+  }
+  .rv-coach-wrap { padding: 0; background: transparent; border: 0; }
+  .rv-moves { padding: 0; overflow: hidden; }
+  .rv-main { gap: 12px; }
+  .rv-board { --gap: 2px; }
+  .rv-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    overflow: hidden;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--r);
+  }
+  .rv-tabs button,
+  .rv-tabs button:hover:not(:disabled) {
+    min-height: 44px;
+    color: var(--slate);
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+  }
+  .rv-tabs button.on,
+  .rv-tabs button.on:hover:not(:disabled) { color: var(--paper); background: var(--ink); }
+  .tab-hidden { display: none; }
+
+  /* Two lines to a move: who and what on top, the odds beneath. */
+  .rv-move,
+  .rv-move:hover:not(:disabled) {
+    grid-template-columns: 26px minmax(0, 1fr) auto auto;
+    grid-template-areas: 'n who cell chip' '. result odds odds';
+    row-gap: 2px;
+    padding: 8px 12px;
+  }
+  .rv-move-n { grid-area: n; }
+  .rv-move-who { grid-area: who; }
+  .rv-move-cell { grid-area: cell; }
+  .rv-move .rv-chip { grid-area: chip; }
+  .rv-move-result { grid-area: result; font-size: 12px; }
+  .rv-move-odds { grid-area: odds; text-align: right; }
+  .rv-movelist { max-height: 340px; border: 0; border-radius: 0; }
+
+  /* Cells too small to read a number in: the tint says it, the move's own line gives the figure. */
+  .rv-board.size-l .rv-odds { display: none; }
+  .rv-board.size-m .rv-odds { font-size: 8px; }
+  .rv-coach { min-height: 360px; }
+  .rv-coach-log { max-height: 320px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rv-tick, .rv-cell { transition: none; }
+}
+/* ── end: game review ── */

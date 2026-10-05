@@ -1,6 +1,7 @@
 import { deltaTone, relativeTime } from '../../data/format.js';
 import { boardLabel, formatDay, opponentsLabel, signed } from '../../data/profileStats.js';
 import type { MatchRow } from '../../data/queries.js';
+import { ReviewLink } from '../review/ReviewLink.js';
 
 interface Props {
   /** Newest first, each with every seat. */
@@ -9,6 +10,8 @@ interface Props {
   onOpenGameLog: () => void;
   /** The card's heading; someone else's profile says "Recent matches". */
   title?: string;
+  /** Opens a match's review without a page reload. */
+  onOpenReview?: (matchId: string) => void;
 }
 
 const RESULT = { win: 'Win', loss: 'Loss', draw: 'Draw' } as const;
@@ -17,7 +20,7 @@ const RESULT = { win: 'Win', loss: 'Loss', draw: 'Draw' } as const;
  * Your last few matches as one compact table — a row each, read from your own
  * seat. The full cards, with every seat and filters, live in the game log.
  */
-export function RecentMatches({ matches, userId, onOpenGameLog, title = 'Your recent matches' }: Props) {
+export function RecentMatches({ matches, userId, onOpenGameLog, title = 'Your recent matches', onOpenReview }: Props) {
   return (
     <section className="card">
       <div className="profile-card-head">
@@ -41,6 +44,7 @@ export function RecentMatches({ matches, userId, onOpenGameLog, title = 'Your re
                 <th scope="col" className="num">Mines</th>
                 <th scope="col">Result</th>
                 <th scope="col" className="num">Elo</th>
+                <th scope="col">Replay</th>
               </tr>
             </thead>
             <tbody>
@@ -78,6 +82,9 @@ export function RecentMatches({ matches, userId, onOpenGameLog, title = 'Your re
                           —
                         </span>
                       )}
+                    </td>
+                    <td className="review-cell">
+                      <ReviewLink matchId={match.id} hasReplay={match.has_replay} onOpen={onOpenReview} />
                     </td>
                   </tr>
                 );

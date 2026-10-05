@@ -1,4 +1,4 @@
-import { parseRoomCode } from '@fmm/shared';
+import { isMatchId, parseRoomCode } from '@fmm/shared';
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 
 export type Route =
@@ -12,7 +12,9 @@ export type Route =
   | 'security'
   | 'terms'
   /** Someone else's public profile: /u/<username>. */
-  | 'player';
+  | 'player'
+  /** Game review: /review/latest (the game just played) or /review/<match id>. */
+  | 'review';
 
 const PATHS: Record<Route, string> = {
   game: '/',
@@ -26,6 +28,8 @@ const PATHS: Record<Route, string> = {
   terms: '/terms',
   // Never navigated to bare: see pathForPlayer.
   player: '/u',
+  // Never navigated to bare either: see pathForReview.
+  review: '/review',
 };
 
 /** The URL a route lives at — for real hrefs, so middle-click and "copy link" work. */
@@ -66,6 +70,33 @@ export function playerNameFromPath(pathname: string): string | null {
   }
 }
 
+/** What /review/<id> may name: the game just played, or a saved match. */
+export type ReviewTarget = 'latest' | string;
+
+/** Where a game's review lives: /review/latest, or /review/<match id>. */
+export function pathForReview(target: ReviewTarget): string {
+  return `/review/${target === 'latest' ? 'latest' : encodeURIComponent(target)}`;
+}
+
+/**
+ * What a /review/<id> path asks for: `'latest'` for the game just played (kept
+ * in this tab's memory), a match id for a saved game, or null anywhere else —
+ * a path that names neither is not a review.
+ */
+export function reviewTargetFromPath(pathname: string): ReviewTarget | null {
+  const match = /^\/review\/([^/]+)\/*$/.exec(pathname);
+  if (!match) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(match[1]!);
+  } catch {
+    // A broken %-escape names nothing.
+    return null;
+  }
+  if (id === 'latest') return 'latest';
+  return isMatchId(id) ? id.toLowerCase() : null;
+}
+
 /**
  * A small router in a few lines.
  *
@@ -76,6 +107,7 @@ export function playerNameFromPath(pathname: string): string | null {
  */
 export function routeFromPath(pathname: string): Route {
   if (playerNameFromPath(pathname) !== null) return 'player';
+  if (reviewTargetFromPath(pathname) !== null) return 'review';
   switch (pathname.replace(/\/+$/, '') || '/') {
     case '/admin':
       return 'admin';

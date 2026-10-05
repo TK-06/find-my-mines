@@ -11,10 +11,15 @@ import {
   AI_DEFAULT_DENSITY,
   AI_DEFAULT_SIZE,
   CLASSIC_PRESET,
+  COACH_ASK_GAP_MS,
+  COACH_BUSY_ERROR,
+  COACH_FALLBACK_ANSWER,
+  COACH_QUESTIONS_PER_GAME,
   RECONNECT_GRACE_SECONDS,
   aiBoard,
   botNickname,
   cleanChatText,
+  cleanQuestion,
   describeHint,
   describeReasons,
   describeReport,
@@ -43,6 +48,7 @@ import {
   type QueueEntry,
   type RemovalNote,
   type RemovalNotice,
+  type Replay,
   type ReportParty,
   type RevealedCell,
   type RoomConfig,
@@ -55,6 +61,7 @@ import { clientAddress } from './admin/access.js';
 import { attachAdminNamespace } from './admin/adminNamespace.js';
 import { ActivityLog } from './admin/activityLog.js';
 import { createAdvisor } from './ai/advisor.js';
+import { COACH_RESERVE, askCoach, reviewForCoach, type CoachModel, type CoachOutcome } from './ai/coach.js';
 import { rewordHint } from './ai/hintReword.js';
 import { createJevPicker } from './ai/jev.js';
 import { BotController } from './ai/botController.js';
@@ -64,6 +71,7 @@ import {
   AI_MODEL,
   CORS_ORIGIN,
   GROQ_API_KEY,
+  GROQ_COACH_API_KEY,
   HOST,
   JEV_API_KEY,
   JEV_MODEL,
@@ -72,15 +80,19 @@ import {
 } from './config.js';
 import { MatchmakingQueue } from './matchmaking/queue.js';
 import { recordMatch } from './persistence/matchRecorder.js';
+import { loadReplay } from './persistence/replayLoader.js';
 import { deleteOldReports, loadRecentReports, saveReport, saveReportStatus } from './persistence/reportRecorder.js';
 import { ProfileLookup, previewFor, renderPreview } from './preview.js';
 import { areFriends, guestIdentity, identityFromToken, profileForPreview, supabaseEnabled } from './supabase.js';
 import type { FinishedMatch, MatchBroadcaster, MatchManager } from './match/matchManager.js';
 import { RoomManager } from './rooms/roomManager.js';
 import { ChatLimit } from './state/chatLimit.js';
+import { CoachBook, type CoachTurn } from './state/coachBook.js';
+import { findGame, reviewRefOf } from './state/gameLookup.js';
 import { InviteLimit } from './state/inviteLimit.js';
 import { LobbyChat, inviteLine, inviteRefusal, lobbyInviteLimit, playerLine } from './state/lobbyChat.js';
 import { ClientRegistry } from './state/registry.js';
+import { ReplayStore } from './state/replayStore.js';
 import { ReportLimit } from './state/reportLimit.js';
 import { REPORT_KEEP_MS, ReportStore } from './state/reportStore.js';
 import { isSamePlayer } from './state/seatHold.js';
@@ -152,15 +164,17 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
       to().emit('turn:tick', { secondsLeft });
       watched();
     },
-    matchEnded: (state) => {
+    matchEnded: (state, replay) => {
       to().emit('match:ended', state);
       const winner = state.players.find((p) => p.id === state.winnerId);
       const scores = state.players.map((p) => `${p.nickname} ${p.score}`).join(', ');
       log.add('match', `${roomId} ended — ${winner ? `${winner.nickname} won` : 'a draw'} (${scores})`);
+      // After match:ended, never before: the replay carries the mines.
+      const replayId = shareReplay(roomId, replay);
       const result = rooms.get(roomId)?.takeResult();
       if (result) {
         carryRatings(result);
-        persistResult(result);
+        persistResult(result, replay, replayId);
       }
       watched();
       bots.update(roomId);
@@ -175,15 +189,16 @@ const rooms = new RoomManager((roomId): MatchBroadcaster => {
       watched();
       bots.update(roomId);
     },
-    matchForfeited: (notice, result) => {
+    matchForfeited: (notice, result, replay) => {
       to().emit('match:forfeit', notice);
       log.add(
         'match',
         `${roomId} forfeited — ${notice.winnerNickname} won, ${notice.leaverNickname} left mid-match`,
       );
+      const replayId = shareReplay(roomId, replay);
       if (result) {
         carryRatings(result);
-        persistResult(result);
+        persistResult(result, replay, replayId);
       }
       watched();
       bots.update(roomId);
@@ -265,15 +280,76 @@ function carryRatings(result: FinishedMatch): void {
  * learns the saved id, so a guest's browser can list its own games on the game
  * log.
  */
-function persistResult(result: FinishedMatch): void {
-  void recordMatch(result)
+function persistResult(result: FinishedMatch, replay: Replay | null, replayId: string | null): void {
+  void recordMatch(result, replay)
     .then((matchId) => {
       if (!matchId) return;
+      // The coach now knows this game by both ids: one game, one allowance.
+      if (replayId && replays.link(replayId, matchId)) coachBook.moveGame(replayId, matchId);
       for (const player of result.players) {
         io.to(player.clientId).emit('match:recorded', { matchId });
       }
     })
     .catch((error: unknown) => console.error('[persist] could not report the saved match:', error));
+}
+
+// ── finished games: replays and the review coach ────────────────────────────
+
+/**
+ * The replays of finished games, in memory (the last 200, for two hours), so
+ * the coach works with no database at all. A game's replay is sent to its room
+ * once the match is over and kept here under a random id.
+ */
+const replays = new ReplayStore();
+
+/** How many questions each person has asked about each game, and the last few exchanges. Memory only. */
+const coachBook = new CoachBook();
+
+/** One question every few seconds per connection, however many games or tabs. */
+const coachLimit = new ChatLimit(1, COACH_ASK_GAP_MS);
+
+/**
+ * "Is the coach on for this game?" per connection: generous for a person
+ * opening reviews, but each answer can mean a database read and a whole game's
+ * analysis, so a script cannot loop it over every saved match.
+ */
+const coachLookupLimit = new ChatLimit(10, 60_000);
+
+/** How long the database may take to hand over a saved match's replay. */
+const REPLAY_LOOKUP_TIMEOUT_MS = 5000;
+
+/**
+ * The coach's own advisor when GROQ_COACH_API_KEY is set: its own key and its
+ * own per-minute budget. Without one the coach shares the main advisor, and
+ * COACH_RESERVE keeps half its minute for the AI opponents. Null on both counts
+ * means no coach: it is simply not offered.
+ */
+const coachAdvisor = createAdvisor({
+  apiKey: GROQ_COACH_API_KEY,
+  model: AI_MODEL,
+  warn: (line) => log.add('match', `Coach ${line}`),
+});
+const coachModel: CoachModel | null = coachAdvisor ?? advisor;
+const coachReserve = coachAdvisor ? 0 : COACH_RESERVE;
+
+/**
+ * Hands a finished match's replay to its room (players and spectators alike)
+ * and keeps it for the coach. Called only once the match is over — it ended or
+ * was forfeited — because the replay says where the mines were. Returns the id
+ * it is kept under, or null when there was no replay.
+ */
+function shareReplay(roomId: string, replay: Replay | null): string | null {
+  if (!replay) return null;
+  const replayId = replays.add(replay, Date.now());
+  io.to(roomId).emit('match:replay', {
+    roomId,
+    replayId,
+    // Not saved yet: match:recorded tells each seat the id a moment later.
+    matchId: null,
+    replay,
+    coach: coachModel !== null,
+  });
+  return replayId;
 }
 
 /**
@@ -339,6 +415,18 @@ function identityOf(socketId: string): Identity {
 /** A readable name for logs: the nickname once known, else the socket id. */
 function nameOf(socketId: string): string {
   return identities.get(socketId)?.nickname ?? socketId;
+}
+
+/**
+ * Who a coach question counts against: the account when signed in, else the
+ * guest id the browser keeps in its cookie, else this one connection. All of it
+ * from the server's own records, never from the request.
+ */
+function coachPerson(socketId: string): string {
+  const identity = identities.get(socketId);
+  if (identity && !identity.isGuest && identity.profileId) return `account:${identity.profileId}`;
+  const guestId = guestIds.get(socketId);
+  return guestId ? `guest:${guestId}` : `socket:${socketId}`;
 }
 
 // ── broadcasting ────────────────────────────────────────────────────────────
@@ -1531,6 +1619,96 @@ io.on('connection', contain((socket: GameSocket) => {
     respond(ack, { ok: true });
   });
 
+  // Review coach: is it on for this finished game, and how many of the
+  // questions allowed per game this person has left. A game is named by id
+  // only — its facts come from the server's own copy, never from the client.
+  listen(socket, 'review:coach', async (payload, ack) => {
+    const ref = reviewRefOf(payload);
+    if (!ref) {
+      respond(ack, { ok: false, available: false, error: 'Say which game to ask about.' });
+      return;
+    }
+    if (!coachModel) {
+      respond(ack, { ok: false, available: false, error: 'The coach is not available on this server.' });
+      return;
+    }
+    if (coachLookupLimit.trySend(socket.id, Date.now()) > 0) {
+      respond(ack, { ok: false, available: false, error: 'Too many games opened at once. Try again in a minute.' });
+      return;
+    }
+
+    const game = await settleWithin(findGame(ref, replays, loadReplay, Date.now), REPLAY_LOOKUP_TIMEOUT_MS, null);
+    if (!game) {
+      respond(ack, { ok: false, available: false, error: 'That game is not available to ask about any more.' });
+      return;
+    }
+    respond(ack, {
+      ok: true,
+      available: true,
+      questionsLeft: coachBook.left(coachPerson(socket.id), game.key(), Date.now()),
+    });
+    // Start the analysis now, so the first question does not wait for it.
+    void reviewForCoach(game.replay);
+  });
+
+  // One question to the coach. Cleaned and limited first, then answered from
+  // the game's facts. Only an answer that passed the checks counts against the
+  // ten a person gets per game: a busy coach, or an answer thrown out, is free.
+  listen(socket, 'review:ask', async (payload, ack) => {
+    const refuse = (error: string, questionsLeft?: number) =>
+      respond(ack, { ok: false, error, ...(questionsLeft === undefined ? {} : { questionsLeft }) });
+
+    const ref = reviewRefOf(payload);
+    if (!ref) return refuse('Say which game to ask about.');
+    const question = cleanQuestion(payload?.question);
+    if (!question.ok) return refuse(question.error);
+    if (!coachModel) return refuse('The coach is not available on this server.');
+
+    const wait = coachLimit.trySend(socket.id, Date.now());
+    if (wait > 0) return refuse(`One question at a time — try again in ${Math.ceil(wait / 1000)} s.`);
+
+    const game = await settleWithin(findGame(ref, replays, loadReplay, Date.now), REPLAY_LOOKUP_TIMEOUT_MS, null);
+    if (!game) return refuse('That game is not available to ask about any more.');
+
+    const person = coachPerson(socket.id);
+    // Holds a place in the allowance while the model works, so two questions
+    // sent at once cannot both take the last one.
+    if (!coachBook.begin(person, game.key(), Date.now())) {
+      return refuse(`You have asked all ${COACH_QUESTIONS_PER_GAME} questions about this game.`, 0);
+    }
+
+    let outcome: CoachOutcome = { kind: 'busy' };
+    try {
+      const review = await reviewForCoach(game.replay);
+      if (review) {
+        outcome = await askCoach(
+          coachModel,
+          {
+            game: { replay: game.replay, review },
+            question: question.text,
+            history: coachBook.history(person, game.key(), Date.now()),
+          },
+          coachReserve,
+        );
+      }
+    } catch (error) {
+      console.error('[coach] a question failed:', error);
+    }
+    const turn: CoachTurn | null =
+      outcome.kind === 'answer' ? { question: question.text, answer: outcome.answer } : null;
+    coachBook.finish(person, game.key(), Date.now(), turn);
+    const questionsLeft = coachBook.left(person, game.key(), Date.now());
+    log.add('match', `${nameOf(socket.id)} asked the coach about a game — ${outcome.kind}`);
+
+    if (outcome.kind === 'busy') return refuse(COACH_BUSY_ERROR);
+    respond(ack, {
+      ok: true,
+      // An answer the checks threw out is never shown: a friendly line instead, and the question stays unspent.
+      answer: outcome.kind === 'answer' ? outcome.answer : COACH_FALLBACK_ANSWER,
+      questionsLeft,
+    });
+  });
+
   listen(socket, 'game:start', () => {
     rooms.roomOf(socket.id)?.start(socket.id);
   });
@@ -1562,6 +1740,8 @@ io.on('connection', contain((socket: GameSocket) => {
         identities.delete(socket.id);
         guestIds.delete(socket.id);
         chatLimit.forget(socket.id);
+        coachLimit.forget(socket.id);
+        coachLookupLimit.forget(socket.id);
         pushUpdates();
       },
       (error) => handlerFailed(socket.id, 'disconnect', error, []),
@@ -1681,6 +1861,7 @@ httpServer.listen(PORT, HOST, () => {
   Accounts→  ${supabaseEnabled ? 'Supabase connected' : 'guest-only (no SUPABASE_URL / SERVICE_ROLE_KEY)'}
   AI      →  ${advisor ? `solver + Groq ${advisor.model}` : 'solver only (no GROQ_API_KEY)'}
   JEV     →  ${jevPicker ? `TypeSafe ${jevPicker.model}` : 'not configured'}
+  Coach   →  ${coachAdvisor ? `Groq ${coachAdvisor.model} (own key)` : advisor ? `Groq ${advisor.model} (shares the AI key)` : 'off (no Groq key)'}
 `);
   printConsole();
   void loadAndPruneReports();
