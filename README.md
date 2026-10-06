@@ -56,6 +56,10 @@ CloudWatch CPU, credit, network and status-check history; graph titles open Clou
 in the instance's Region. No AWS credentials belong in `.env`. See [DEPLOY.md](./DEPLOY.md)
 for the role and deployment steps. Outside EC2 the AWS card explains why it is unavailable.
 
+GitHub Actions verifies `main` before the EC2 timer deploys a release. The
+release keeps a shared `.env`, checks `/health`, and rolls back if the new
+service fails. See [deploy/README.md](./deploy/README.md) for setup and status.
+
 ---
 
 ## Playing across two computers
