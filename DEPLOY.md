@@ -8,6 +8,22 @@ systemd service runs `npm start`; Cloudflare Tunnel forwards to `localhost:3000`
 Live games are in memory, so a restart ends open matches. The Vercel + Render
 instructions below describe the older alternative setup.
 
+### CI, automatic releases, and remote access (v3.11)
+
+GitHub Actions runs typecheck, unit tests, build, and a guest-only socket smoke
+test for every push and pull request to `main`. The EC2 instance checks the
+public workflow result for the exact `main` SHA, builds a new release, then
+switches the `current` symlink and checks `/health`. A failed release rolls back
+to the prior working release. See [deploy/README.md](./deploy/README.md) for the
+first-release cutover, systemd units, dry run, rollback, and end-to-end check.
+
+The owner's `ssh fmm` uses AWS Systems Manager Session Manager. The instance
+role has `AmazonSSMManagedInstanceCore`, the agent is online, and the Windows
+Session Manager plugin is installed. SSH succeeded through SSM from a public IP
+outside the existing security-group allowlist. Keep the EC2 Instance Connect
+prefix-list rule; remove personal SSH CIDR rules only after the owner confirms
+access on a different network.
+
 ### Enable the `/admin` CloudWatch card
 
 First confirm the selected Region in **AWS Settings → View all projects → Overview →
