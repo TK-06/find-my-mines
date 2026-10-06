@@ -60,6 +60,7 @@ import {
 import { clientAddress } from './admin/access.js';
 import { attachAdminNamespace } from './admin/adminNamespace.js';
 import { ActivityLog } from './admin/activityLog.js';
+import { attachAdminTelemetry } from './admin/telemetry.js';
 import { createAdvisor } from './ai/advisor.js';
 import { COACH_RESERVE, askCoach, reviewForCoach, type CoachModel, type CoachOutcome } from './ai/coach.js';
 import { rewordHint } from './ai/hintReword.js';
@@ -934,6 +935,7 @@ const adminConsole = attachAdminNamespace({
     log.add('moderation', `admin cleared the world chat — ${removed} line${removed === 1 ? '' : 's'} removed`);
   },
 });
+attachAdminTelemetry(adminIo);
 
 // ── containing failures ─────────────────────────────────────────────────────
 

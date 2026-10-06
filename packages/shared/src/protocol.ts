@@ -1,5 +1,8 @@
 import type {
+  AdminCloudState,
   AdminRoomView,
+  AdminServerStats,
+  AdminServiceHealth,
   AdminState,
   AiAbout,
   AiDensity,
@@ -355,6 +358,12 @@ export interface AdminToServerEvents {
 
 export interface ServerToAdminEvents {
   'admin:state': (state: AdminState) => void;
+  /** Local machine and Node readings, sampled only while a console is open. */
+  'admin:stats': (stats: AdminServerStats) => void;
+  /** Optional service checks, at most once per minute while a console is open. */
+  'admin:health': (health: AdminServiceHealth) => void;
+  /** EC2 CloudWatch data, at most once per minute while a console is open. */
+  'admin:cloud': (cloud: AdminCloudState) => void;
   /** Terminal lines: a backfill on connect, then each new line as it happens. */
   'admin:log': (lines: LogLine[]) => void;
   /** The watched room. null once it closes or watching stops. */

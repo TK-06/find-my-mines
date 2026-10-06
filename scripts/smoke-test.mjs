@@ -126,6 +126,8 @@ const admin = io(URL + ADMIN_NS, {
 // The terminal backfill also arrives on connect, so collect it from the start.
 const adminLog = [];
 admin.on('admin:log', (lines) => adminLog.push(...lines));
+let firstStats = null;
+admin.once('admin:stats', (stats) => { firstStats = stats; });
 // Player reports arrive on connect too, and again whenever one changes.
 let firstReports = null;
 admin.once('admin:reports', (list) => {
@@ -147,6 +149,10 @@ check('admin state exposes a room list', Array.isArray(firstAdminState.rooms));
 await sleep(50);
 check('admin console receives the player reports on connect', Array.isArray(firstReports),
   firstReports === null ? 'no admin:reports' : `${firstReports.length} report(s)`);
+for (let tries = 0; tries < 30 && firstStats === null; tries++) await sleep(100);
+check('admin console receives local server readings',
+  firstStats?.memoryTotalBytes > 0 && firstStats?.rssBytes > 0 && firstStats?.processUptimeMs >= 0,
+  firstStats ? `CPU ${firstStats.cpuPercent ?? 'warming up'}%, ${firstStats.cpuCores} cores` : 'no admin:stats');
 
 // Keep the newest snapshot around. Waiting for a *fresh* push is unreliable at
 // the end of the run, when nothing is changing any more.
@@ -170,6 +176,8 @@ check('HTTP responses carry a RateLimit header', Boolean(health?.headers.get('ra
 section('nickname and lobby');
 
 const alice = await connect();
+let leakedAdminStats = false;
+alice.on('admin:stats', () => { leakedAdminStats = true; });
 const aliceView = track(alice);
 const aliceLobbyView = trackLobby(alice);
 const aliceLobby = waitFor(alice, 'lobby:rooms');
@@ -2360,6 +2368,7 @@ check('a malformed request still gets a real answer',
   badJoin.ok === false && !String(badJoin.error ?? '').startsWith('no ack'), JSON.stringify(badJoin));
 check('the server console survives malformed messages too', admin.connected === true);
 
+check('admin telemetry never reaches a game socket', leakedAdminStats === false);
 for (const socket of [alice, bob, carol, dave, admin, fuzzer, survivor]) socket?.close();
 
 console.log(`\n${passed.length} passed, ${failed.length} failed\n`);

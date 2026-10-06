@@ -2,6 +2,7 @@ import type { ModerationResult, RemovalNote } from '@fmm/shared';
 import { useEffect, useRef, useState } from 'react';
 import { ReasonDialog } from '../components/ReasonDialog.js';
 import { GameViewer } from './GameViewer.js';
+import { AdminMetrics } from './AdminMetrics.js';
 import { ReportsPanel } from './ReportsPanel.js';
 import { TerminalPanel } from './TerminalPanel.js';
 import { useAdmin } from './useAdmin.js';
@@ -41,7 +42,7 @@ export function AdminConsole() {
   }
 
   return (
-    <div className="app admin">
+    <div className="app admin admin-live-dashboard">
       <header className="header">
         <div>
           <h1 className="title">Server Console</h1>
@@ -71,6 +72,8 @@ export function AdminConsole() {
             <div className="v">{state ? (state.queue?.length ?? 0) : '–'}</div>
           </div>
         </div>
+
+        <AdminMetrics stats={admin.stats} health={admin.health} cloud={admin.cloud} />
 
         <TerminalPanel lines={lines} />
 

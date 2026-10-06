@@ -1,4 +1,48 @@
-# Hosting: Vercel + Render + Supabase
+# Hosting: EC2, with a Vercel + Render alternative
+
+## Current production: EC2 and Cloudflare Tunnel
+
+`findmymines.app` runs the Node server and built client on one Ubuntu 24.04 EC2
+instance in the AWS project's selected Region (`ap-southeast-2`). The `findmymines`
+systemd service runs `npm start`; Cloudflare Tunnel forwards to `localhost:3000`.
+Live games are in memory, so a restart ends open matches. The Vercel + Render
+instructions below describe the older alternative setup.
+
+### Enable the `/admin` CloudWatch card
+
+First confirm the selected Region in **AWS Settings → View all projects → Overview →
+Additional info → Region**. In IAM, create an **EC2 service role** named
+`findmymines-ec2`. Attach the managed `AmazonSSMManagedInstanceCore` policy for
+the later Session Manager setup. Add this inline policy for the admin graphs:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "ReadMetricsForAdminConsole",
+    "Effect": "Allow",
+    "Action": ["cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics"],
+    "Resource": "*"
+  }]
+}
+```
+
+In **EC2 → Instances → find-my-mines → Actions → Security → Modify IAM role**,
+attach that role. The app obtains its instance ID and Region from IMDSv2 and uses
+the role's temporary credentials; no access keys are stored in the app. The
+CloudWatch collector requests six EC2 metrics at five-minute resolution, once
+per minute only while at least one authorized console is open. The charts show
+up to 24 hours of actual points with 1, 6 and 24 hour views. No alerts or
+CloudWatch dashboard resources are created.
+
+After the owner deploys the code with the usual `git pull`, `npm ci`,
+`npm run build`, and `sudo systemctl restart findmymines` steps, open `/admin`
+with an admin account or token. The Server and Service health cards also work
+off AWS. The AWS card reports unavailable metadata, credentials, or permission
+without affecting the game. `DEPLOY_STATUS_FILE` is optional until the v3.11
+auto-deployer writes a status file.
+
+---
 
 ```
 Browser ──► Vercel   (React client, static)
