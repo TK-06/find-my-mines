@@ -405,3 +405,72 @@ export interface AdminState {
   queue: QueuePoolRow[];
   serverStartedAt: number;
 }
+
+/** Server-only readings sent to authenticated /admin sockets. */
+export interface AdminServerStats {
+  sampledAt: number;
+  cpuPercent: number | null;
+  cpuCores: number;
+  memoryUsedBytes: number;
+  memoryTotalBytes: number;
+  loadAverage: [number, number, number];
+  heapUsedBytes: number;
+  heapTotalBytes: number;
+  rssBytes: number;
+  eventLoopP50Ms: number | null;
+  eventLoopP99Ms: number | null;
+  processUptimeMs: number;
+  machineUptimeMs: number;
+  systemdRestarts: number | null;
+  version: string;
+  commit: string | null;
+  lastDeploy: AdminDeployStatus | null;
+}
+
+export interface AdminDeployStatus {
+  sha: string;
+  at: number;
+  result: 'deployed' | 'failed' | 'skipped-ci-failed' | 'rolled-back';
+  message: string;
+  durationMs: number;
+}
+
+export type AdminServiceStatus = 'ok' | 'down' | 'not-configured';
+
+export interface AdminServiceCheck {
+  name: 'game' | 'supabase' | 'groq' | 'jev';
+  status: AdminServiceStatus;
+  latencyMs: number | null;
+  lastOkAt: number | null;
+  error: string | null;
+  checkedAt: number;
+}
+
+export interface AdminServiceHealth {
+  checkedAt: number;
+  services: AdminServiceCheck[];
+}
+
+export interface AdminMetricPoint { at: number; value: number }
+
+export type AdminCloudMetricName =
+  | 'cpuUtilization' | 'cpuCreditBalance' | 'cpuCreditUsage'
+  | 'networkIn' | 'networkOut' | 'statusCheckFailed';
+
+export interface AdminCloudMetric {
+  name: AdminCloudMetricName;
+  statistic: 'Average' | 'Sum' | 'Maximum';
+  unit: 'Percent' | 'Count' | 'Bytes';
+  points: AdminMetricPoint[];
+}
+
+export interface AdminCloudState {
+  status: 'ready' | 'unavailable';
+  reason: string | null;
+  region: string | null;
+  instanceId: string | null;
+  fetchedAt: number | null;
+  periodSeconds: number;
+  windowHours: number;
+  metrics: AdminCloudMetric[];
+}

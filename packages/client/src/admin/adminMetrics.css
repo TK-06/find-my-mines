@@ -1,0 +1,80 @@
+/* The live admin cards share the game's flat surfaces, type and theme tokens. */
+.admin-live-dashboard { max-width: 1180px; }
+.admin-metrics { display: grid; gap: 12px; }
+.admin-metrics-section-head { display: flex; justify-content: space-between; align-items: end; gap: 10px; flex-wrap: wrap; margin: 8px 0 2px; }
+.admin-metrics-section-head .section-title { margin: 0; }
+.admin-metrics-top { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 12px; }
+.admin-metrics-card-head { display: flex; justify-content: space-between; align-items: start; gap: 10px; }
+.admin-metrics-card-head h3 { margin: 0; }
+.admin-metrics-card-head .tag { white-space: nowrap; }
+.admin-metrics-empty { padding: 28px 0; }
+.admin-metrics-primary { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 22px 0; }
+.admin-metrics-primary > span:first-child { color: var(--slate); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.admin-metrics-primary strong { font: 700 44px/1 var(--mono); letter-spacing: -.05em; }
+.admin-metrics-primary .muted { margin-left: auto; }
+.admin-metrics-meters { display: grid; gap: 16px; }
+.admin-metrics-meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.admin-metrics-meter-label strong { font-family: var(--mono); }
+.admin-metrics-meter-track { height: 7px; margin-top: 7px; border: 1px solid var(--rule); background: var(--sunken); border-radius: 4px; overflow: hidden; }
+.admin-metrics-meter-track span { display: block; height: 100%; background: var(--ink); }
+.admin-metrics-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; margin: 22px 0 0; border-top: 1px solid var(--rule); }
+.admin-metrics-facts div { display: flex; justify-content: space-between; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--rule); font-size: 12px; }
+.admin-metrics-facts dt { color: var(--slate); }
+.admin-metrics-facts dd { margin: 0; font-family: var(--mono); font-weight: 600; text-align: right; }
+.admin-metrics-deploy { display: flex; gap: 4px 12px; flex-wrap: wrap; margin-top: 16px; font-size: 12px; }
+.admin-metrics-deploy span { color: var(--slate); }
+.admin-metrics-deploy small { flex-basis: 100%; color: var(--slate); font-size: 11px; }
+.admin-metrics-footnote { color: var(--slate); font: 11px/1.5 var(--mono); margin-top: 18px; }
+.admin-metrics-copy { margin: 10px 0 20px; }
+.admin-metrics-services { list-style: none; padding: 0; margin: 0; }
+.admin-metrics-services li { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.admin-metrics-services li:first-child { border-top: 1px solid var(--rule); }
+.admin-metrics-services li > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.admin-metrics-services li strong { font-size: 13px; }
+.admin-metrics-services li .muted { overflow-wrap: anywhere; }
+.admin-metrics-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--slate); }
+.admin-metrics-dot.ok { background: var(--good); }
+.admin-metrics-dot.down { background: var(--bad); }
+.admin-metrics-service-state { font-size: 12px; font-weight: 700; text-align: right; }
+.admin-metrics-service-state.ok { color: var(--good); }
+.admin-metrics-service-state.down { color: var(--bad); }
+.admin-metrics-service-state.not-configured { color: var(--slate); }
+.admin-metrics-cloud-head { align-items: center; }
+.admin-metrics-cloud-head .muted { margin-top: 3px; }
+.admin-metrics-range { display: flex; gap: 3px; }
+.admin-metrics-range button { min-width: 38px; padding: 5px 7px; font: 600 11px var(--mono); }
+.admin-metrics-range button.selected { color: var(--surface); background: var(--ink); border-color: var(--ink); }
+.admin-metrics-partial { margin-top: 16px; }
+.admin-metrics-graphs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.admin-metrics-graph { min-width: 0; padding: 15px; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r); }
+.admin-metrics-graph-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px 12px; flex-wrap: wrap; }
+.admin-metrics-graph-head h4 { margin: 0; font-size: 13px; }
+.admin-metrics-graph-head a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 3px; }
+.admin-metrics-graph-head a:hover { text-decoration-color: var(--ink); }
+.admin-metrics-graph-head > span { color: var(--slate); font: 11px var(--mono); }
+.admin-metrics-graph svg { display: block; width: 100%; height: 190px; margin-top: 12px; touch-action: pan-y; }
+.admin-metrics-axis-text { fill: var(--slate); font: 11px var(--mono); }
+.admin-metrics-gridline { stroke: var(--rule); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.admin-metrics-line { stroke-width: 2.2; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+.admin-metrics-line.line-0 { stroke: var(--ink); }
+.admin-metrics-line.line-1 { stroke: var(--good); }
+.admin-metrics-crosshair { stroke: var(--slate); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.admin-metrics-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 5px; font-size: 12px; }
+.admin-metrics-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.admin-metrics-legend strong { font-family: var(--mono); }
+.admin-metrics-legend i { display: inline-block; width: 12px; height: 3px; background: var(--ink); }
+.admin-metrics-legend i.line-1 { background: var(--good); }
+.admin-metrics-graph-detail { margin-top: 9px; color: var(--slate); font: 11px/1.5 var(--mono); }
+.admin-metrics-graph-empty { min-height: 190px; display: grid; place-items: center; color: var(--slate); font-size: 13px; }
+.admin-metrics-cloud-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; font-size: 12px; }
+
+@media (max-width: 820px) {
+  .admin-metrics-top { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .admin-metrics-facts { grid-template-columns: 1fr; }
+  .admin-metrics-graphs { grid-template-columns: 1fr; }
+  .admin-metrics-primary strong { font-size: 38px; }
+  .admin-metrics-graph svg { height: 170px; }
+  .admin-metrics-range { width: 100%; }
+}

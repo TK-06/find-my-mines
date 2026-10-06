@@ -49,6 +49,13 @@ npm start       # server serves the client AND the sockets on :3000
 
 Then the game is at `http://localhost:3000` and the console at `http://localhost:3000/admin`.
 
+The admin console keeps its client list, rooms, reports, terminal and moderation controls.
+It also shows local CPU, memory, Node heap, event-loop delay and uptime while a console
+is open. Optional service checks run once a minute. On EC2, an instance role can supply
+CloudWatch CPU, credit, network and status-check history; graph titles open CloudWatch
+in the instance's Region. No AWS credentials belong in `.env`. See [DEPLOY.md](./DEPLOY.md)
+for the role and deployment steps. Outside EC2 the AWS card explains why it is unavailable.
+
 ---
 
 ## Playing across two computers

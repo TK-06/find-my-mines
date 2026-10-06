@@ -1,6 +1,9 @@
 import {
   ADMIN_ONLY_ERROR,
+  type AdminCloudState,
   type AdminRoomView,
+  type AdminServerStats,
+  type AdminServiceHealth,
   type AdminState,
   type LogLine,
   type ModerationResult,
@@ -18,6 +21,9 @@ import { adminSocket } from '../socket.js';
  */
 export function useAdmin() {
   const [state, setState] = useState<AdminState | null>(null);
+  const [stats, setStats] = useState<AdminServerStats | null>(null);
+  const [health, setHealth] = useState<AdminServiceHealth | null>(null);
+  const [cloud, setCloud] = useState<AdminCloudState | null>(null);
   const [connected, setConnected] = useState(false);
   /** The server refused this browser: not the server machine, not an admin account. */
   const [locked, setLocked] = useState(false);
@@ -41,6 +47,9 @@ export function useAdmin() {
     adminSocket.on('disconnect', onDisconnect);
     adminSocket.on('connect_error', onConnectError);
     adminSocket.on('admin:state', setState);
+    adminSocket.on('admin:stats', setStats);
+    adminSocket.on('admin:health', setHealth);
+    adminSocket.on('admin:cloud', setCloud);
     adminSocket.on('admin:log', onLog);
     adminSocket.on('admin:room', setView);
     adminSocket.on('admin:reports', setReports);
@@ -54,6 +63,9 @@ export function useAdmin() {
       adminSocket.off('disconnect', onDisconnect);
       adminSocket.off('connect_error', onConnectError);
       adminSocket.off('admin:state');
+      adminSocket.off('admin:stats');
+      adminSocket.off('admin:health');
+      adminSocket.off('admin:cloud');
       adminSocket.off('admin:log');
       adminSocket.off('admin:room');
       adminSocket.off('admin:reports');
@@ -109,6 +121,9 @@ export function useAdmin() {
 
   return {
     state,
+    stats,
+    health,
+    cloud,
     connected,
     locked,
     lines,
