@@ -90,6 +90,7 @@ import { RoomManager } from './rooms/roomManager.js';
 import { ChatLimit } from './state/chatLimit.js';
 import { CoachBook, type CoachTurn } from './state/coachBook.js';
 import { findGame, reviewRefOf } from './state/gameLookup.js';
+import { InviteBook } from './state/inviteBook.js';
 import { InviteLimit } from './state/inviteLimit.js';
 import { LobbyChat, inviteLine, inviteRefusal, lobbyInviteLimit, playerLine } from './state/lobbyChat.js';
 import { ClientRegistry } from './state/registry.js';
@@ -612,6 +613,12 @@ const FRIEND_CHECK_TIMEOUT_MS = 5000;
 
 /** One invite per player → friend every few seconds, however fast they click. */
 const inviteLimit = new InviteLimit();
+
+/**
+ * The invites relayed in the last minute or so, so a Decline is checked against
+ * what really happened: only the invited account can decline, once.
+ */
+const sentInvites = new InviteBook();
 
 /** A few chat lines per connection every few seconds, so nobody floods a room. */
 const chatLimit = new ChatLimit();
@@ -1296,9 +1303,39 @@ io.on('connection', contain((socket: GameSocket) => {
       roomName: room.roomName,
       sentAt: Date.now(),
     };
+    // Remembered, so the friend's Decline can be matched to it (and nothing else).
+    sentInvites.remember(
+      { id: invite.id, fromProfileId: fromId, toProfileId: targetId, roomId: room.roomId },
+      invite.sentAt,
+    );
     // Every tab they have open, so the popup is wherever they are looking.
     io.to(targets).emit('friend:invited', invite);
     log.add('room', `${sender.nickname} invited ${nameOf(targets[0])} to ${room.roomId}`);
+    respond(ack, { ok: true });
+  });
+
+  // The invited friend says no. Who they are comes from their verified identity,
+  // never the payload, and the invite must be one this server really sent them:
+  // a guest, a stranger's id, a second press or an expired invite is ignored
+  // (the ack, if there is one, just says so). The inviter's tabs are told.
+  listen(socket, 'friend:declineInvite', (payload, ack) => {
+    const me = identities.get(socket.id);
+    if (!me?.profileId || me.isGuest) {
+      respond(ack, { ok: false, error: 'Sign in to answer invites.' });
+      return;
+    }
+
+    const declined = sentInvites.decline(text(payload, 'inviteId'), me.profileId, Date.now());
+    if (!declined) {
+      respond(ack, { ok: false, error: 'That invite is no longer there.' });
+      return;
+    }
+
+    const inviterTabs = socketsOfProfile(declined.fromProfileId);
+    if (inviterTabs.length > 0) {
+      io.to(inviterTabs).emit('friend:inviteDeclined', { byName: me.nickname, roomId: declined.roomId });
+    }
+    log.add('room', `${me.nickname} declined an invite to ${declined.roomId}`);
     respond(ack, { ok: true });
   });
 

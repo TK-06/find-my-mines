@@ -179,6 +179,18 @@ export interface ClientToServerEvents {
   ) => void;
 
   /**
+   * Say no to a friend's invite. The server remembers each invite it relayed
+   * for a minute or so and only accepts this from a signed-in tab of the
+   * account that was invited, once per invite; anything else is ignored. The
+   * inviter's tabs are told with `friend:inviteDeclined`. The ack is optional:
+   * the client does not wait for it.
+   */
+  'friend:declineInvite': (
+    payload: { inviteId: string },
+    ack?: (result: ModerationResult) => void,
+  ) => void;
+
+  /**
    * Start a game against a computer opponent: a new casual room with you and
    * the bot seated, started at once. Never rated. The board is chosen by name
    * (a size from AI_BOARD_SIZES and a density) and the server works out the
@@ -294,6 +306,12 @@ export interface ServerToClientEvents {
 
   /** A friend invited you to the room they are in. Sent to each of your tabs. */
   'friend:invited': (invite: FriendInvite) => void;
+
+  /**
+   * The friend you invited said no. Sent to each of the inviter's tabs. An
+   * invite that simply runs out sends nothing.
+   */
+  'friend:inviteDeclined': (payload: { byName: string; roomId: string }) => void;
 
   /** A line in your room's chat, from a player or the computer opponent. */
   'room:message': (message: ChatMessage) => void;
