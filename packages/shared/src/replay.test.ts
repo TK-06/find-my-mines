@@ -204,6 +204,19 @@ describe('buildReplay', () => {
     expect(replay.moves).toEqual([{ i: 6, s: 1 }]);
     expect(parseReplay(replay)).toEqual(replay);
   });
+
+  it('stays far inside the database’s 100 kB check for the biggest game a room can play', () => {
+    // 16 x 16, every cell but one a mine, all of them opened; the most seats, with the longest names.
+    const size = 16;
+    const bombs = Array.from({ length: size }, (_, row) => Array.from({ length: size }, (_, col) => row + col > 0));
+    const seats = Array.from({ length: REPLAY_MAX_SEATS }, (_, n) => ({ name: `${n}`.padEnd(REPLAY_NAME_MAX, 'x'), bot: false }));
+    const moves = Array.from({ length: size * size }, (_, i) => ({ row: Math.floor(i / size), col: i % size, seat: i % seats.length }));
+    const replay = buildReplay({ rows: size, cols: size, bombs, seats, moves });
+
+    expect(parseReplay(replay)).toEqual(replay);
+    // jsonb is a little bigger than its text; a tenth of the limit leaves plenty of room.
+    expect(JSON.stringify(replay).length).toBeLessThan(10_000);
+  });
 });
 
 describe('replayAdjacency', () => {
