@@ -11,7 +11,8 @@ import {
   type RoomMode,
   type RoomSummary,
 } from '@fmm/shared';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { pendingInviteLine } from '../data/friendsModel.js';
 
 interface Props {
   rooms: RoomSummary[];
@@ -19,12 +20,36 @@ interface Props {
   onCreate: (name: string, config: RoomConfig) => void;
   onJoin: (roomId: string) => void;
   onSpectate: (roomId: string) => void;
+  /**
+   * The friend who will be invited once the game is created — set when someone
+   * pressed Invite on a friend's card while not in a room. It opens the form
+   * and is named on it; null when nobody is waiting.
+   */
+  inviteFor?: string | null;
+  /** The form was closed without creating: the waiting invite is dropped. */
+  onCancelInvite?: () => void;
 }
 
 const CLASSIC: RoomConfig = { ...CLASSIC_PRESET };
 
-export function LobbyScreen({ rooms, clientCount, onCreate, onJoin, onSpectate }: Props) {
-  const [showCreate, setShowCreate] = useState(false);
+export function LobbyScreen({
+  rooms,
+  clientCount,
+  onCreate,
+  onJoin,
+  onSpectate,
+  inviteFor = null,
+  onCancelInvite,
+}: Props) {
+  // Open from the start when an invite is waiting: arriving from a friend's card,
+  // the form is what they came for.
+  const [showCreate, setShowCreate] = useState(inviteFor !== null);
+
+  // An invite that turns up while the lobby is already showing (from the Online
+  // now list) opens the form too.
+  useEffect(() => {
+    if (inviteFor !== null) setShowCreate(true);
+  }, [inviteFor]);
 
   return (
     <div className="stack">
@@ -35,7 +60,13 @@ export function LobbyScreen({ rooms, clientCount, onCreate, onJoin, onSpectate }
             {rooms.length} open · {clientCount} player{clientCount === 1 ? '' : 's'} online
           </p>
         </div>
-        <button onClick={() => setShowCreate((v) => !v)}>
+        <button
+          onClick={() => {
+            // Cancelling is also giving up on the invite that was waiting for this game.
+            if (showCreate) onCancelInvite?.();
+            setShowCreate((v) => !v);
+          }}
+        >
           {showCreate ? 'Cancel' : '+ Create game'}
         </button>
       </div>
@@ -44,6 +75,7 @@ export function LobbyScreen({ rooms, clientCount, onCreate, onJoin, onSpectate }
 
       {showCreate && (
         <CreateGameForm
+          inviteFor={inviteFor}
           onCreate={(name, config) => {
             onCreate(name, config);
             setShowCreate(false);
@@ -182,7 +214,14 @@ function JoinByCode({
   );
 }
 
-function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomConfig) => void }) {
+function CreateGameForm({
+  onCreate,
+  inviteFor,
+}: {
+  onCreate: (name: string, config: RoomConfig) => void;
+  /** A friend waiting to be invited to the game this form creates. */
+  inviteFor: string | null;
+}) {
   const [name, setName] = useState('');
   const [preset, setPreset] = useState<'classic' | 'custom'>('classic');
   const [rows, setRows] = useState(CLASSIC.rows);
@@ -226,6 +265,12 @@ function CreateGameForm({ onCreate }: { onCreate: (name: string, config: RoomCon
         if (errors.length === 0) onCreate(name, config);
       }}
     >
+      {inviteFor !== null && (
+        <p className="create-invite-note" role="status">
+          {pendingInviteLine(inviteFor)}
+        </p>
+      )}
+
       <div>
         <label className="field-label" htmlFor="room-name">
           Game name

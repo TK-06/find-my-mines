@@ -89,15 +89,23 @@ export function useFriendships(userId: string | null, actions: FriendActions) {
 
   const markBusy = (id: string, on: boolean) => setBusy((current) => withBusy(current, id, on));
 
-  /** One friendship change for one person, then a fresh list. */
-  async function change(otherId: string, work: () => Promise<FriendsResult>, success?: string) {
+  /**
+   * One friendship change for one person, then a fresh list. Resolves with what
+   * the change came to, for a caller (a player card) that has more to do on success.
+   */
+  async function change(
+    otherId: string,
+    work: () => Promise<FriendsResult>,
+    success?: string,
+  ): Promise<FriendsResult> {
     markBusy(otherId, true);
     const result = await work();
-    if (!alive.current) return;
+    if (!alive.current) return result;
     markBusy(otherId, false);
     setNotice(changeNotice(result, success));
     if (result.missingTable) setMissingTable(true);
     await refresh();
+    return result;
   }
 
   /** Add from the search: the request goes out by the exact name the search found. */
@@ -179,3 +187,10 @@ export function useFriendships(userId: string | null, actions: FriendActions) {
     run,
   };
 }
+
+/**
+ * What useFriendships hands back. One instance lives in App for the signed-in
+ * player and is passed down, so the Friends card, the lobby's search and the
+ * player cards all see the same list, and a change made in one shows in all.
+ */
+export type Friendships = ReturnType<typeof useFriendships>;

@@ -1,4 +1,4 @@
-import { hostCanModerate, isRoomFull, type RoomSummary } from '@fmm/shared';
+import { hostCanModerate, isRoomFull, type RoomConfig, type RoomSummary } from '@fmm/shared';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { identityChanged } from './auth/session.js';
 import { authEnabled, supabase } from './auth/supabase.js';
@@ -21,8 +21,14 @@ import { ShareRoom } from './components/ShareRoom.js';
 import { SiteFooter } from './components/SiteFooter.js';
 import { SoundControl } from './components/SoundControl.js';
 import { PostInviteButton, WorldChat } from './components/WorldChat.js';
+import {
+  invitePlan,
+  pendingInviteNotice,
+  type InviteOutcome,
+} from './data/friendsModel.js';
 import { replayForPopup } from './data/latestReplay.js';
 import { isPolicy } from './data/policies.js';
+import { useFriendships } from './data/useFriendships.js';
 import {
   NavBar,
   joinCodeFromPath,
@@ -95,6 +101,8 @@ export function App() {
     friendInvites,
     inviteFriend,
     dismissInvite,
+    declineInvite,
+    notify,
     reportPlayer,
     playVsAi,
     aiAbout,
@@ -121,6 +129,11 @@ export function App() {
   useGameSounds(state, playerId, forfeit, useSoundSettings());
 
   const [signedIn, setSignedIn] = useState(false);
+  /**
+   * The signed-in account's id, read from the session as soon as it is known —
+   * before this tab has joined the server — so the friends list can start loading.
+   */
+  const [accountId, setAccountId] = useState<string | null>(null);
   const [ready, setReady] = useState(!authEnabled);
   const [route, navigate, path] = useRoute();
   const [theme, toggleTheme] = useTheme();
@@ -191,6 +204,7 @@ export function App() {
     void client.auth.getSession().then(({ data: { session } }) => {
       if (knownUserRef.current === undefined) knownUserRef.current = session?.user.id ?? null;
       setSignedIn(Boolean(session));
+      setAccountId(session?.user.id ?? null);
       setReady(true);
     });
 
@@ -199,6 +213,7 @@ export function App() {
       const changed = identityChanged(knownUserRef.current, next);
       if (knownUserRef.current === undefined) knownUserRef.current = next;
       setSignedIn(Boolean(session));
+      setAccountId(next);
 
       if (bannedRef.current) return;
       // Signing in, out, or as someone else needs a fresh, re-verified
@@ -212,6 +227,85 @@ export function App() {
   }, []);
 
   const named = playerId !== null;
+
+  /** The Play page, without piling up history entries when it is already showing. */
+  const showPlay = () => {
+    if (route !== 'game') navigate('game');
+  };
+
+  /**
+   * The signed-in player's friendships, here rather than in the Friends card so
+   * the profile page, the lobby's search and its player cards, and whatever
+   * needs the list inside a room all share one — and one change shows in all.
+   * A friend's Join, Watch and Invite buttons act through the handlers below.
+   */
+  const friends = useFriendships(accountId, {
+    onJoin: (roomId) => {
+      showPlay();
+      handleJoin(roomId);
+    },
+    onWatch: (roomId) => {
+      showPlay();
+      void spectateRoom(roomId);
+    },
+    onInvite: inviteFriend,
+  });
+
+  /**
+   * A friend to invite as soon as the game being set up exists. Pressing Invite
+   * on a card while not in a room sends you to Create game first (see
+   * `inviteFromCard`); this is who waits for it. Dropped by Cancel on the form,
+   * by leaving the Play page, and the moment it has been used.
+   */
+  const [pendingInvite, setPendingInvite] = useState<{ profileId: string; name: string } | null>(null);
+  useEffect(() => {
+    // Only the lobby has a Create game form to wait for.
+    if (route !== 'game' || state !== null) setPendingInvite(null);
+  }, [route, state]);
+
+  const plan = invitePlan({
+    connected,
+    named,
+    inRoom: state !== null,
+    vsComputer: state?.origin === 'ai',
+  });
+
+  /**
+   * Invite from a friend's card (profile page or lobby). In a room, the invite
+   * goes out now. In the menu there is no room to invite to yet, so Play opens
+   * with the Create game form and the invite follows once the game exists.
+   */
+  const inviteFromCard = async (friend: { profileId: string; name: string }): Promise<InviteOutcome> => {
+    switch (plan) {
+      case 'send':
+        return inviteFriend(friend.profileId);
+      case 'create':
+        setPendingInvite(friend);
+        showPlay();
+        return { ok: true, queued: true };
+      case 'leave-computer':
+        return { ok: false, error: 'Leave your game against the computer first.' };
+      case 'disconnected':
+        return { ok: false, error: 'Not connected to the server right now.' };
+    }
+  };
+  const cardInvite = { plan, send: inviteFromCard };
+
+  /**
+   * Create game from the lobby's form. With a friend waiting, the invite is sent
+   * as soon as the room exists: the server has seated us by the time it answers,
+   * which is what it wants to see before it relays an invite. How it went shows
+   * in the toast. A refused create says why through its own toast, and the
+   * invite is not sent.
+   */
+  const createGame = async (name: string, config: RoomConfig) => {
+    // Taken now: the form closes at once, and the invite must not outlive this attempt.
+    const friend = pendingInvite;
+    setPendingInvite(null);
+    const result = await createRoom(name, config);
+    if (!result.ok || !friend) return;
+    notify(pendingInviteNotice(friend.name, await inviteFriend(friend.profileId)));
+  };
 
   /**
    * Whose picture the header shows. The online list carries every account's
@@ -260,12 +354,13 @@ export function App() {
     state === null ? (
       <FriendInviteToasts
         invites={friendInvites}
-        onJoin={(invite) => {
+        onAccept={(invite) => {
           dismissInvite(invite.id);
           navigate('game');
           handleJoin(invite.roomId);
         }}
-        onDismiss={(invite) => dismissInvite(invite.id)}
+        // Closes the popup and tells the friend, whose tabs show "<you> declined your invite."
+        onDecline={(invite) => declineInvite(invite.id)}
       />
     ) : null;
 
@@ -278,15 +373,9 @@ export function App() {
           online={online}
           rooms={rooms}
           myRoomId={state?.roomId ?? null}
-          onJoin={(roomId) => {
-            navigate('game');
-            handleJoin(roomId);
-          }}
-          onWatch={(roomId) => {
-            navigate('game');
-            void spectateRoom(roomId);
-          }}
-          onInvite={inviteFriend}
+          friends={friends}
+          invite={cardInvite}
+          onReport={reportPlayer}
           onViewProfile={(name) => navigate('player', pathForPlayer(name))}
           onOpenReview={(matchId) => navigate('review', pathForReview(matchId))}
           guest={guestProfile}
@@ -438,9 +527,11 @@ export function App() {
               <LobbyScreen
                 rooms={rooms}
                 clientCount={clientCount}
-                onCreate={createRoom}
+                onCreate={createGame}
                 onJoin={handleJoin}
                 onSpectate={spectateRoom}
+                inviteFor={pendingInvite?.name ?? null}
+                onCancelInvite={() => setPendingInvite(null)}
               />
               <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
               <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} />
@@ -453,7 +544,8 @@ export function App() {
                 myId={playerId}
                 rooms={rooms}
                 onJoin={handleJoin}
-                onWatch={(roomId) => void spectateRoom(roomId)}
+                friends={friends}
+                invite={cardInvite}
                 onViewProfile={(name) => navigate('player', pathForPlayer(name))}
                 onOpenOwnProfile={() => navigate('profile')}
                 onReport={reportPlayer}

@@ -1,13 +1,21 @@
-import { STARTING_ELO, type ModerationResult, type OnlinePlayer, type RoomSummary } from '@fmm/shared';
+import {
+  STARTING_ELO,
+  type ModerationResult,
+  type OnlinePlayer,
+  type ReportReason,
+  type RoomSummary,
+} from '@fmm/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { authEnabled } from '../auth/supabase.js';
 import { FriendsPanel } from '../components/FriendsPanel.js';
+import type { CardInvite } from '../components/PlayerCard.js';
 import { ActivityHeatmap } from '../components/profile/ActivityHeatmap.js';
 import { IdentityCard } from '../components/profile/IdentityCard.js';
 import { RatingChart } from '../components/profile/RatingChart.js';
 import { RecentMatches } from '../components/profile/RecentMatches.js';
 import { winRate } from '../data/format.js';
 import type { GuestProfile } from '../data/guestCookie.js';
+import type { Friendships } from '../data/useFriendships.js';
 import {
   bestElo,
   dayStreak,
@@ -35,12 +43,15 @@ export interface ProfileScreenProps {
   online: OnlinePlayer[];
   /** Open rooms, so a friend's room can offer Join or Watch. */
   rooms: RoomSummary[];
-  /** The room this browser is in, or null. Inviting a friend needs one. */
+  /** The room this browser is in, or null. Inviting a friend from a row needs one. */
   myRoomId: string | null;
-  onJoin: (roomId: string) => void;
-  onWatch: (roomId: string) => void;
-  onInvite: (profileId: string) => Promise<ModerationResult>;
-  /** Someone else's public profile, from a name in the Friends card. */
+  /** The signed-in player's friendships, kept by App (also read by the lobby and the waiting room). */
+  friends: Friendships;
+  /** What Invite does on a friend's card from here, and how it is sent. */
+  invite: CardInvite;
+  /** Reports a connected friend to the admins, from their card's ⋯ menu. */
+  onReport: (targetId: string, reason: ReportReason, details: string) => Promise<ModerationResult>;
+  /** Someone else's public profile: the View profile button on a friend's card. */
   onViewProfile: (username: string) => void;
   /** Opens a saved match's review, from the Review button on a recent match. */
   onOpenReview: (matchId: string) => void;
@@ -62,9 +73,9 @@ export function ProfileScreen({
   online,
   rooms,
   myRoomId,
-  onJoin,
-  onWatch,
-  onInvite,
+  friends,
+  invite,
+  onReport,
   onViewProfile,
   onOpenReview,
   guest,
@@ -171,12 +182,12 @@ export function ProfileScreen({
         <IdentityCard profile={profile} streak={streak} standing={standing} onRename={rename} />
         <FriendsPanel
           userId={userId}
+          friends={friends}
           online={online}
           rooms={rooms}
           myRoomId={myRoomId}
-          onJoin={onJoin}
-          onWatch={onWatch}
-          onInvite={onInvite}
+          invite={invite}
+          onReport={onReport}
           onViewProfile={onViewProfile}
         />
       </div>

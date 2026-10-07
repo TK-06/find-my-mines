@@ -1435,6 +1435,25 @@ a.player-link:hover { text-decoration-color: currentColor; }
 .friend-note { font-size: 12px; font-weight: 600; color: var(--good); }
 .friend-note.failed { color: var(--bad); font-weight: 500; max-width: 200px; text-align: right; }
 
+/* A name opens that person's player card (the same one the lobby's Online now
+   list has, so the name is the same button — see button.online-name). The card
+   is placed against its row, and the row it belongs to is lifted like the lobby's. */
+.friend-list li { position: relative; }
+.friend-list li.card-open {
+  background: var(--paper);
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: 6px;
+}
+.friend-name button.online-name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A friend's invite, in the same corner stack as the host's join requests. */
 .friend-invite-text { font-size: 14px; overflow-wrap: anywhere; }
 .friend-invite-text .room-code { font-size: 12px; }
@@ -1820,6 +1839,17 @@ button.hint-why-toggle[aria-expanded='true'] { background: color-mix(in srgb, va
 
 /* The create form's word on Classic overriding the private/ask options. */
 .classic-note { margin: 0; padding-left: 10px; border-left: 2px solid var(--rule); }
+/* Who is invited when the game is created (they pressed Invite on a friend's card first). */
+.create-invite-note {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: var(--r);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 
 /* Above the sign-in card when someone arrived by a share link. */
 .join-link-note { text-align: center; font-size: 14px; color: var(--slate); margin-bottom: 8px; }
@@ -2398,6 +2428,57 @@ button.online-name[aria-expanded="true"] {
 .player-card-note:empty { display: none; }
 .player-card-note.failed { color: var(--bad); }
 .player-card-guest { margin: 0; }
+
+/* A menu item that cannot be used right now (Report on someone offline) stays
+   in the menu and can be focused, so its reason is read out with it. */
+.player-card-menu button[aria-disabled='true'] { opacity: 0.55; cursor: not-allowed; }
+.player-card-menu button[aria-disabled='true']:hover:not(:disabled) { background: transparent; }
+.menu-item-text { display: grid; gap: 1px; }
+.menu-item-hint { font-size: 11px; font-weight: 500; color: var(--slate); }
+
+/* "You vs Ann": how the viewer has done against this person. Quieter than the
+   stats above it — a panel of its own, so it reads as a different thing. */
+.player-card-h2h {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+.player-card-h2h-title { margin: 0; font-size: 12px; font-weight: 700; color: var(--slate); overflow-wrap: anywhere; }
+.player-card-h2h .muted { margin: 0; }
+.player-card-h2h-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.player-card-h2h-stats div { display: flex; flex-direction: column-reverse; gap: 2px; min-width: 0; }
+.player-card-h2h-stats dt { font-size: 11px; color: var(--slate); white-space: nowrap; }
+.player-card-h2h-stats dd {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.player-card-h2h-stats dd.gain { color: var(--good); }
+.player-card-h2h-stats dd.loss { color: var(--bad); }
+
+/* Remove friend's question, in place of the buttons it was asked from. */
+.player-card-confirm { display: grid; gap: 10px; }
+.player-card-confirm p { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+
+/* Beside the Friends card (the left-hand column) the card opens to the right of
+   its row, its arrow on the left edge. Only where it is a popout: on a phone it
+   is the bottom sheet below, whichever side it would have opened on. */
+@media (min-width: 821px) {
+  .player-card.placed-right { right: auto; left: calc(100% + 30px); }
+  .player-card.placed-right::after {
+    right: auto;
+    left: -7px;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+    border-left: 1px solid var(--rule);
+  }
+}
 
 /* Phones: the online list sits above the games at full width, so the card
    comes up from the bottom of the screen instead. */
