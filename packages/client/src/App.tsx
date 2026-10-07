@@ -1,4 +1,4 @@
-import { hostCanModerate, isRoomFull, type RoomConfig, type RoomSummary } from '@fmm/shared';
+import { hostCanModerate, type RoomConfig, type RoomSummary } from '@fmm/shared';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { identityChanged } from './auth/session.js';
 import { authEnabled, supabase } from './auth/supabase.js';
@@ -17,6 +17,7 @@ import { QueuePanel } from './components/QueuePanel.js';
 import { ReasonDialog } from './components/ReasonDialog.js';
 import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
 import { RoomChat } from './components/RoomChat.js';
+import { RoomFriendInvites } from './components/RoomFriendInvites.js';
 import { ShareRoom } from './components/ShareRoom.js';
 import { SiteFooter } from './components/SiteFooter.js';
 import { SoundControl } from './components/SoundControl.js';
@@ -28,6 +29,7 @@ import {
 } from './data/friendsModel.js';
 import { replayForPopup } from './data/latestReplay.js';
 import { isPolicy } from './data/policies.js';
+import { hasSeatToOffer, showInviteCard } from './data/roomInvites.js';
 import { useFriendships } from './data/useFriendships.js';
 import {
   NavBar,
@@ -639,15 +641,13 @@ export function App() {
             />
             {/* Players only, as the server enforces; a private room's code goes
                 public only on its host's say-so. A full room — a game against
-                the computer included — has no seat to advertise. Its own key:
+                the computer included — has no seat to advertise (hasSeatToOffer,
+                also what the Invite friends card goes by). Its own key:
                 two siblings sharing one would leave a stale Share control behind
                 when the room changes. */}
-            {isSeated &&
-              state.origin !== 'ai' &&
-              (!state.config.private || isHost) &&
-              !isRoomFull(state.config, state.players.length) && (
-                <PostInviteButton key={`invite-${state.roomId}`} connected={connected} onPost={postInvite} />
-              )}
+            {hasSeatToOffer(state, playerId) && (
+              <PostInviteButton key={`invite-${state.roomId}`} connected={connected} onPost={postInvite} />
+            )}
             <button className="ghost" onClick={leaveRoom}>
               Leave room
             </button>
@@ -667,6 +667,23 @@ export function App() {
               </button>
             )}
           </div>
+        )}
+
+        {/* The next step once the room exists: ask a friend over. Signed-in
+            players only, and by the same seat rules as the room bar's Post
+            invite (see showInviteCard). Keyed by room, so "Show all" and the
+            notes never carry over to the next one. */}
+        {showInviteCard(state, playerId, !isGuest && accountId !== null) && (
+          <RoomFriendInvites
+            key={`friends-${state.roomId}`}
+            friends={friends}
+            online={online}
+            rooms={rooms}
+            roomId={state.roomId}
+            members={[...state.players, ...state.spectators]}
+            connected={connected}
+            onNavigate={navigate}
+          />
         )}
 
         {aiSeat && turnBanner ? (

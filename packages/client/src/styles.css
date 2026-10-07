@@ -1464,6 +1464,50 @@ a.player-link:hover { text-decoration-color: currentColor; }
 }
 /* ── end: friends ── */
 
+/* ── invite friends (the room's waiting screen) ─────────────── */
+/* The Friends card's rows, laid out as tiles: a few friends sit side by side on
+   a wide screen, one to a line on a phone. */
+.room-invites { display: grid; gap: 12px; padding: 16px; }
+.room-invites p { margin: 0; }
+.room-invites-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.room-invites-head h3 { margin: 0; }
+.room-invites a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--slate);
+  text-underline-offset: 3px;
+}
+.room-invites a:hover { text-decoration-color: var(--ink); }
+
+.room-invite-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
+}
+.room-invite-list li.friend-row {
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+}
+/* The Invite button stays at the tile's right edge on a phone too (the Friends
+   card drops its buttons under the name below 480 px). */
+.room-invite-list .friend-actions { grid-column: auto; justify-content: flex-end; flex-wrap: nowrap; }
+/* Greyed, but with the name in --slate rather than faded: it stays readable. */
+.room-invite-row.is-offline .friend-avatar { opacity: 0.55; }
+.room-invite-row.is-offline .friend-name { color: var(--slate); }
+/* A refusal is a sentence: it gets the whole tile under the name, not the button's corner. */
+.room-invite-row.has-error .friend-actions { grid-column: 2 / -1; justify-content: flex-start; }
+.room-invite-row.has-error .friend-note.failed { max-width: none; text-align: left; }
+.room-invites-more { justify-self: start; }
+
+@media (max-width: 640px) {
+  /* Fingers, not a pointer. */
+  .room-invite-row .friend-actions button { min-height: 36px; padding-left: 14px; padding-right: 14px; }
+  .room-invites-more { min-height: 36px; }
+}
+
 /* ── play vs AI, hint, room chat ────────────────────────── */
 /* The hint's own colour: a calm blue that never reads as --signal ("your
    turn"), and holds up on the covered-cell grey in both themes. */
