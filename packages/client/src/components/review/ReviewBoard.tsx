@@ -33,16 +33,6 @@ interface OpenCell {
   seat: number;
 }
 
-/** A mine in the colour of whoever found it: a plain mark, so it reads on orange, ink and slate alike. */
-function MineMark() {
-  return (
-    <svg className="rv-mark" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <circle cx="8" cy="8" r="4" fill="currentColor" />
-      <path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3M3.4 3.4l2.1 2.1M10.5 10.5l2.1 2.1M12.6 3.4l-2.1 2.1M5.5 10.5l-2.1 2.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function StarIcon() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
@@ -126,7 +116,7 @@ export function ReviewBoard({ replay, review, move, filters, tones, names, onSte
                     role="img"
                     aria-label={`${label}, mine found by ${finder}`}
                   >
-                    <MineMark />
+                    <MineSprite />
                   </div>
                 );
               }

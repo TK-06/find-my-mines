@@ -430,9 +430,9 @@ export function App() {
         <div className="stack">
           <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
           <div className="lobby-layout">
+            {/* Games (with + Create game) first: players could not find it
+                under the quick match and the computer opponents. */}
             <div className="stack">
-              <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
-              <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} />
               <LobbyScreen
                 rooms={rooms}
                 clientCount={clientCount}
@@ -440,6 +440,8 @@ export function App() {
                 onJoin={handleJoin}
                 onSpectate={spectateRoom}
               />
+              <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
+              <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} />
             </div>
             {/* Who is online, then what they are saying. On phones the two split
                 up: the online list first, the chat after the games. */}

@@ -2751,9 +2751,10 @@ button.online-name[aria-expanded="true"] {
 .rv-cell.open[data-n='6'] { color: var(--n6); }
 .rv-cell.open[data-n='7'] { color: var(--n7); }
 .rv-cell.open[data-n='8'] { color: var(--n8); }
-/* A found mine, filled with its finder's colour. */
-.rv-cell.found { background: var(--tone); border-color: var(--tone); color: var(--on-tone); }
-.rv-mark { width: 72%; height: 72%; }
+/* A found mine, drawn as on the game board (the pixel bomb on a plain tile),
+   with its finder's colour as a thick edge so whose it was still reads. */
+.rv-cell.found { background: var(--surface); border: 3px solid var(--tone); }
+.rv-cell.found .pixel-mine { width: 75%; height: 75%; }
 
 /* The slot that was opened on this move. */
 .rv-cell.now { z-index: 1; box-shadow: 0 0 0 3px var(--ink); }
@@ -2800,7 +2801,7 @@ button.online-name[aria-expanded="true"] {
   line-height: 1;
 }
 .lg.open { border-style: dotted; color: var(--n2); }
-.lg.found { background: var(--tone); border-color: var(--tone); }
+.lg.found { background: var(--surface); border: 3px solid var(--tone); }
 .lg.odds { background: linear-gradient(90deg, var(--surface), var(--signal)); }
 .lg.minemark { background: var(--cover); }
 .lg.minemark::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
