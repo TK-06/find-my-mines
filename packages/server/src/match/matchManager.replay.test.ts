@@ -1,5 +1,5 @@
-import { CLASSIC_PRESET, parseReplay, type Identity, type Replay } from '@fmm/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { CLASSIC_PRESET, REPLAY_MAX_SEATS, parseReplay, type Identity, type Replay } from '@fmm/shared';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MatchManager, type MatchBroadcaster } from './matchManager.js';
 
 /** A broadcaster that remembers what the room was told about the end of a match. */
@@ -212,5 +212,34 @@ describe('the replay of a finished match', () => {
     const replay = log.ended!;
     expect(replay.seats.map((s) => s.name)).toEqual(['Ann', 'Ben', 'Cy']);
     expect(replay.moves.find((m) => m.i === safe)!.s).toBe(2);
+  });
+
+  it('is built for an unlimited room however many people are seated', () => {
+    const { log, out } = recorder();
+    room = new MatchManager('R1', 'Crowd', { ...CLASSIC_PRESET, maxPlayers: null }, 'created', out);
+    // More than any fixed room allows (12): an unlimited room has no ceiling.
+    for (let n = 1; n <= 15; n++) room.addPlayer(`p${n}`, guest(`Player${n}`));
+    room.start('p1');
+    findAllMines(room);
+
+    expect(room.publicState().status).toBe('ended');
+    const replay = log.ended;
+    expect(replay).not.toBeNull();
+    expect(replay!.seats).toHaveLength(15);
+    expect(parseReplay(replay)).toEqual(replay);
+  });
+
+  it('says so, rather than staying silent, when a replay cannot be built', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { log, out } = recorder();
+    room = new MatchManager('R1', 'Crowd', { ...CLASSIC_PRESET, maxPlayers: null }, 'created', out);
+    // Past what a replay can describe.
+    for (let n = 1; n <= REPLAY_MAX_SEATS + 1; n++) room.addPlayer(`p${n}`, guest(`Player${n}`));
+    room.start('p1');
+    findAllMines(room);
+
+    expect(log.ended).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('R1'));
+    warn.mockRestore();
   });
 });

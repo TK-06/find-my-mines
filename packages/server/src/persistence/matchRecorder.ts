@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Replay } from '@fmm/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FinishedMatch } from '../match/matchManager.js';
@@ -5,6 +6,22 @@ import { admin } from '../supabase.js';
 
 /** What the recorder needs from the database client, so a test can hand it a stand-in. */
 type Db = Pick<SupabaseClient, 'from' | 'rpc'>;
+
+type DbError = { code?: string; message: string };
+
+export interface RecordOptions {
+  /** How long to wait before the one retry of a failed insert. Injectable so a test need not sit through it. */
+  retryDelayMs?: number;
+  /**
+   * Where a lost replay, or a match that could not be saved, is announced: one
+   * line of plain text. The server passes its console log; by default it goes
+   * to the process's own console.
+   */
+  report?: (text: string) => void;
+}
+
+/** Long enough to ride out a network blip or a cold database, short enough not to hold up the result. */
+const RETRY_DELAY_MS = 250;
 
 /**
  * Writes a finished match to Supabase and applies rating changes.
@@ -15,9 +32,16 @@ type Db = Pick<SupabaseClient, 'from' | 'rpc'>;
  * not take the game server down mid-demo.
  *
  * The replay (the mines and the order the cells were opened) is saved with the
- * match, in a column migration 0006 adds. Until that has been run the column is
- * not there and the insert fails — so it is asked again without the replay, and
- * recording never breaks over it.
+ * match, in a column migration 0006 adds. It is only dropped when the database
+ * itself refuses it — no such column yet, or over the size check. Any other
+ * failure (a network blip, a timeout, a cold database) is tried once more with
+ * the replay, since losing it for good over a hiccup is what made some games
+ * impossible to review from the game log. Only if that fails too is the match
+ * saved without its replay — and that is said out loud, never silently.
+ *
+ * The match id is chosen here, not by the database, so a second try can never
+ * leave two rows: if the first one landed after all (the answer was lost), the
+ * second finds it already there and counts as saved.
  *
  * Returns the saved match's id, or null when nothing was written.
  */
@@ -25,33 +49,38 @@ export async function recordMatch(
   match: FinishedMatch,
   replay: Replay | null = null,
   db: Db | null = admin,
+  options: RecordOptions = {},
 ): Promise<string | null> {
   if (!db) return null;
 
+  const { retryDelayMs = RETRY_DELAY_MS, report = (text: string) => console.error(`[persist] ${text}`) } = options;
+
   try {
+    const matchId = randomUUID();
     const base = {
+      id: matchId,
       room_id: match.roomId,
       mode: match.mode,
       config: match.config,
       winner_profile_id: match.winnerProfileId,
     };
 
-    let { data: row, error: matchError } = await insertMatch(db, replay ? { ...base, replay } : base);
-    if (matchError && replay) {
-      // No replay column yet (migration 0006 not applied), or the replay was refused: save the match without it.
-      warnWithoutReplay(matchError);
-      ({ data: row, error: matchError } = await insertMatch(db, base));
+    let error = await insertWithRetry(db, replay ? { ...base, replay } : base, retryDelayMs);
+    if (error && replay) {
+      // Last resort: the game itself must still be on record, replay or not.
+      const replayError = error;
+      error = await insertMatch(db, base);
+      if (!error) reportReplayLost(match, replayError, report);
     }
 
-    if (matchError || !row) {
-      console.error('[persist] could not write match:', matchError?.message);
+    if (error) {
+      report(`could not write match ${match.roomId}: ${error.message}`);
       return null;
     }
-    const matchId = row.id as string;
 
     const { error: playersError } = await db.from('match_players').insert(
       match.players.map((player) => ({
-        match_id: row.id,
+        match_id: matchId,
         profile_id: player.profileId,
         display_name: player.displayName,
         is_guest: player.isGuest,
@@ -88,18 +117,56 @@ export async function recordMatch(
   }
 }
 
-function insertMatch(db: Db, values: Record<string, unknown>) {
-  return db.from('matches').insert(values).select('id').single();
+/**
+ * One insert into `matches`: null once the row is in, else why it is not. A
+ * unique violation counts as in — the id is ours, so the row is from an earlier
+ * try of this same insert whose answer never reached us.
+ */
+async function insertMatch(db: Db, values: Record<string, unknown>): Promise<DbError | null> {
+  try {
+    const { error } = await db.from('matches').insert(values);
+    return !error || error.code === '23505' ? null : error;
+  } catch (thrown) {
+    // A client that throws instead of answering is just another failed try.
+    return { message: thrown instanceof Error ? thrown.message : String(thrown) };
+  }
 }
 
-let warnedWithoutReplay = false;
+/** An insert, and one more after a short wait if it failed — unless the database refused the replay itself, which waiting cannot cure. */
+async function insertWithRetry(db: Db, values: Record<string, unknown>, delayMs: number): Promise<DbError | null> {
+  let error = await insertMatch(db, values);
+  if (error && !isReplayRefusal(error)) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    error = await insertMatch(db, values);
+  }
+  return error;
+}
 
-/** Once, not per match: a database without migration 0006 would otherwise repeat this after every game. */
-function warnWithoutReplay(error: { code?: string; message: string }): void {
-  if (warnedWithoutReplay) return;
-  warnedWithoutReplay = true;
-  console.warn(
-    `[persist] could not save the replay (${error.message}); saving matches without it. ` +
-      'If the column is missing, run supabase/migrations/0006_match_replays.sql.',
+/** 42703 / PGRST204: there is no replay column, so migration 0006 has not been applied. */
+function isMissingColumn(error: DbError): boolean {
+  return error.code === '42703' || error.code === 'PGRST204';
+}
+
+/** The database will never take this replay: no column for it, or (23514) it is over the size check. */
+function isReplayRefusal(error: DbError): boolean {
+  return isMissingColumn(error) || error.code === '23514';
+}
+
+let warnedMissingColumn = false;
+
+/** A match went in without its replay. A missing column would say so after every game, so that one only says it once. */
+function reportReplayLost(match: FinishedMatch, error: DbError, report: (text: string) => void): void {
+  if (isMissingColumn(error)) {
+    if (warnedMissingColumn) return;
+    warnedMissingColumn = true;
+    report(
+      `matches are being saved WITHOUT their replay: the database has no replay column (${error.message}). ` +
+        'Run supabase/migrations/0006_match_replays.sql; until then no game can be reviewed from the game log.',
+    );
+    return;
+  }
+  report(
+    `match ${match.roomId} was saved WITHOUT its replay, which is lost (${error.message}); ` +
+      'its game log entry will say "No replay saved".',
   );
 }

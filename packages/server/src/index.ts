@@ -282,7 +282,8 @@ function carryRatings(result: FinishedMatch): void {
  * log.
  */
 function persistResult(result: FinishedMatch, replay: Replay | null, replayId: string | null): void {
-  void recordMatch(result, replay)
+  // A lost replay or an unsaved match goes to the console's log, so it shows on /admin as well as in the server's output.
+  void recordMatch(result, replay, undefined, { report: (text) => log.add('error', text) })
     .then((matchId) => {
       if (!matchId) return;
       // The coach now knows this game by both ids: one game, one allowance.

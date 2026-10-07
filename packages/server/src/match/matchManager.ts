@@ -608,7 +608,7 @@ export class MatchManager {
   private buildMatchReplay(): Replay | null {
     if (!this.board) return null;
     const seatOf = new Map(this.matchSeats.map((seat, index) => [seat.id, index]));
-    return parseReplay(
+    const replay = parseReplay(
       buildReplay({
         rows: this.board.rows,
         cols: this.board.cols,
@@ -621,6 +621,9 @@ export class MatchManager {
         })),
       }),
     );
+    // Without it the match is saved, and offered for review, with no replay at all — never silently.
+    if (!replay) console.warn(`[room ${this.roomId}] the match's replay does not hold together, so none is kept.`);
+    return replay;
   }
 
   /**

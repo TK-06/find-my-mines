@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createBoard } from './engine/board.js';
 import { createRng } from './engine/rng.js';
 import {
+  REPLAY_MAX_SEATS,
   REPLAY_MAX_SIDE,
   REPLAY_NAME_MAX,
   buildReplay,
@@ -125,10 +126,17 @@ describe('parseReplay', () => {
     expect(parseReplay(mutated({ seats }))).toBeNull();
   });
 
-  it('needs at least two seats and at most the room limit', () => {
+  it('needs at least two seats', () => {
     expect(parseReplay(mutated({ seats: [{ name: 'Solo', bot: false }], moves: [] }))).toBeNull();
     expect(parseReplay(mutated({ seats: [], moves: [] }))).toBeNull();
     expect(parseReplay(mutated({ seats: 'Ann and Bob' }))).toBeNull();
+  });
+
+  it('takes as many seats as an unlimited room can have, not just a fixed room’s 12', () => {
+    const seatsOf = (count: number) => Array.from({ length: count }, (_, n) => ({ name: `P${n}`, bot: false }));
+    expect(parseReplay(mutated({ seats: seatsOf(13) }))?.seats).toHaveLength(13);
+    expect(parseReplay(mutated({ seats: seatsOf(REPLAY_MAX_SEATS) }))?.seats).toHaveLength(REPLAY_MAX_SEATS);
+    expect(parseReplay(mutated({ seats: seatsOf(REPLAY_MAX_SEATS + 1) }))).toBeNull();
   });
 
   it('rejects a seat that is not a name', () => {
