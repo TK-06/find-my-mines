@@ -119,8 +119,8 @@ const privacy: Policy = {
         'Guests have no account and no profile. To the game server a guest is always a fixed 800 and never changes. The name you pick is kept in your browser tab, and by the game server while you are connected.',
         'Your browser also keeps a small cookie called fmm_guest, so the game can greet you again and show you an unofficial rating. It holds your name, that unofficial rating, how many ranked games you have won, lost and drawn, and a random id made by your browser. The rating is worked out by your browser alone; the game server never reads it, never trusts it, and never saves it. It is not a real rating and does not count on the rankings.',
         'The random id is sent to the game server when you pick your name. The server keeps it in memory while you are connected and uses it for one thing only: if you report someone, or someone reports you, the report says which browser it came from (see “Reports”). It is not linked to anything else and is never used for ads or analytics.',
-        'The cookie stays for 30 days from the last time you played as that guest, then goes by itself. It is sent only to this site, and goes nowhere else. To remove it sooner, use “Forget me on this browser” on your profile page, or “Not you?” on the name screen — either clears it, and the list of matches your browser keeps for the game log, at once — or clear this site’s data in your browser.',
-        'Matches you finish as a guest are still saved to the match log, under the name you played with.',
+        'The cookie stays for 30 days from the last time you played as that guest, then goes by itself. It is sent only to this site, and goes nowhere else. To remove it sooner, use “Forget me on this browser” on your profile page, or “Not you?” on the name screen — either clears it, and the list of matches your browser keeps, at once — or clear this site’s data in your browser.',
+        'Matches you finish as a guest are still saved to the match records, under the name you played with.',
       ],
     },
     {
@@ -133,7 +133,7 @@ const privacy: Policy = {
           'for each player: the name they played under, whether they were a guest, their score, their finishing place, win, loss or draw, and their rating before and after;',
           'the order the slots were opened in, by which player, and where every mine was. This is what lets a finished game be played back and reviewed. It is public, like the scores, and says nothing about the players beyond the names they played under.',
         ],
-        'Casual and ranked matches are both saved, and so are guests. A record keeps the name each player used at the time, even if they change it later. Match records are public — anyone can read the match log.',
+        'Casual and ranked matches are both saved, and so are guests. A record keeps the name each player used at the time, even if they change it later. Match records are public — anyone can read them, and a player’s profile lists their recent matches.',
       ],
     },
     {
@@ -195,7 +195,7 @@ const privacy: Policy = {
           'your sign-in session, if you sign in, so you stay signed in (managed by Supabase);',
           'as a guest, the name you chose — for this tab only, so a refresh does not sign you out;',
           'a random id for this tab, so if your connection drops the server can give your seat back within 30 seconds;',
-          'as a guest, the ids of up to 50 matches you played in the last 30 days, with the name you used and when, so the match log can show your own games;',
+          'as a guest, the ids of up to 50 matches you played in the last 30 days, with the name you used and when, so this browser can tell which saved matches were yours;',
           'as a guest, a cookie called fmm_guest: your name, an unofficial rating your browser works out, your ranked wins, losses and draws, and a random id. It lasts 30 days from the last time you played as that guest, is sent only to this site, and is described under “If you play as a guest”.',
         ],
         'The tab-only items go when you close the tab. You can clear the rest in your browser settings at any time.',
