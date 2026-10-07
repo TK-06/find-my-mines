@@ -1,10 +1,12 @@
 import type { ModerationResult, OnlinePlayer, ReportReason, RoomSummary } from '@fmm/shared';
 import { useEffect, useRef, useState } from 'react';
 import { authEnabled } from '../auth/supabase.js';
+import { removeFriendship } from '../data/friends.js';
 import { presenceLabel } from '../data/format.js';
-import { PRIVATE_ROOM_TEXT } from '../data/friendsModel.js';
+import { PRIVATE_ROOM_TEXT, subjectOfTab } from '../data/friendsModel.js';
+import type { Friendships } from '../data/useFriendships.js';
 import { LobbyFriendSearch } from './LobbyFriendSearch.js';
-import { PlayerCard } from './PlayerCard.js';
+import { PlayerCard, type CardInvite, type ReportTarget } from './PlayerCard.js';
 import { ReportDialog } from './ReportDialog.js';
 
 interface Props {
@@ -14,8 +16,10 @@ interface Props {
   rooms: RoomSummary[];
   /** Same action as the game list's Join — an ask-to-join room opens the request. */
   onJoin: (roomId: string) => void;
-  /** Spectate a friend's game, from the search's Watch button. */
-  onWatch: (roomId: string) => void;
+  /** The viewer's friendships, kept by App: the search lists them, and a card can add or remove one. */
+  friends: Friendships;
+  /** What Invite does on a friend's card from here, and how it is sent. */
+  invite: CardInvite;
   /** Someone else's public profile page. */
   onViewProfile: (username: string) => void;
   /** Your own name goes straight to your profile. */
@@ -32,15 +36,17 @@ interface Props {
  *
  * The count is the headline. Under it, "Find a player" searches everyone (not
  * just who is connected); the list below stays the graded roster. Each name in
- * the list opens that player's card (stats, View profile, Add friend, and
- * Report behind ⋯); your own name opens your profile.
+ * the list opens that player's card (stats, how you have done against them,
+ * View profile, Add friend — or Invite, for a friend — and Copy, Remove friend
+ * and Report behind ⋯); your own name opens your profile.
  */
 export function OnlinePanel({
   online,
   myId,
   rooms,
   onJoin,
-  onWatch,
+  friends,
+  invite,
   onViewProfile,
   onOpenOwnProfile,
   onReport,
@@ -53,7 +59,7 @@ export function OnlinePanel({
   /** The connection whose card is open. */
   const [openId, setOpenId] = useState<string | null>(null);
   /** Who the report dialog is about. Kept as a copy, so it stays put if they leave meanwhile. */
-  const [reporting, setReporting] = useState<OnlinePlayer | null>(null);
+  const [reporting, setReporting] = useState<ReportTarget | null>(null);
   const triggers = useRef(new Map<string, HTMLButtonElement>());
 
   const openPlayer = openId ? online.find((p) => p.id === openId) : undefined;
@@ -82,10 +88,9 @@ export function OnlinePanel({
       {authEnabled && (
         <LobbyFriendSearch
           viewerProfileId={viewerProfileId}
+          friends={friends}
           online={online}
           rooms={rooms}
-          onJoin={onJoin}
-          onWatch={onWatch}
           onViewProfile={onViewProfile}
         />
       )}
@@ -144,7 +149,7 @@ export function OnlinePanel({
                 <PlayerCard
                   // A fresh card per player, so one player's numbers never flash on another's.
                   key={openPlayer.id}
-                  player={openPlayer}
+                  subject={subjectOfTab(openPlayer)}
                   viewerProfileId={viewerProfileId}
                   onViewProfile={(name) => {
                     setOpenId(null);
@@ -154,6 +159,18 @@ export function OnlinePanel({
                     setOpenId(null);
                     setReporting(target);
                   }}
+                  onRemoveFriend={
+                    viewerProfileId && openPlayer.profileId
+                      ? () =>
+                          friends.change(
+                            openPlayer.profileId!,
+                            () => removeFriendship(viewerProfileId, openPlayer.profileId!),
+                            `${openPlayer.nickname} is no longer your friend.`,
+                          )
+                      : undefined
+                  }
+                  onFriendshipChanged={() => void friends.refresh()}
+                  invite={invite}
                   onClose={closeCard}
                 />
               )}
@@ -165,7 +182,7 @@ export function OnlinePanel({
       {reporting && (
         <ReportDialog
           targetId={reporting.id}
-          targetName={reporting.nickname}
+          targetName={reporting.name}
           onSend={(reason, details) => onReport(reporting.id, reason, details)}
           onClose={() => {
             const id = reporting.id;

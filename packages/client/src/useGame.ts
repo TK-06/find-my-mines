@@ -405,6 +405,9 @@ export function useGame() {
       timers.add(timer);
     });
 
+    // The friend we invited said no. An invite that merely ran out says nothing.
+    socket.on('friend:inviteDeclined', ({ byName }) => showError(`${byName} declined your invite.`));
+
     // Listeners are registered first so the initial lobby:rooms isn't missed.
     if (!socket.connected) socket.connect();
 
@@ -434,6 +437,7 @@ export function useGame() {
       socket.off('lobby:message');
       socket.off('lobby:cleared');
       socket.off('friend:invited');
+      socket.off('friend:inviteDeclined');
       if (errorTimer.current) clearTimeout(errorTimer.current);
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
@@ -652,6 +656,19 @@ export function useGame() {
   );
 
   /**
+   * Say no to a friend's invite: the popup goes, and the server tells whoever
+   * sent it. Fire and forget — the server only honours a decline from the
+   * account that was invited, and the popup is gone either way.
+   */
+  const declineInvite = useCallback(
+    (id: string) => {
+      dismissInvite(id);
+      socket.emit('friend:declineInvite', { inviteId: id });
+    },
+    [dismissInvite],
+  );
+
+  /**
    * In a game against the computer, on your turn: the server's pick of the
    * covered cell most likely to be a mine. It counts the hints; a refusal
    * (not your turn, none left) comes back as `error`. Timed, so a lost answer
@@ -823,6 +840,9 @@ export function useGame() {
     friendInvites,
     inviteFriend,
     dismissInvite,
+    declineInvite,
+    /** The short toast at the bottom of the page, for a notice that is not an error too. */
+    notify: showError,
     reportPlayer,
     playVsAi,
     aiAbout,

@@ -1,4 +1,4 @@
-import { MAX_PLAYERS_LIMIT, MIN_PLAYERS_TO_START } from './config.js';
+import { MIN_PLAYERS_TO_START } from './config.js';
 
 /**
  * The record of one finished match, enough to play it back move by move and to
@@ -16,6 +16,14 @@ export const REPLAY_VERSION = 1;
 
 /** Widest or tallest board a replay may describe. Rooms stop at 16; this leaves room to grow. */
 export const REPLAY_MAX_SIDE = 32;
+
+/**
+ * Most seats a replay may list. A fixed room stops at `MAX_PLAYERS_LIMIT` (12),
+ * but an unlimited room has no ceiling of its own, and a match played there must
+ * still be recorded — so this is a generous bound against a hostile payload, not
+ * the room limit. Stays under 100: the coach names players "Player 1" to "Player 99".
+ */
+export const REPLAY_MAX_SEATS = 64;
 
 /** Longest seat name kept, in characters. A nickname is 20; a bot's name is a little longer. */
 export const REPLAY_NAME_MAX = 40;
@@ -123,7 +131,7 @@ export function parseReplay(input: unknown): Replay | null {
   // The array lengths are checked before anything is walked, so an oversized
   // payload costs nothing to refuse.
   if (!Array.isArray(raw.mines) || raw.mines.length !== mineCount) return null;
-  if (!Array.isArray(raw.seats) || raw.seats.length < MIN_PLAYERS_TO_START || raw.seats.length > MAX_PLAYERS_LIMIT) {
+  if (!Array.isArray(raw.seats) || raw.seats.length < MIN_PLAYERS_TO_START || raw.seats.length > REPLAY_MAX_SEATS) {
     return null;
   }
   if (!Array.isArray(raw.moves) || raw.moves.length > total) return null;

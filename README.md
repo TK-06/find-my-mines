@@ -29,8 +29,8 @@ npm run dev
 |---|---|
 | Game client | http://localhost:5173 |
 | Profile | http://localhost:5173/profile |
-| Game log | http://localhost:5173/games |
 | Server console | http://localhost:5173/admin |
+| Game log (admins only, a tab of the console) | http://localhost:5173/admin#games |
 | Server (API + sockets) | http://localhost:3000 |
 
 Open the game in **two browser windows** and enter a nickname in each. In the first, create

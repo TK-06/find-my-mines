@@ -1,4 +1,6 @@
 import type { FriendInvite, OnlinePlayer, PresenceStatus, RoomSummary } from '@fmm/shared';
+import { presenceLabel } from './format.js';
+import { describeHeadToHead, formatRecord, type HeadToHead } from './headToHead.js';
 
 /**
  * Pure rules for the friends list: who is where, what each row offers, and
@@ -100,6 +102,11 @@ export interface FriendRow {
   dot: FriendDot;
   statusText: string;
   action: FriendAction | null;
+  /**
+   * Their most active connection's id, for the one thing that needs a live
+   * connection (reporting them); null when none of their tabs is connected.
+   */
+  connectionId: string | null;
 }
 
 /**
@@ -208,6 +215,7 @@ export function friendRows(
         dot: presence === 'offline' ? 'offline' : presence === 'playing' ? 'playing' : 'online',
         statusText: privateRoom ? PRIVATE_ROOM_TEXT : statusText(presence, roomId),
         action: actionFor(presence, roomId, privateRoom, rooms, myRoomId),
+        connectionId: tab?.id ?? null,
       };
     });
 
@@ -275,11 +283,123 @@ export function changeNotice(answer: Answer, success?: string): FriendNote | nul
   return success ? { text: success, failed: false } : null;
 }
 
+/**
+ * Who a player card is about. Two things open one: a connection in the lobby's
+ * Online now list, and a friend on /profile, who may well be offline. The card
+ * only needs the handful of facts below, so both are boiled down to this.
+ */
+export interface CardSubject {
+  name: string;
+  /** Their account, null for a guest. */
+  profileId: string | null;
+  isGuest: boolean;
+  avatarUrl: string | null;
+  presence: PresenceStatus | 'offline';
+  /** The dot beside "where": green online, yellow playing, grey offline. */
+  dot: FriendDot;
+  /** Where they are, in words. */
+  where: string;
+  /**
+   * The connection to name in a report — their most active one. Null when they
+   * are not connected, and then there is nobody the server could look up.
+   */
+  connectionId: string | null;
+}
+
+/** Someone in the Online now list, as a card subject. */
+export function subjectOfTab(tab: OnlinePlayer): CardSubject {
+  return {
+    name: tab.nickname,
+    profileId: tab.profileId,
+    isGuest: tab.isGuest,
+    avatarUrl: tab.avatarUrl ?? null,
+    presence: tab.status,
+    dot: tab.status === 'playing' ? 'playing' : 'online',
+    where: tab.privateRoom ? PRIVATE_ROOM_TEXT : presenceLabel(tab),
+    connectionId: tab.id,
+  };
+}
+
+/**
+ * An account we know by id and name — a friend, or someone who asked to be —
+ * as a card subject, placed by the busiest of their connected tabs, or offline
+ * when there is none. `picture` is the one from the friendships read; the
+ * online list's own is the fallback.
+ */
+export function subjectOfPerson(
+  person: { profileId: string; name: string; picture?: string | null },
+  online: OnlinePlayer[],
+): CardSubject {
+  const tab = mostActiveTab(online.filter((t) => t.profileId === person.profileId));
+  const presence = tab?.status ?? 'offline';
+  return {
+    name: person.name,
+    profileId: person.profileId,
+    isGuest: false,
+    avatarUrl: person.picture ?? tab?.avatarUrl ?? null,
+    presence,
+    dot: presence === 'offline' ? 'offline' : presence === 'playing' ? 'playing' : 'online',
+    where: tab?.privateRoom ? PRIVATE_ROOM_TEXT : statusText(presence, tab?.roomId ?? null),
+    connectionId: tab?.id ?? null,
+  };
+}
+
+/**
+ * What pressing Invite does, which depends on where the viewer is.
+ *
+ * - `send`: already in a room that has a seat to offer, so the invite goes out now.
+ * - `create`: in the menu, so a game is set up first and the invite follows it.
+ * - `leave-computer`: in a game against the computer. That room cannot take a
+ *   guest, and the menu (where a game is set up) is hidden behind it.
+ * - `disconnected`: no connection or no name yet, so the server cannot be asked.
+ */
+export type InvitePlan = 'send' | 'create' | 'leave-computer' | 'disconnected';
+
+export function invitePlan(here: {
+  connected: boolean;
+  /** This tab has joined under a name (an account's own, or a guest's). */
+  named: boolean;
+  inRoom: boolean;
+  /** The room is a game against the computer. */
+  vsComputer: boolean;
+}): InvitePlan {
+  if (!here.connected || !here.named) return 'disconnected';
+  if (!here.inRoom) return 'create';
+  return here.vsComputer ? 'leave-computer' : 'send';
+}
+
+/** Said under a friend's card when Invite cannot be pressed, and why. */
+const INVITE_PLAN_NOTE: Record<Exclude<InvitePlan, 'send' | 'create'>, string> = {
+  'leave-computer': 'Leave your game against the computer to invite a friend.',
+  disconnected: 'Not connected to the server right now.',
+};
+
+/** What Invite needs to know to say what it will do. */
+export interface InviteState {
+  /** The friend has a tab connected. */
+  friendOnline: boolean;
+  plan: InvitePlan;
+}
+
+/** Whether Invite can be pressed, and when it cannot, the one reason to say. */
+export type InviteAvailability = { can: true; note: null } | { can: false; note: string };
+
+/**
+ * The rules for Invite, shared by the player card and the Friends card's rows
+ * so the two cannot disagree. Offline wins over every other reason: it is the
+ * one the player can do nothing about.
+ */
+export function inviteAvailability(invite: InviteState): InviteAvailability {
+  if (!invite.friendOnline) return { can: false, note: "They're offline." };
+  if (invite.plan === 'send' || invite.plan === 'create') return { can: true, note: null };
+  return { can: false, note: INVITE_PLAN_NOTE[invite.plan] };
+}
+
 /** The friend button on a player card. */
 export interface CardFriendButton {
   label: string;
   /** What pressing it does; 'none' means it is shown disabled. */
-  does: 'add' | 'accept' | 'none';
+  does: 'add' | 'accept' | 'invite' | 'none';
   primary: boolean;
   /** Said under the buttons, when there is something to explain. */
   note: string | null;
@@ -289,10 +409,16 @@ export interface CardFriendButton {
  * What the friend button says, given who is looking and what is already
  * between you. `existing` is undefined while it loads and 'unknown' when it
  * could not be read — then Add is offered and the request itself sorts it out.
+ *
+ * Once you are friends it becomes Invite, which is only live when the friend
+ * is online and this tab is somewhere an invite can start from. `invite` is
+ * left out where there is no way to invite from (a friend's public profile
+ * page): there the button just says Friends.
  */
 export function cardFriendButton(
   viewerSignedIn: boolean,
   existing: Friendship | null | 'unknown' | undefined,
+  invite?: InviteState,
 ): CardFriendButton {
   if (!viewerSignedIn) {
     return { label: 'Add friend', does: 'none', primary: true, note: 'Sign in to add friends.' };
@@ -301,10 +427,97 @@ export function cardFriendButton(
   if (existing === null || existing === 'unknown') {
     return { label: 'Add friend', does: 'add', primary: true, note: null };
   }
-  if (existing.status === 'accepted') return { label: 'Friends', does: 'none', primary: false, note: null };
+  if (existing.status === 'accepted') {
+    if (!invite) return { label: 'Friends', does: 'none', primary: false, note: null };
+    const available = inviteAvailability(invite);
+    return available.can
+      ? { label: 'Invite', does: 'invite', primary: true, note: null }
+      : { label: 'Invite', does: 'none', primary: false, note: available.note };
+  }
   return existing.direction === 'incoming'
     ? { label: 'Accept request', does: 'accept', primary: true, note: 'They asked to be friends.' }
     : { label: 'Requested', does: 'none', primary: false, note: 'Waiting for them to accept.' };
+}
+
+/** The Invite button on a friend's row. */
+export interface RowInvite {
+  /** Whether it can be pressed. */
+  enabled: boolean;
+  /** Its tooltip: why it cannot be pressed, else what pressing it will do. */
+  hint: string;
+  /** Its spoken name. Starts with the visible word, "Invite", and names the friend. */
+  label: string;
+}
+
+/**
+ * What a friend's Invite button says. Where you are decides what it will do:
+ * from a room the invite goes out now; from the menu a game is set up first.
+ */
+export function rowInvite(name: string, invite: InviteState): RowInvite {
+  const available = inviteAvailability(invite);
+  if (!available.can) {
+    return { enabled: false, hint: available.note, label: `Invite ${name} (${available.note})` };
+  }
+  const label =
+    invite.plan === 'create' ? `Invite ${name} after you set up a game` : `Invite ${name} to your game`;
+  return { enabled: true, hint: label, label };
+}
+
+/** The stats under a friend's name on the Friends card, in two forms. */
+export interface FriendStats {
+  /** The short line shown: "871 Elo · You 3–1–0". */
+  text: string;
+  /** The same in words, for a screen reader and the hover title. */
+  label: string;
+}
+
+/**
+ * A friend's rating and how you have done against them, for one short line.
+ *
+ * `record` is undefined while it is still loading — the line is just the rating
+ * for now, rather than a dash that would read as a failure — null when it could
+ * not be read (a dash, never "No games yet", which would be a claim), and
+ * otherwise your wins–losses–draws from your side, as on the player card.
+ * `elo` is undefined when their profile could not be read.
+ */
+export function friendStats(
+  name: string,
+  elo: number | undefined,
+  record: HeadToHead | null | undefined,
+): FriendStats {
+  const rating = elo === undefined ? '—' : elo.toLocaleString('en-US');
+  const parts = [`${rating} Elo`];
+  const words = [elo === undefined ? `${name}'s rating is not known.` : `${name} has an Elo of ${rating}.`];
+
+  if (record === null) {
+    parts.push('—');
+    words.push(`Your record against ${name} could not be loaded.`);
+  } else if (record) {
+    parts.push(record.games === 0 ? 'No games yet' : `You ${formatRecord(record)}`);
+    words.push(describeHeadToHead(record, name));
+  }
+  return { text: parts.join(' · '), label: words.join(' ') };
+}
+
+/**
+ * How an invite from a card went, for the card and for the toast: sent now, or
+ * parked until the game it will be sent from has been created.
+ */
+export interface InviteOutcome {
+  ok: boolean;
+  error?: string;
+  /** The invite waits for the game being set up; the card has nothing more to say. */
+  queued?: boolean;
+}
+
+/** The line shown on the Create game form while an invite waits for it. */
+export function pendingInviteLine(name: string): string {
+  return `${name} will be invited when you create the game.`;
+}
+
+/** What to say once the game has been made and the waiting invite went (or did not). */
+export function pendingInviteNotice(name: string, result: { ok: boolean; error?: string }): string {
+  return result.ok ? `Invited ${name}.` : `Could not invite ${name}: ${result.error ?? 'try again from the room.'}`;
 }
 
 /**

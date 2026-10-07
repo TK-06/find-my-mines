@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appDepth,
+  canGoBack,
   isPlainLeftClick,
   joinCodeFromPath,
   joinPathFor,
@@ -56,8 +58,46 @@ describe('routeFromPath', () => {
   });
 
   it('round-trips every route through its path', () => {
-    const routes: Route[] = ['game', 'profile', 'games', 'ranks', 'admin', 'privacy', 'security', 'terms'];
+    const routes: Route[] = ['game', 'profile', 'ranks', 'puzzle', 'admin', 'privacy', 'security', 'terms'];
     for (const route of routes) expect(routeFromPath(pathFor(route))).toBe(route);
+  });
+
+  it('shows the game for /games: the game log is an admin tab now, not a page for players', () => {
+    expect(routeFromPath('/games')).toBe('game');
+    expect(routeFromPath('/games/')).toBe('game');
+  });
+});
+
+describe('going back', () => {
+  const ORIGIN = 'https://findmymines.example';
+
+  it('counts the screens of this app behind the current entry, from the entry itself', () => {
+    expect(appDepth({ depth: 2 })).toBe(2);
+    expect(appDepth({ depth: 1 })).toBe(1);
+  });
+
+  it('counts none on a fresh load, or for a state this app did not write', () => {
+    for (const state of [null, undefined, {}, { depth: 0 }, { depth: -1 }, { depth: 1.5 }, { depth: '2' }, 'x', 7]) {
+      expect(appDepth(state)).toBe(0);
+    }
+  });
+
+  it('goes back once the app itself has been navigated, whatever the referrer says', () => {
+    expect(canGoBack({ depth: 1 }, '', ORIGIN)).toBe(true);
+    expect(canGoBack({ depth: 3 }, 'https://www.google.com/', ORIGIN)).toBe(true);
+  });
+
+  it('goes back to a page of this site that opened this one with a full page load', () => {
+    expect(canGoBack(null, `${ORIGIN}/admin?token=abc`, ORIGIN)).toBe(true);
+    expect(canGoBack(null, `${ORIGIN}/`, ORIGIN)).toBe(true);
+  });
+
+  it('does not send a visitor back to another site, or to nothing', () => {
+    expect(canGoBack(null, 'https://www.google.com/search?q=mines', ORIGIN)).toBe(false);
+    // A lookalike address is another origin.
+    expect(canGoBack(null, 'https://findmymines.example.evil.test/', ORIGIN)).toBe(false);
+    expect(canGoBack(null, '', ORIGIN)).toBe(false);
+    expect(canGoBack(null, 'not a url', ORIGIN)).toBe(false);
   });
 });
 

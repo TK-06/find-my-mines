@@ -4,7 +4,6 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 export type Route =
   | 'game'
   | 'profile'
-  | 'games'
   | 'ranks'
   | 'puzzle'
   | 'admin'
@@ -19,7 +18,6 @@ export type Route =
 const PATHS: Record<Route, string> = {
   game: '/',
   profile: '/profile',
-  games: '/games',
   ranks: '/ranks',
   puzzle: '/puzzle',
   admin: '/admin',
@@ -104,6 +102,9 @@ export function reviewTargetFromPath(pathname: string): ReviewTarget | null {
  * maps the pathname to a screen and pushes history on navigation. A real
  * router would be more dependency than this app needs. Only the pathname is
  * read, so in-page #anchors never change the screen.
+ *
+ * /games is not a page of its own any more: the game log moved into the admin
+ * console, so an old link or bookmark lands on the game like any unknown path.
  */
 export function routeFromPath(pathname: string): Route {
   if (playerNameFromPath(pathname) !== null) return 'player';
@@ -113,8 +114,6 @@ export function routeFromPath(pathname: string): Route {
       return 'admin';
     case '/profile':
       return 'profile';
-    case '/games':
-      return 'games';
     case '/ranks':
       return 'ranks';
     case '/puzzle':
@@ -157,6 +156,8 @@ export function RouteLink({
   current,
   onNavigate,
   className,
+  label,
+  title,
   children,
 }: {
   to: Route;
@@ -164,12 +165,18 @@ export function RouteLink({
   current?: Route;
   onNavigate: (next: Route) => void;
   className?: string;
+  /** The link's spoken name, for one that holds only a picture or an icon. */
+  label?: string;
+  /** A tooltip. */
+  title?: string;
   children: ReactNode;
 }) {
   return (
     <a
       href={PATHS[to]}
       className={className}
+      aria-label={label}
+      title={title}
       aria-current={current === to ? 'page' : undefined}
       onClick={(event) => {
         if (!isPlainLeftClick(event)) return;
@@ -238,7 +245,7 @@ export function useRoute(): [Route, (next: Route, path?: string) => void, string
   /** `path` is for routes with a parameter in them, like a player's /u/<name>. */
   const navigate = (next: Route, path?: string) => {
     const to = path ?? PATHS[next];
-    window.history.pushState({}, '', to);
+    window.history.pushState({ depth: appDepth(window.history.state) + 1 }, '', to);
     setLocation({ route: next, path: to });
     // A new screen starts at its top, as a page load would. Footer links sit at
     // the very bottom, so without this the next page opens scrolled away.
@@ -248,6 +255,46 @@ export function useRoute(): [Route, (next: Route, path?: string) => void, string
   return [location.route, navigate, location.path];
 }
 
+/**
+ * How many screens of this app sit behind the current history entry: 0 on a page
+ * that was just loaded. Each `navigate` stamps the entry it pushes with one more
+ * than the entry it left. The browser keeps the stamp through back, forward and a
+ * reload, which a counter held in memory would not.
+ */
+export function appDepth(state: unknown): number {
+  const depth = (state as { depth?: unknown } | null)?.depth;
+  return typeof depth === 'number' && Number.isInteger(depth) && depth > 0 ? depth : 0;
+}
+
+/**
+ * Whether one step back stays on this site, so a "Back" link may use the
+ * browser's history instead of guessing where to go. That is so when an earlier
+ * screen of this app is behind the entry (see appDepth), or when the page was
+ * opened by a link from this site's own pages: the server console's game log opens
+ * a review with a full page load, which leaves no stamp but does leave a referrer.
+ * `history.length` cannot answer this — it also counts pages from other sites,
+ * and a link from a search result would send the visitor straight back to it.
+ */
+export function canGoBack(state: unknown, referrer: string, origin: string): boolean {
+  if (appDepth(state) > 0) return true;
+  try {
+    return new URL(referrer).origin === origin;
+  } catch {
+    // No referrer (a typed address, a bookmark) or one that is not a URL.
+    return false;
+  }
+}
+
+/** canGoBack, asked of the page that is open. */
+export function canGoBackHere(): boolean {
+  return canGoBack(window.history.state, document.referrer, window.location.origin);
+}
+
+/**
+ * The header's links to the main screens. Your own profile is not among them: it
+ * is the round picture at the header's far right (see ProfileButton). The game
+ * log is not a screen for players at all — it is a tab of the admin console.
+ */
 export function NavBar({
   route,
   onNavigate,
@@ -257,8 +304,6 @@ export function NavBar({
 }) {
   const items: { key: Route; label: string }[] = [
     { key: 'game', label: 'Play' },
-    { key: 'profile', label: 'Profile' },
-    { key: 'games', label: 'Game log' },
     { key: 'ranks', label: 'Rankings' },
     { key: 'puzzle', label: 'Puzzle' },
   ];

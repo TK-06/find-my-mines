@@ -1,4 +1,3 @@
-import type { ModerationResult } from '@fmm/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { acceptFriendRequest, listFriendships, sendFriendRequest, type FriendsResult } from './friends.js';
 import {
@@ -9,6 +8,7 @@ import {
   type FriendNote,
   type FriendRow,
   type Friendship,
+  type InviteOutcome,
 } from './friendsModel.js';
 import type { SearchResult } from './playerSearch.js';
 
@@ -22,8 +22,12 @@ const INVITE_NOTE_MS = 10_000;
 export interface FriendActions {
   onJoin: (roomId: string) => void;
   onWatch: (roomId: string) => void;
-  /** Left out where there is no room to invite to — the lobby never offers Invite. */
-  onInvite?: (profileId: string) => Promise<ModerationResult>;
+  /**
+   * Invite a friend, the way a player card's Invite does: sent now from a room,
+   * else parked until the game being set up exists (answering `queued`). Left
+   * out where nothing can be invited to.
+   */
+  onInvite?: (friend: { profileId: string; name: string }) => Promise<InviteOutcome>;
 }
 
 /**
@@ -42,6 +46,8 @@ export function useFriendships(userId: string | null, actions: FriendActions) {
   const [friendships, setFriendships] = useState<Friendship[]>([]);
   /** Profile pictures by profile id, read with the friendships. */
   const [pictures, setPictures] = useState<ReadonlyMap<string, string>>(new Map());
+  /** Their ratings by profile id, read with the friendships too. */
+  const [elos, setElos] = useState<ReadonlyMap<string, number>>(new Map());
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [missingTable, setMissingTable] = useState(false);
@@ -75,6 +81,7 @@ export function useFriendships(userId: string | null, actions: FriendActions) {
     if (!alive.current || mine !== loadCount.current) return;
     setFriendships(result.friendships);
     setPictures(result.pictures);
+    setElos(result.elos);
     setError(result.error);
     setMissingTable(result.missingTable);
     setLoaded(true);
@@ -89,15 +96,23 @@ export function useFriendships(userId: string | null, actions: FriendActions) {
 
   const markBusy = (id: string, on: boolean) => setBusy((current) => withBusy(current, id, on));
 
-  /** One friendship change for one person, then a fresh list. */
-  async function change(otherId: string, work: () => Promise<FriendsResult>, success?: string) {
+  /**
+   * One friendship change for one person, then a fresh list. Resolves with what
+   * the change came to, for a caller (a player card) that has more to do on success.
+   */
+  async function change(
+    otherId: string,
+    work: () => Promise<FriendsResult>,
+    success?: string,
+  ): Promise<FriendsResult> {
     markBusy(otherId, true);
     const result = await work();
-    if (!alive.current) return;
+    if (!alive.current) return result;
     markBusy(otherId, false);
     setNotice(changeNotice(result, success));
     if (result.missingTable) setMissingTable(true);
     await refresh();
+    return result;
   }
 
   /** Add from the search: the request goes out by the exact name the search found. */
@@ -141,14 +156,21 @@ export function useFriendships(userId: string | null, actions: FriendActions) {
     );
   }
 
-  async function invite(profileId: string) {
+  /**
+   * Invite one friend, and say how it went beside their name for a few seconds.
+   * The invite itself is App's (one for the cards and the rows): from a room it
+   * goes out now; from the menu it is parked, the page moves on to Create game
+   * and that form says who waits, so there is nothing to note here.
+   */
+  async function invite(friend: { profileId: string; name: string }) {
     if (!actions.onInvite) return;
-    markBusy(profileId, true);
-    const result = await actions.onInvite(profileId);
+    markBusy(friend.profileId, true);
+    const result = await actions.onInvite(friend);
     if (!alive.current) return;
-    markBusy(profileId, false);
+    markBusy(friend.profileId, false);
+    if (result.queued) return;
     showInviteNote(
-      profileId,
+      friend.profileId,
       result.ok
         ? { text: 'Invited', failed: false }
         : { text: result.error ?? 'Could not invite.', failed: true },
@@ -159,12 +181,13 @@ export function useFriendships(userId: string | null, actions: FriendActions) {
   function run(row: FriendRow, action: FriendAction) {
     if (action.kind === 'watch') actions.onWatch(action.roomId);
     else if (action.kind === 'join') actions.onJoin(action.roomId);
-    else void invite(row.profileId);
+    else void invite({ profileId: row.profileId, name: row.name });
   }
 
   return {
     friendships,
     pictures,
+    elos,
     loaded,
     error,
     missingTable,
@@ -177,5 +200,13 @@ export function useFriendships(userId: string | null, actions: FriendActions) {
     addFromSearch,
     acceptFromSearch,
     run,
+    invite,
   };
 }
+
+/**
+ * What useFriendships hands back. One instance lives in App for the signed-in
+ * player and is passed down, so the Friends card, the lobby's search and the
+ * player cards all see the same list, and a change made in one shows in all.
+ */
+export type Friendships = ReturnType<typeof useFriendships>;

@@ -48,8 +48,9 @@ npm run dev
 | What | Where |
 |---|---|
 | Game | http://localhost:5173 |
-| Profile / Game log / Rankings | `/profile`, `/games`, `/ranks` |
-| Server console | http://localhost:5173/admin |
+| Profile / Rankings | `/profile`, `/ranks` |
+| Server console (Server tab) | http://localhost:5173/admin |
+| Game log (admins only, a tab of the console) | http://localhost:5173/admin#games |
 
 Open two browser windows to play against yourself.
 
@@ -77,7 +78,7 @@ the change is wrong, not the test.
 ```
 packages/shared   types, socket protocol, room rules, Elo, matchmaking, game engine
 packages/server   Socket.IO, rooms, matchmaking queue, Supabase writes, /admin
-packages/client   React: auth → lobby → game, plus profile/log/rankings/admin
+packages/client   React: auth → lobby → game, plus profile/rankings and the admin console (server + game log)
 ```
 
 `shared` depends on nothing. Both others depend on it.

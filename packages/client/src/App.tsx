@@ -1,4 +1,4 @@
-import { hostCanModerate, isRoomFull, type RoomSummary } from '@fmm/shared';
+import { hostCanModerate, type RoomConfig, type RoomSummary } from '@fmm/shared';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { identityChanged } from './auth/session.js';
 import { authEnabled, supabase } from './auth/supabase.js';
@@ -12,16 +12,25 @@ import { JoinRequestToasts } from './components/JoinRequestToasts.js';
 import { Leaderboard } from './components/Leaderboard.js';
 import { LoadBoundary } from './components/LoadBoundary.js';
 import { OnlinePanel } from './components/OnlinePanel.js';
+import { ProfileButton, type HeaderUser } from './components/ProfileButton.js';
 import { QueuePanel } from './components/QueuePanel.js';
 import { ReasonDialog } from './components/ReasonDialog.js';
 import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
 import { RoomChat } from './components/RoomChat.js';
+import { RoomFriendInvites } from './components/RoomFriendInvites.js';
 import { ShareRoom } from './components/ShareRoom.js';
 import { SiteFooter } from './components/SiteFooter.js';
 import { SoundControl } from './components/SoundControl.js';
 import { PostInviteButton, WorldChat } from './components/WorldChat.js';
+import {
+  invitePlan,
+  pendingInviteNotice,
+  type InviteOutcome,
+} from './data/friendsModel.js';
 import { replayForPopup } from './data/latestReplay.js';
 import { isPolicy } from './data/policies.js';
+import { hasSeatToOffer, showInviteCard } from './data/roomInvites.js';
+import { useFriendships } from './data/useFriendships.js';
 import {
   NavBar,
   joinCodeFromPath,
@@ -34,7 +43,6 @@ import {
   type Route,
 } from './router.js';
 import { AuthScreen } from './screens/AuthScreen.js';
-import { GameLogScreen } from './screens/GameLogScreen.js';
 import { LeaderboardScreen } from './screens/LeaderboardScreen.js';
 import { LobbyScreen } from './screens/LobbyScreen.js';
 import { PlayerProfileScreen } from './screens/PlayerProfileScreen.js';
@@ -95,6 +103,8 @@ export function App() {
     friendInvites,
     inviteFriend,
     dismissInvite,
+    declineInvite,
+    notify,
     reportPlayer,
     playVsAi,
     aiAbout,
@@ -121,6 +131,11 @@ export function App() {
   useGameSounds(state, playerId, forfeit, useSoundSettings());
 
   const [signedIn, setSignedIn] = useState(false);
+  /**
+   * The signed-in account's id, read from the session as soon as it is known —
+   * before this tab has joined the server — so the friends list can start loading.
+   */
+  const [accountId, setAccountId] = useState<string | null>(null);
   const [ready, setReady] = useState(!authEnabled);
   const [route, navigate, path] = useRoute();
   const [theme, toggleTheme] = useTheme();
@@ -191,6 +206,7 @@ export function App() {
     void client.auth.getSession().then(({ data: { session } }) => {
       if (knownUserRef.current === undefined) knownUserRef.current = session?.user.id ?? null;
       setSignedIn(Boolean(session));
+      setAccountId(session?.user.id ?? null);
       setReady(true);
     });
 
@@ -199,6 +215,7 @@ export function App() {
       const changed = identityChanged(knownUserRef.current, next);
       if (knownUserRef.current === undefined) knownUserRef.current = next;
       setSignedIn(Boolean(session));
+      setAccountId(next);
 
       if (bannedRef.current) return;
       // Signing in, out, or as someone else needs a fresh, re-verified
@@ -212,6 +229,95 @@ export function App() {
   }, []);
 
   const named = playerId !== null;
+
+  /** The Play page, without piling up history entries when it is already showing. */
+  const showPlay = () => {
+    if (route !== 'game') navigate('game');
+  };
+
+  /**
+   * A friend to invite as soon as the game being set up exists. Pressing Invite
+   * on a card while not in a room sends you to Create game first (see
+   * `inviteFromCard`); this is who waits for it. Dropped by Cancel on the form,
+   * by leaving the Play page, and the moment it has been used.
+   */
+  const [pendingInvite, setPendingInvite] = useState<{ profileId: string; name: string } | null>(null);
+  useEffect(() => {
+    // Only the lobby has a Create game form to wait for.
+    if (route !== 'game' || state !== null) setPendingInvite(null);
+  }, [route, state]);
+
+  const plan = invitePlan({
+    connected,
+    named,
+    inRoom: state !== null,
+    vsComputer: state?.origin === 'ai',
+  });
+
+  /**
+   * Invite from a friend's card (profile page or lobby). In a room, the invite
+   * goes out now. In the menu there is no room to invite to yet, so Play opens
+   * with the Create game form and the invite follows once the game exists.
+   */
+  const inviteFromCard = async (friend: { profileId: string; name: string }): Promise<InviteOutcome> => {
+    switch (plan) {
+      case 'send':
+        return inviteFriend(friend.profileId);
+      case 'create':
+        setPendingInvite(friend);
+        showPlay();
+        return { ok: true, queued: true };
+      case 'leave-computer':
+        return { ok: false, error: 'Leave your game against the computer first.' };
+      case 'disconnected':
+        return { ok: false, error: 'Not connected to the server right now.' };
+    }
+  };
+  const cardInvite = { plan, send: inviteFromCard };
+
+  /**
+   * The signed-in player's friendships, here rather than in the Friends card so
+   * the profile page, the lobby's search and its player cards, and whatever
+   * needs the list inside a room all share one — and one change shows in all.
+   * A friend's Join and Watch buttons act through the handlers here, and their
+   * Invite — on a row or on a card — through the same `inviteFromCard`.
+   */
+  const friends = useFriendships(accountId, {
+    onJoin: (roomId) => {
+      showPlay();
+      handleJoin(roomId);
+    },
+    onWatch: (roomId) => {
+      showPlay();
+      void spectateRoom(roomId);
+    },
+    onInvite: inviteFromCard,
+  });
+
+  /**
+   * Create game from the lobby's form. With a friend waiting, the invite is sent
+   * as soon as the room exists: the server has seated us by the time it answers,
+   * which is what it wants to see before it relays an invite. How it went shows
+   * in the toast. A refused create says why through its own toast, and the
+   * invite is not sent.
+   */
+  const createGame = async (name: string, config: RoomConfig) => {
+    // Taken now: the form closes at once, and the invite must not outlive this attempt.
+    const friend = pendingInvite;
+    setPendingInvite(null);
+    const result = await createRoom(name, config);
+    if (!result.ok || !friend) return;
+    notify(pendingInviteNotice(friend.name, await inviteFriend(friend.profileId)));
+  };
+
+  /**
+   * Whose picture the header shows. The online list carries every account's
+   * picture, and this tab is in it once it has joined; before that — no name yet,
+   * or the first list still on its way — there is nobody to show, and the header
+   * draws a generic person.
+   */
+  const mine = online.find((p) => p.id === playerId);
+  const me: HeaderUser | null = mine ? { name: mine.nickname, avatarUrl: mine.avatarUrl ?? null } : null;
 
   /**
    * A share link (/join/CODE), read once at load. It joins that room as soon
@@ -251,35 +357,29 @@ export function App() {
     state === null ? (
       <FriendInviteToasts
         invites={friendInvites}
-        onJoin={(invite) => {
+        onAccept={(invite) => {
           dismissInvite(invite.id);
           navigate('game');
           handleJoin(invite.roomId);
         }}
-        onDismiss={(invite) => dismissInvite(invite.id)}
+        // Closes the popup and tells the friend, whose tabs show "<you> declined your invite."
+        onDecline={(invite) => declineInvite(invite.id)}
       />
     ) : null;
 
-  // Profile, rankings and the game log read public data, so they work before a
-  // nickname is chosen. Only the game itself needs an identity.
+  // Profile and rankings read public data, so they work before a nickname is
+  // chosen. Only the game itself needs an identity.
   if (route === 'profile') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <ProfileScreen
           online={online}
           rooms={rooms}
           myRoomId={state?.roomId ?? null}
-          onJoin={(roomId) => {
-            navigate('game');
-            handleJoin(roomId);
-          }}
-          onWatch={(roomId) => {
-            navigate('game');
-            void spectateRoom(roomId);
-          }}
-          onInvite={inviteFriend}
+          friends={friends}
+          invite={cardInvite}
+          onReport={reportPlayer}
           onViewProfile={(name) => navigate('player', pathForPlayer(name))}
-          onOpenGameLog={() => navigate('games')}
           onOpenReview={(matchId) => navigate('review', pathForReview(matchId))}
           guest={guestProfile}
           onForgetGuest={forgetGuestData}
@@ -292,12 +392,15 @@ export function App() {
   // Someone else's profile: public data, readable with no nickname or sign-in.
   const playerName = route === 'player' ? playerNameFromPath(path) : null;
   if (route === 'player' && playerName) {
+    // Your own public page says "This is you" and points to your profile, so the
+    // header's picture marks it as the current page too. Guests have no public
+    // page: a guest who shares a name with an account is not that account.
+    const viewingOwn = me !== null && !isGuest && playerName.toLowerCase() === me.name.toLowerCase();
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} ownProfile={viewingOwn}>
         <PlayerProfileScreen
           key={playerName}
           username={playerName}
-          onOpenGameLog={() => navigate('games')}
           onOpenReview={(matchId) => navigate('review', pathForReview(matchId))}
           onOpenOwnProfile={() => navigate('profile')}
         />
@@ -313,7 +416,7 @@ export function App() {
   const reviewTarget = route === 'review' ? reviewTargetFromPath(path) : null;
   if (route === 'review' && reviewTarget) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <LoadBoundary what="the review">
           <Suspense
             fallback={
@@ -340,7 +443,7 @@ export function App() {
   // sign-in or server round trip needed.
   if (route === 'puzzle') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <LoadBoundary what="the puzzle">
           <Suspense
             fallback={
@@ -359,17 +462,8 @@ export function App() {
 
   if (route === 'ranks') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <LeaderboardScreen />
-        {inviteToasts}
-      </Shell>
-    );
-  }
-
-  if (route === 'games') {
-    return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
-        <GameLogScreen onOpenReview={(matchId) => navigate('review', pathForReview(matchId))} />
         {inviteToasts}
       </Shell>
     );
@@ -379,7 +473,7 @@ export function App() {
   // no sign-in and no database.
   if (isPolicy(route)) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <PolicyScreen policy={route} onNavigate={navigate} />
         {inviteToasts}
       </Shell>
@@ -389,7 +483,7 @@ export function App() {
   // Kicked, banned, or the room was ended: say so before anything else.
   if (removed) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <RemovedScreen
           notice={removed}
           onContinue={() => {
@@ -404,7 +498,7 @@ export function App() {
 
   if (!named) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         {ready && !(guestName && !signedIn) ? (
           <>
             {linkCode && (
@@ -426,20 +520,24 @@ export function App() {
 
   if (!state) {
     return (
-      <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <div className="stack">
           <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
           <div className="lobby-layout">
+            {/* Games (with + Create game) first: players could not find it
+                under the quick match and the computer opponents. */}
             <div className="stack">
-              <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
-              <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} />
               <LobbyScreen
                 rooms={rooms}
                 clientCount={clientCount}
-                onCreate={createRoom}
+                onCreate={createGame}
                 onJoin={handleJoin}
                 onSpectate={spectateRoom}
+                inviteFor={pendingInvite?.name ?? null}
+                onCancelInvite={() => setPendingInvite(null)}
               />
+              <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
+              <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} />
             </div>
             {/* Who is online, then what they are saying. On phones the two split
                 up: the online list first, the chat after the games. */}
@@ -449,7 +547,8 @@ export function App() {
                 myId={playerId}
                 rooms={rooms}
                 onJoin={handleJoin}
-                onWatch={(roomId) => void spectateRoom(roomId)}
+                friends={friends}
+                invite={cardInvite}
                 onViewProfile={(name) => navigate('player', pathForPlayer(name))}
                 onOpenOwnProfile={() => navigate('profile')}
                 onReport={reportPlayer}
@@ -519,7 +618,7 @@ export function App() {
     ) : null;
 
   return (
-    <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+    <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
       <div className="stack">
         <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
         <div className="room-bar card">
@@ -543,15 +642,13 @@ export function App() {
             />
             {/* Players only, as the server enforces; a private room's code goes
                 public only on its host's say-so. A full room — a game against
-                the computer included — has no seat to advertise. Its own key:
+                the computer included — has no seat to advertise (hasSeatToOffer,
+                also what the Invite friends card goes by). Its own key:
                 two siblings sharing one would leave a stale Share control behind
                 when the room changes. */}
-            {isSeated &&
-              state.origin !== 'ai' &&
-              (!state.config.private || isHost) &&
-              !isRoomFull(state.config, state.players.length) && (
-                <PostInviteButton key={`invite-${state.roomId}`} connected={connected} onPost={postInvite} />
-              )}
+            {hasSeatToOffer(state, playerId) && (
+              <PostInviteButton key={`invite-${state.roomId}`} connected={connected} onPost={postInvite} />
+            )}
             <button className="ghost" onClick={leaveRoom}>
               Leave room
             </button>
@@ -571,6 +668,23 @@ export function App() {
               </button>
             )}
           </div>
+        )}
+
+        {/* The next step once the room exists: ask a friend over. Signed-in
+            players only, and by the same seat rules as the room bar's Post
+            invite (see showInviteCard). Keyed by room, so "Show all" and the
+            notes never carry over to the next one. */}
+        {showInviteCard(state, playerId, !isGuest && accountId !== null) && (
+          <RoomFriendInvites
+            key={`friends-${state.roomId}`}
+            friends={friends}
+            online={online}
+            rooms={rooms}
+            roomId={state.roomId}
+            members={[...state.players, ...state.spectators]}
+            connected={connected}
+            onNavigate={navigate}
+          />
         )}
 
         {aiSeat && turnBanner ? (
@@ -697,6 +811,8 @@ function Shell({
   onNavigate,
   theme,
   onToggleTheme,
+  me,
+  ownProfile = false,
   children,
 }: {
   connected: boolean;
@@ -706,13 +822,17 @@ function Shell({
   onNavigate: (next: Route) => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
+  /** Who the header's picture shows; null before this tab has a name. */
+  me: HeaderUser | null;
+  /** The page on screen is your own public page (/u/<you>), which counts as your profile. */
+  ownProfile?: boolean;
   children: React.ReactNode;
 }) {
   return (
     // A full-height column, so the footer sits at the bottom of the window on
     // short pages and after the content on long ones.
     <div className="app site-shell">
-      <header className="header">
+      <header className="header site-header">
         <h1 className="title">Find My Mines</h1>
         <div className="header-right">
           <NavBar route={route} onNavigate={onNavigate} />
@@ -720,6 +840,7 @@ function Shell({
             {connected ? 'Online' : 'Offline'}
           </span>
           <SoundControl />
+          <ProfileButton me={me} current={route === 'profile' || ownProfile} onNavigate={onNavigate} />
         </div>
       </header>
 

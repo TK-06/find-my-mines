@@ -1,13 +1,21 @@
-import { STARTING_ELO, type ModerationResult, type OnlinePlayer, type RoomSummary } from '@fmm/shared';
+import {
+  STARTING_ELO,
+  type ModerationResult,
+  type OnlinePlayer,
+  type ReportReason,
+  type RoomSummary,
+} from '@fmm/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { authEnabled } from '../auth/supabase.js';
 import { FriendsPanel } from '../components/FriendsPanel.js';
+import type { CardInvite } from '../components/PlayerCard.js';
 import { ActivityHeatmap } from '../components/profile/ActivityHeatmap.js';
 import { IdentityCard } from '../components/profile/IdentityCard.js';
 import { RatingChart } from '../components/profile/RatingChart.js';
 import { RecentMatches } from '../components/profile/RecentMatches.js';
 import { winRate } from '../data/format.js';
 import type { GuestProfile } from '../data/guestCookie.js';
+import type { Friendships } from '../data/useFriendships.js';
 import {
   bestElo,
   dayStreak,
@@ -35,14 +43,16 @@ export interface ProfileScreenProps {
   online: OnlinePlayer[];
   /** Open rooms, so a friend's room can offer Join or Watch. */
   rooms: RoomSummary[];
-  /** The room this browser is in, or null. Inviting a friend needs one. */
+  /** The room this browser is in, or null. Inviting a friend from a row needs one. */
   myRoomId: string | null;
-  onJoin: (roomId: string) => void;
-  onWatch: (roomId: string) => void;
-  onInvite: (profileId: string) => Promise<ModerationResult>;
-  /** Someone else's public profile, from a name in the Friends card. */
+  /** The signed-in player's friendships, kept by App (also read by the lobby and the waiting room). */
+  friends: Friendships;
+  /** What Invite does on a friend's card from here, and how it is sent. */
+  invite: CardInvite;
+  /** Reports a connected friend to the admins, from their card's ⋯ menu. */
+  onReport: (targetId: string, reason: ReportReason, details: string) => Promise<ModerationResult>;
+  /** Someone else's public profile: the View profile button on a friend's card. */
   onViewProfile: (username: string) => void;
-  onOpenGameLog: () => void;
   /** Opens a saved match's review, from the Review button on a recent match. */
   onOpenReview: (matchId: string) => void;
   /** The guest this browser remembers, unofficial rating and all; null for anyone else. */
@@ -63,11 +73,10 @@ export function ProfileScreen({
   online,
   rooms,
   myRoomId,
-  onJoin,
-  onWatch,
-  onInvite,
+  friends,
+  invite,
+  onReport,
   onViewProfile,
-  onOpenGameLog,
   onOpenReview,
   guest,
   onForgetGuest,
@@ -146,7 +155,7 @@ export function ProfileScreen({
   if (loading) return <EmptyState title="Loading your profile…" />;
 
   if (!userId) {
-    if (guest) return <GuestCard guest={guest} onOpenGameLog={onOpenGameLog} onForget={onForgetGuest} />;
+    if (guest) return <GuestCard guest={guest} onForget={onForgetGuest} />;
     return (
       <EmptyState
         title="You’re playing as a guest"
@@ -173,12 +182,12 @@ export function ProfileScreen({
         <IdentityCard profile={profile} streak={streak} standing={standing} onRename={rename} />
         <FriendsPanel
           userId={userId}
+          friends={friends}
           online={online}
           rooms={rooms}
           myRoomId={myRoomId}
-          onJoin={onJoin}
-          onWatch={onWatch}
-          onInvite={onInvite}
+          invite={invite}
+          onReport={onReport}
           onViewProfile={onViewProfile}
         />
       </div>
@@ -209,7 +218,7 @@ export function ProfileScreen({
 
         <RatingChart series={series} sinceJoining={profile.elo - STARTING_ELO} />
         <ActivityHeatmap seats={history} today={today} />
-        <RecentMatches matches={recent} userId={userId} onOpenGameLog={onOpenGameLog} onOpenReview={onOpenReview} />
+        <RecentMatches matches={recent} userId={userId} onOpenReview={onOpenReview} />
       </div>
     </div>
   );
@@ -220,15 +229,7 @@ export function ProfileScreen({
  * worked out, and the ranked record. Everything is labelled unofficial because
  * the server never saw it. "Forget me" asks first, inline.
  */
-function GuestCard({
-  guest,
-  onOpenGameLog,
-  onForget,
-}: {
-  guest: GuestProfile;
-  onOpenGameLog: () => void;
-  onForget: () => void;
-}) {
+function GuestCard({ guest, onForget }: { guest: GuestProfile; onForget: () => void }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <section className="card guest-card" aria-labelledby="guest-card-title">
@@ -252,22 +253,19 @@ function GuestCard({
         real rating.
       </p>
 
-      <div className="guest-card-actions">
-        <button type="button" className="ghost" onClick={onOpenGameLog}>
-          Open my game log
-        </button>
-        {!confirming && (
+      {!confirming && (
+        <div className="guest-card-actions">
           <button type="button" className="ghost" onClick={() => setConfirming(true)}>
             Forget me on this browser
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {confirming && (
         <div className="guest-forget" role="group" aria-label="Confirm forgetting this guest">
           <p>
             Forget {guest.name}? The name, the unofficial rating, the record and the list of matches this browser
-            keeps for the game log are deleted. Matches already played stay in the public log.
+            keeps are deleted. Matches already played stay recorded on the server.
           </p>
           <div className="guest-card-actions">
             <button type="button" onClick={onForget}>

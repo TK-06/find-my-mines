@@ -26,7 +26,6 @@ const RECENT_MATCHES = 10;
 
 interface Props {
   username: string;
-  onOpenGameLog: () => void;
   /** Opens a saved match's review, from the Review button on a recent match. */
   onOpenReview: (matchId: string) => void;
   /** It turned out to be you: your own page has the edit controls. */
@@ -45,7 +44,7 @@ interface Loaded {
  * year of activity and recent matches as your own page, read-only, with Add
  * friend. Everything here is public data, so it loads signed out too.
  */
-export function PlayerProfileScreen({ username, onOpenGameLog, onOpenReview, onOpenOwnProfile }: Props) {
+export function PlayerProfileScreen({ username, onOpenReview, onOpenOwnProfile }: Props) {
   const [loaded, setLoaded] = useState<Loaded | null | 'missing'>(null);
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [friendship, setFriendship] = useState<Friendship | null | 'unknown' | undefined>(undefined);
@@ -198,7 +197,6 @@ export function PlayerProfileScreen({ username, onOpenGameLog, onOpenReview, onO
         <RecentMatches
           matches={recent}
           userId={profile.id}
-          onOpenGameLog={onOpenGameLog}
           title="Recent matches"
           onOpenReview={onOpenReview}
         />

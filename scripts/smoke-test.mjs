@@ -1476,6 +1476,30 @@ section('friend invites');
   await sleep(200);
   check('a refused invite reaches nobody', delivered.length === 0, `${delivered.length} delivered`);
   alice.off('friend:invited', noteInvite);
+
+  // Declining answers the same way: a guest (or an id the server never sent)
+  // is turned away, nothing reaches the inviter, and nothing throws. The full
+  // path (two friends, a real invite, the inviter's toast) needs accounts.
+  const bounced = [];
+  const noteDecline = (payload) => bounced.push(payload);
+  bob.on('friend:inviteDeclined', noteDecline);
+  alice.on('friend:inviteDeclined', noteDecline);
+
+  const guestDecline = await emitAck(alice, 'friend:declineInvite', { inviteId: 'not-an-invite' });
+  check('a guest cannot decline an invite',
+    guestDecline.ok === false && /sign in/i.test(guestDecline.error ?? ''), guestDecline.error ?? '');
+  const noPayloadDecline = await emitAck(alice, 'friend:declineInvite', undefined);
+  check('a decline without a payload is refused cleanly',
+    noPayloadDecline.ok === false && !String(noPayloadDecline.error).startsWith('no ack'),
+    noPayloadDecline.error ?? '');
+  // No acknowledgement at all is allowed: the client does not wait for one.
+  alice.emit('friend:declineInvite', { inviteId: 'still-not-an-invite' });
+  alice.emit('friend:declineInvite', { inviteId: { nested: true } }, 'not a function');
+  await sleep(200);
+  check('a refused decline tells the inviter nothing', bounced.length === 0, `${bounced.length} delivered`);
+  bob.off('friend:inviteDeclined', noteDecline);
+  alice.off('friend:inviteDeclined', noteDecline);
+
   bob.emit('room:leave');
   await sleep(200);
 }
@@ -2335,7 +2359,7 @@ section('malformed messages');
 const CLIENT_EVENTS = [
   'player:join', 'room:create', 'room:join', 'room:spectate', 'room:lookup', 'room:leave',
   'room:requestJoin', 'room:cancelRequest', 'room:answerRequest', 'room:kick',
-  'friend:invite', 'ai:play', 'ai:about', 'ai:hint', 'room:say', 'lobby:say', 'lobby:invite', 'player:report',
+  'friend:invite', 'friend:declineInvite', 'ai:play', 'ai:about', 'ai:hint', 'room:say', 'lobby:say', 'lobby:invite', 'player:report',
   'review:coach', 'review:ask',
   'queue:join', 'queue:leave', 'game:start', 'game:reveal', 'game:rematch',
 ];
