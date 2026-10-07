@@ -7,7 +7,6 @@ interface Props {
   /** Newest first, each with every seat. */
   matches: MatchRow[];
   userId: string;
-  onOpenGameLog: () => void;
   /** The card's heading; someone else's profile says "Recent matches". */
   title?: string;
   /** Opens a match's review without a page reload. */
@@ -18,16 +17,13 @@ const RESULT = { win: 'Win', loss: 'Loss', draw: 'Draw' } as const;
 
 /**
  * Your last few matches as one compact table — a row each, read from your own
- * seat. The full cards, with every seat and filters, live in the game log.
+ * seat. Only the latest few are listed: the full game log is an admin tool.
  */
-export function RecentMatches({ matches, userId, onOpenGameLog, title = 'Your recent matches', onOpenReview }: Props) {
+export function RecentMatches({ matches, userId, title = 'Your recent matches', onOpenReview }: Props) {
   return (
     <section className="card">
       <div className="profile-card-head">
         <h3>{title}</h3>
-        <button type="button" className="ghost small" onClick={onOpenGameLog}>
-          All in the game log →
-        </button>
       </div>
 
       {matches.length === 0 ? (

@@ -21,7 +21,7 @@ import {
 import { useCoach, type CoachApi } from '../data/useCoach.js';
 import { useReview } from '../data/useReview.js';
 import { useReviewSource, type ReviewSource } from '../data/useReviewSource.js';
-import { RouteLink, type ReviewTarget, type Route } from '../router.js';
+import { canGoBackHere, isPlainLeftClick, pathFor, type ReviewTarget, type Route } from '../router.js';
 
 interface Props {
   target: ReviewTarget;
@@ -45,10 +45,25 @@ interface Props {
  */
 export function ReviewScreen({ target, latest, connected, coachApi, onNavigate }: Props) {
   const state = useReviewSource(target, latest);
+  // The game just played goes back to the game. A saved game can be opened from
+  // many places — your profile, someone else's, the console's game log, a link a
+  // friend sent — and there is no list of games of its own to return to, so it
+  // steps back to wherever it was opened from. Only when there is no such place on
+  // this site (a link opened in a new tab, a bookmark) does it fall back to Play.
+  const stepBack = target !== 'latest' && canGoBackHere();
   const back = (
-    <RouteLink to={target === 'latest' ? 'game' : 'games'} onNavigate={onNavigate} className="rv-back">
-      {target === 'latest' ? '← Back to the game' : '← Game log'}
-    </RouteLink>
+    <a
+      href={pathFor('game')}
+      className="rv-back"
+      onClick={(event) => {
+        if (!isPlainLeftClick(event)) return;
+        event.preventDefault();
+        if (stepBack) window.history.back();
+        else onNavigate('game');
+      }}
+    >
+      {stepBack ? '← Back' : '← Back to the game'}
+    </a>
   );
 
   if (state.status === 'ready') {
@@ -75,7 +90,7 @@ export function ReviewScreen({ target, latest, connected, coachApi, onNavigate }
         {state.status === 'no-latest' && (
           <>
             <p style={{ margin: 0, fontWeight: 600 }}>No game to review yet</p>
-            <p className="muted">Finish a game and its review opens from the result screen, or from the game log.</p>
+            <p className="muted">Finish a game and its review opens from the result screen, or from Review on your profile.</p>
           </>
         )}
         {state.status === 'none' && (
@@ -101,7 +116,7 @@ export function ReviewScreen({ target, latest, connected, coachApi, onNavigate }
   );
 }
 
-/** One word for the mode, as the game log tags it. */
+/** One word for the mode, as the match cards tag it. */
 const MODE_TAG = { casual: 'casual', ranked: 'ranked' } as const;
 
 function ReviewBody({

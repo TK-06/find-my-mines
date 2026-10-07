@@ -12,6 +12,7 @@ import { JoinRequestToasts } from './components/JoinRequestToasts.js';
 import { Leaderboard } from './components/Leaderboard.js';
 import { LoadBoundary } from './components/LoadBoundary.js';
 import { OnlinePanel } from './components/OnlinePanel.js';
+import { ProfileButton, type HeaderUser } from './components/ProfileButton.js';
 import { QueuePanel } from './components/QueuePanel.js';
 import { ReasonDialog } from './components/ReasonDialog.js';
 import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
@@ -34,7 +35,6 @@ import {
   type Route,
 } from './router.js';
 import { AuthScreen } from './screens/AuthScreen.js';
-import { GameLogScreen } from './screens/GameLogScreen.js';
 import { LeaderboardScreen } from './screens/LeaderboardScreen.js';
 import { LobbyScreen } from './screens/LobbyScreen.js';
 import { PlayerProfileScreen } from './screens/PlayerProfileScreen.js';
@@ -214,6 +214,15 @@ export function App() {
   const named = playerId !== null;
 
   /**
+   * Whose picture the header shows. The online list carries every account's
+   * picture, and this tab is in it once it has joined; before that — no name yet,
+   * or the first list still on its way — there is nobody to show, and the header
+   * draws a generic person.
+   */
+  const mine = online.find((p) => p.id === playerId);
+  const me: HeaderUser | null = mine ? { name: mine.nickname, avatarUrl: mine.avatarUrl ?? null } : null;
+
+  /**
    * A share link (/join/CODE), read once at load. It joins that room as soon
    * as the player has a name — a guest once they pick one, an account once
    * signed in — and only from the game screen, so wandering to the profile
@@ -260,11 +269,11 @@ export function App() {
       />
     ) : null;
 
-  // Profile, rankings and the game log read public data, so they work before a
-  // nickname is chosen. Only the game itself needs an identity.
+  // Profile and rankings read public data, so they work before a nickname is
+  // chosen. Only the game itself needs an identity.
   if (route === 'profile') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <ProfileScreen
           online={online}
           rooms={rooms}
@@ -279,7 +288,6 @@ export function App() {
           }}
           onInvite={inviteFriend}
           onViewProfile={(name) => navigate('player', pathForPlayer(name))}
-          onOpenGameLog={() => navigate('games')}
           onOpenReview={(matchId) => navigate('review', pathForReview(matchId))}
           guest={guestProfile}
           onForgetGuest={forgetGuestData}
@@ -292,12 +300,15 @@ export function App() {
   // Someone else's profile: public data, readable with no nickname or sign-in.
   const playerName = route === 'player' ? playerNameFromPath(path) : null;
   if (route === 'player' && playerName) {
+    // Your own public page says "This is you" and points to your profile, so the
+    // header's picture marks it as the current page too. Guests have no public
+    // page: a guest who shares a name with an account is not that account.
+    const viewingOwn = me !== null && !isGuest && playerName.toLowerCase() === me.name.toLowerCase();
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} ownProfile={viewingOwn}>
         <PlayerProfileScreen
           key={playerName}
           username={playerName}
-          onOpenGameLog={() => navigate('games')}
           onOpenReview={(matchId) => navigate('review', pathForReview(matchId))}
           onOpenOwnProfile={() => navigate('profile')}
         />
@@ -313,7 +324,7 @@ export function App() {
   const reviewTarget = route === 'review' ? reviewTargetFromPath(path) : null;
   if (route === 'review' && reviewTarget) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <LoadBoundary what="the review">
           <Suspense
             fallback={
@@ -340,7 +351,7 @@ export function App() {
   // sign-in or server round trip needed.
   if (route === 'puzzle') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <LoadBoundary what="the puzzle">
           <Suspense
             fallback={
@@ -359,17 +370,8 @@ export function App() {
 
   if (route === 'ranks') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <LeaderboardScreen />
-        {inviteToasts}
-      </Shell>
-    );
-  }
-
-  if (route === 'games') {
-    return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
-        <GameLogScreen onOpenReview={(matchId) => navigate('review', pathForReview(matchId))} />
         {inviteToasts}
       </Shell>
     );
@@ -379,7 +381,7 @@ export function App() {
   // no sign-in and no database.
   if (isPolicy(route)) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <PolicyScreen policy={route} onNavigate={navigate} />
         {inviteToasts}
       </Shell>
@@ -389,7 +391,7 @@ export function App() {
   // Kicked, banned, or the room was ended: say so before anything else.
   if (removed) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <RemovedScreen
           notice={removed}
           onContinue={() => {
@@ -404,7 +406,7 @@ export function App() {
 
   if (!named) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         {ready && !(guestName && !signedIn) ? (
           <>
             {linkCode && (
@@ -426,7 +428,7 @@ export function App() {
 
   if (!state) {
     return (
-      <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+      <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
         <div className="stack">
           <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
           <div className="lobby-layout">
@@ -521,7 +523,7 @@ export function App() {
     ) : null;
 
   return (
-    <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme}>
+    <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
       <div className="stack">
         <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
         <div className="room-bar card">
@@ -699,6 +701,8 @@ function Shell({
   onNavigate,
   theme,
   onToggleTheme,
+  me,
+  ownProfile = false,
   children,
 }: {
   connected: boolean;
@@ -708,13 +712,17 @@ function Shell({
   onNavigate: (next: Route) => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
+  /** Who the header's picture shows; null before this tab has a name. */
+  me: HeaderUser | null;
+  /** The page on screen is your own public page (/u/<you>), which counts as your profile. */
+  ownProfile?: boolean;
   children: React.ReactNode;
 }) {
   return (
     // A full-height column, so the footer sits at the bottom of the window on
     // short pages and after the content on long ones.
     <div className="app site-shell">
-      <header className="header">
+      <header className="header site-header">
         <h1 className="title">Find My Mines</h1>
         <div className="header-right">
           <NavBar route={route} onNavigate={onNavigate} />
@@ -722,6 +730,7 @@ function Shell({
             {connected ? 'Online' : 'Offline'}
           </span>
           <SoundControl />
+          <ProfileButton me={me} current={route === 'profile' || ownProfile} onNavigate={onNavigate} />
         </div>
       </header>
 

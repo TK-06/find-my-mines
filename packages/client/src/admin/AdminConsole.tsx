@@ -1,6 +1,9 @@
 import type { ModerationResult, RemovalNote } from '@fmm/shared';
 import { useEffect, useRef, useState } from 'react';
 import { ReasonDialog } from '../components/ReasonDialog.js';
+import { GameLogScreen } from '../screens/GameLogScreen.js';
+import { AdminTabs } from './AdminTabs.js';
+import { adminPanelId, adminTabId, useAdminTab } from './adminTab.js';
 import { GameViewer } from './GameViewer.js';
 import { AdminMetrics } from './AdminMetrics.js';
 import { ReportsPanel } from './ReportsPanel.js';
@@ -23,17 +26,27 @@ type PendingAction =
  * The same information is also printed to the server's stdout. Only the
  * server machine itself, an admin account, or the server's ADMIN_TOKEN (when
  * set) is let in.
+ *
+ * Two tabs, kept in the URL hash: "Server" (everything above) and "Game log",
+ * the public match history. The game log is for admins only — players have no
+ * page for it — so it lives here, behind the same access check, and is never
+ * shown on the locked console.
  */
 export function AdminConsole() {
   const admin = useAdmin();
   const { state, connected, locked, lines, view } = admin;
   const [pending, setPending] = useState<PendingAction | null>(null);
+  const [tab, selectTab] = useAdminTab();
 
   if (locked) return <LockedConsole />;
 
   const rooms = state?.rooms ?? [];
   const playing = rooms.filter((r) => r.status === 'playing').length;
   const watchingId = view?.state.roomId ?? null;
+  // The server only lets an admin connect: once it has accepted this browser (or
+  // did, and has sent its state), the game log may load. Until then — and for
+  // anyone it refuses, who gets the locked console above — it does not.
+  const verified = connected || state !== null;
 
   function confirmPending(note: RemovalNote): Promise<ModerationResult> {
     if (!pending) return Promise.resolve({ ok: false, error: 'Nothing to confirm.' });
@@ -53,7 +66,18 @@ export function AdminConsole() {
         </span>
       </header>
 
-      <div className="stack">
+      <AdminTabs tab={tab} onSelect={selectTab} />
+
+      {/* Hidden, not unmounted, while the game log is showing, so the terminal
+          keeps its place and a half-answered "Clear world chat?" is still there
+          when you come back. */}
+      <div
+        className="stack admin-panel"
+        role="tabpanel"
+        id={adminPanelId('server')}
+        aria-labelledby={adminTabId('server')}
+        hidden={tab !== 'server'}
+      >
         <div className="stat-row">
           <div className="stat">
             <div className="k">Clients online</div>
@@ -222,6 +246,26 @@ export function AdminConsole() {
           </button>
           <ClearWorldChat connected={connected} onClear={admin.clearChat} />
         </div>
+      </div>
+
+      <div
+        className="admin-panel"
+        role="tabpanel"
+        id={adminPanelId('games')}
+        aria-labelledby={adminTabId('games')}
+        hidden={tab !== 'games'}
+      >
+        {/* Mounted only while open, so the log is not fetched on every visit to the
+            console. Its Review buttons are plain links: a review is a page of the
+            game itself, and opens with a full page load. */}
+        {tab === 'games' &&
+          (verified ? (
+            <GameLogScreen />
+          ) : (
+            <p className="muted" role="status">
+              Connecting to the console…
+            </p>
+          ))}
       </div>
 
       {pending && (

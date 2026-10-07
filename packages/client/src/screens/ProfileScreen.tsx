@@ -42,7 +42,6 @@ export interface ProfileScreenProps {
   onInvite: (profileId: string) => Promise<ModerationResult>;
   /** Someone else's public profile, from a name in the Friends card. */
   onViewProfile: (username: string) => void;
-  onOpenGameLog: () => void;
   /** Opens a saved match's review, from the Review button on a recent match. */
   onOpenReview: (matchId: string) => void;
   /** The guest this browser remembers, unofficial rating and all; null for anyone else. */
@@ -67,7 +66,6 @@ export function ProfileScreen({
   onWatch,
   onInvite,
   onViewProfile,
-  onOpenGameLog,
   onOpenReview,
   guest,
   onForgetGuest,
@@ -146,7 +144,7 @@ export function ProfileScreen({
   if (loading) return <EmptyState title="Loading your profile…" />;
 
   if (!userId) {
-    if (guest) return <GuestCard guest={guest} onOpenGameLog={onOpenGameLog} onForget={onForgetGuest} />;
+    if (guest) return <GuestCard guest={guest} onForget={onForgetGuest} />;
     return (
       <EmptyState
         title="You’re playing as a guest"
@@ -209,7 +207,7 @@ export function ProfileScreen({
 
         <RatingChart series={series} sinceJoining={profile.elo - STARTING_ELO} />
         <ActivityHeatmap seats={history} today={today} />
-        <RecentMatches matches={recent} userId={userId} onOpenGameLog={onOpenGameLog} onOpenReview={onOpenReview} />
+        <RecentMatches matches={recent} userId={userId} onOpenReview={onOpenReview} />
       </div>
     </div>
   );
@@ -220,15 +218,7 @@ export function ProfileScreen({
  * worked out, and the ranked record. Everything is labelled unofficial because
  * the server never saw it. "Forget me" asks first, inline.
  */
-function GuestCard({
-  guest,
-  onOpenGameLog,
-  onForget,
-}: {
-  guest: GuestProfile;
-  onOpenGameLog: () => void;
-  onForget: () => void;
-}) {
+function GuestCard({ guest, onForget }: { guest: GuestProfile; onForget: () => void }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <section className="card guest-card" aria-labelledby="guest-card-title">
@@ -252,22 +242,19 @@ function GuestCard({
         real rating.
       </p>
 
-      <div className="guest-card-actions">
-        <button type="button" className="ghost" onClick={onOpenGameLog}>
-          Open my game log
-        </button>
-        {!confirming && (
+      {!confirming && (
+        <div className="guest-card-actions">
           <button type="button" className="ghost" onClick={() => setConfirming(true)}>
             Forget me on this browser
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {confirming && (
         <div className="guest-forget" role="group" aria-label="Confirm forgetting this guest">
           <p>
             Forget {guest.name}? The name, the unofficial rating, the record and the list of matches this browser
-            keeps for the game log are deleted. Matches already played stay in the public log.
+            keeps are deleted. Matches already played stay recorded on the server.
           </p>
           <div className="guest-card-actions">
             <button type="button" onClick={onForget}>

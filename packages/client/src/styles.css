@@ -564,6 +564,29 @@ input[type='checkbox'] { accent-color: var(--ink); }
 /* ── admin console ──────────────────────────────────────── */
 .subtitle { color: var(--slate); font-size: 13px; margin-top: 2px; }
 
+/* The console's tabs (admin/AdminTabs.tsx): the same pills as the review
+   board's switches, with the open tab filled in ink. */
+.admin-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.admin-tabs button,
+.admin-tabs button:hover:not(:disabled) {
+  min-height: 40px;
+  padding: 6px 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--rule);
+}
+.admin-tabs button:hover:not(:disabled) { background: var(--sunken); border-color: var(--slate); }
+.admin-tabs button[aria-selected='true'],
+.admin-tabs button[aria-selected='true']:hover:not(:disabled) {
+  color: var(--paper);
+  background: var(--ink);
+  border-color: var(--ink);
+}
+/* .stack sets display: grid, which would win over the browser's [hidden]. */
+.admin-panel[hidden] { display: none; }
+
 /* ── small screens ──────────────────────────────────────── */
 @media (max-width: 820px) {
   .play-area { grid-template-columns: minmax(0, 1fr); }
@@ -583,7 +606,24 @@ input[type='checkbox'] { accent-color: var(--ink); }
   }
 }
 @media (max-width: 640px) {
-  .header-right { width: 100%; justify-content: space-between; }
+  /*
+   * The player header on a phone has too much for one row, so it takes two:
+   * the title with your picture at its right, then the links, the connection
+   * and the speaker. The grid places the header's children directly, so the
+   * group they sit in on a wide screen steps aside (display: contents).
+   */
+  .site-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 12px 8px;
+  }
+  .site-header .header-right { display: contents; }
+  .site-header .title { grid-column: 1 / 3; grid-row: 1; }
+  .site-header .profile-button { grid-column: 3; grid-row: 1; }
+  .site-header .nav-bar { grid-column: 1; grid-row: 2; min-width: 0; }
+  .site-header .nav-link { padding-inline: 8px; }
+  .site-header .conn { grid-column: 2; grid-row: 2; padding-left: 0; }
+  .site-header .sound-control { grid-column: 3; grid-row: 2; }
   .match-when { margin-left: 0; width: 100%; }
   .result .verdict { font-size: 48px; }
   .timer .value { font-size: 44px; }
@@ -2452,9 +2492,11 @@ button.online-name[aria-expanded="true"] {
 .report-actions { flex-wrap: wrap; justify-content: flex-start; }
 
 /* ── sound and vibration ────────────────────────────────── */
-/* The speaker button ends the header; its popover hangs under it, flat and
-   ink-edged like the Share popover. The button is always at the header's
-   right edge, so the popover never needs the phone-sheet treatment. */
+/* The speaker button sits beside your picture at the header's end; its popover
+   hangs under it, right-aligned to the button, flat and ink-edged like the Share
+   popover. On a wide screen there is room to its left, and on a phone the
+   speaker is alone at the end of the second row (see .site-header), so the
+   popover never needs the phone-sheet treatment. */
 .sound-control { position: relative; }
 .sound-button { width: 40px; height: 40px; }
 .sound-pop {
@@ -2470,6 +2512,28 @@ button.online-name[aria-expanded="true"] {
   text-align: left;
 }
 .sound-note { margin-top: 4px; }
+
+/* ── profile button ─────────────────────────────────────── */
+/* Your picture at the header's far right, a round link to your profile
+   (components/ProfileButton.tsx). The picture is 32px inside a 40px ring that
+   matches the speaker button beside it; the ring is ink on the page you are
+   on, slate under the pointer, and the global focus ring draws around it. */
+.profile-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  color: var(--slate);
+  text-decoration: none;
+}
+.profile-button:hover { border-color: var(--slate); color: var(--ink); }
+.profile-button.active,
+.profile-button.active:hover { border-color: var(--ink); color: var(--ink); }
+/* Before there is a name: the avatar's grey circle, with a person in it. */
+.profile-button-generic { width: 32px; height: 32px; color: inherit; }
 
 /* A switch is a real checkbox laid over a drawn track: the checkbox takes
    the clicks, the focus and the keyboard; the track only shows the state.
