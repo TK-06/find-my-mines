@@ -10,13 +10,20 @@ import {
   friendRows,
   groupFriendships,
   initialOf,
+  invitePlan,
   isMissingTable,
+  pendingInviteLine,
+  pendingInviteNotice,
   requestNotice,
   requestPlan,
+  subjectOfPerson,
+  subjectOfTab,
   toFriendships,
   withBusy,
   type Friendship,
+  type InviteState,
 } from './friendsModel.js';
+import { presenceLabel } from './format.js';
 
 const ME = 'me-id';
 
@@ -382,29 +389,208 @@ describe('initialOf', () => {
 describe('cardFriendButton', () => {
   const pending = (direction: 'incoming' | 'outgoing') =>
     ({ otherId: 'x', otherName: 'x', status: 'pending', direction }) as const;
+  const accepted = { otherId: 'x', otherName: 'x', status: 'accepted', direction: 'outgoing' } as const;
+  const ready: InviteState = { friendOnline: true, plan: 'send' };
 
   it('asks a guest viewer to sign in', () => {
+    expect(cardFriendButton(false, null, ready)).toMatchObject({ does: 'none', note: 'Sign in to add friends.' });
     expect(cardFriendButton(false, null)).toMatchObject({ does: 'none', note: 'Sign in to add friends.' });
   });
 
   it('waits while the friendship loads', () => {
-    expect(cardFriendButton(true, undefined)).toMatchObject({ label: 'Add friend', does: 'none' });
+    expect(cardFriendButton(true, undefined, ready)).toMatchObject({ label: 'Add friend', does: 'none' });
   });
 
   it('offers Add with nothing between you, or when it could not be read', () => {
-    expect(cardFriendButton(true, null)).toMatchObject({ label: 'Add friend', does: 'add' });
-    expect(cardFriendButton(true, 'unknown')).toMatchObject({ label: 'Add friend', does: 'add' });
+    expect(cardFriendButton(true, null, ready)).toMatchObject({ label: 'Add friend', does: 'add' });
+    expect(cardFriendButton(true, 'unknown', ready)).toMatchObject({ label: 'Add friend', does: 'add' });
   });
 
   it('accepts their request, and waits on yours', () => {
-    expect(cardFriendButton(true, pending('incoming'))).toMatchObject({ label: 'Accept request', does: 'accept' });
-    expect(cardFriendButton(true, pending('outgoing'))).toMatchObject({ label: 'Requested', does: 'none' });
+    expect(cardFriendButton(true, pending('incoming'), ready)).toMatchObject({ label: 'Accept request', does: 'accept' });
+    expect(cardFriendButton(true, pending('outgoing'), ready)).toMatchObject({ label: 'Requested', does: 'none' });
   });
 
-  it('says Friends once you are', () => {
-    expect(
-      cardFriendButton(true, { otherId: 'x', otherName: 'x', status: 'accepted', direction: 'outgoing' }),
-    ).toMatchObject({ label: 'Friends', does: 'none', primary: false });
+  it('does not offer Invite for somebody who is only asking, whatever else is true', () => {
+    expect(cardFriendButton(true, pending('incoming'), ready).label).not.toBe('Invite');
+    expect(cardFriendButton(true, pending('outgoing'), ready).label).not.toBe('Invite');
+  });
+
+  describe('once you are friends', () => {
+    it('becomes a live Invite for a friend who is online', () => {
+      expect(cardFriendButton(true, accepted, { friendOnline: true, plan: 'send' })).toEqual({
+        label: 'Invite',
+        does: 'invite',
+        primary: true,
+        note: null,
+      });
+    });
+
+    it('is live too when a game still has to be created first', () => {
+      expect(cardFriendButton(true, accepted, { friendOnline: true, plan: 'create' })).toMatchObject({
+        label: 'Invite',
+        does: 'invite',
+      });
+    });
+
+    it('is disabled, and says they are offline, for a friend who is not connected', () => {
+      expect(cardFriendButton(true, accepted, { friendOnline: false, plan: 'send' })).toMatchObject({
+        label: 'Invite',
+        does: 'none',
+        primary: false,
+        note: "They're offline.",
+      });
+      // Offline wins over every other reason: it is the one the player can do nothing about.
+      for (const plan of ['send', 'create', 'leave-computer', 'disconnected'] as const) {
+        expect(cardFriendButton(true, accepted, { friendOnline: false, plan }).note).toBe("They're offline.");
+      }
+    });
+
+    it('is disabled, with the reason, in a game against the computer', () => {
+      const button = cardFriendButton(true, accepted, { friendOnline: true, plan: 'leave-computer' });
+      expect(button).toMatchObject({ label: 'Invite', does: 'none' });
+      expect(button.note).toMatch(/computer/i);
+    });
+
+    it('is disabled, with the reason, while this tab has no connection or name', () => {
+      const button = cardFriendButton(true, accepted, { friendOnline: true, plan: 'disconnected' });
+      expect(button).toMatchObject({ label: 'Invite', does: 'none' });
+      expect(button.note).toMatch(/connected/i);
+    });
+
+    it('no longer says "Friends" wherever it can invite from', () => {
+      for (const friendOnline of [true, false]) {
+        expect(cardFriendButton(true, accepted, { friendOnline, plan: 'send' }).label).toBe('Invite');
+      }
+    });
+
+    it('still says Friends, disabled, where there is nothing to invite from (a public profile page)', () => {
+      expect(cardFriendButton(true, accepted)).toEqual({
+        label: 'Friends',
+        does: 'none',
+        primary: false,
+        note: null,
+      });
+    });
+  });
+});
+
+describe('invitePlan', () => {
+  const here = { connected: true, named: true, inRoom: false, vsComputer: false };
+
+  it('sends at once from inside a room that can take a friend', () => {
+    expect(invitePlan({ ...here, inRoom: true })).toBe('send');
+  });
+
+  it('goes to set up a game first from the menu', () => {
+    expect(invitePlan(here)).toBe('create');
+  });
+
+  it('cannot invite from a game against the computer, nor reach the menu from it', () => {
+    expect(invitePlan({ ...here, inRoom: true, vsComputer: true })).toBe('leave-computer');
+  });
+
+  it('cannot do anything without a connection or a name — even from inside a room', () => {
+    expect(invitePlan({ ...here, connected: false })).toBe('disconnected');
+    expect(invitePlan({ ...here, named: false })).toBe('disconnected');
+    expect(invitePlan({ connected: false, named: true, inRoom: true, vsComputer: false })).toBe('disconnected');
+  });
+});
+
+describe('pending invites', () => {
+  it('names the friend on the line the Create game form shows', () => {
+    expect(pendingInviteLine('Ann')).toBe('Ann will be invited when you create the game.');
+  });
+
+  it('says who was invited once it went through', () => {
+    expect(pendingInviteNotice('Ann', { ok: true })).toBe('Invited Ann.');
+  });
+
+  it('gives the reason when it did not, with a fallback for none', () => {
+    expect(pendingInviteNotice('Ann', { ok: false, error: 'They are not online right now.' })).toBe(
+      'Could not invite Ann: They are not online right now.',
+    );
+    expect(pendingInviteNotice('Ann', { ok: false })).toContain('Could not invite Ann');
+  });
+});
+
+describe('card subjects', () => {
+  it('describes an online connection by its own tab', () => {
+    const tab: OnlinePlayer = {
+      ...onlineAs('ann-id', 'playing', 'ABCD'),
+      id: 'conn-1',
+      nickname: 'Ann',
+      avatarUrl: 'https://img/ann.png',
+    };
+    expect(subjectOfTab(tab)).toEqual({
+      name: 'Ann',
+      profileId: 'ann-id',
+      isGuest: false,
+      avatarUrl: 'https://img/ann.png',
+      presence: 'playing',
+      dot: 'playing',
+      where: 'Playing in ABCD',
+      connectionId: 'conn-1',
+    });
+  });
+
+  it('keeps a guest a guest, with no account to friend or compare against', () => {
+    const subject = subjectOfTab({ ...onlineAs(null, 'lobby'), nickname: 'Guesty' });
+    expect(subject).toMatchObject({ profileId: null, isGuest: true, dot: 'online', where: 'In the menu', avatarUrl: null });
+  });
+
+  it('withholds a private room’s code from the words', () => {
+    const tab: OnlinePlayer = { ...onlineAs('ann-id', 'room', null), privateRoom: true };
+    expect(subjectOfTab(tab).where).toBe(PRIVATE_ROOM_TEXT);
+  });
+
+  it('says the same words for a tab as the Online now list does', () => {
+    for (const status of ['lobby', 'queue', 'room', 'playing', 'watching'] as const) {
+      const tab = onlineAs('ann-id', status, status === 'lobby' || status === 'queue' ? null : 'WXYZ');
+      expect(subjectOfTab(tab).where).toBe(presenceLabel(tab));
+      // …and as the friends list does for the same person.
+      expect(subjectOfPerson({ profileId: 'ann-id', name: 'Ann' }, [tab]).where).toBe(presenceLabel(tab));
+    }
+  });
+
+  it('shows a friend with no tab connected as offline, with nothing to report', () => {
+    expect(subjectOfPerson({ profileId: 'ann-id', name: 'Ann', picture: 'https://img/a.png' }, [onlineAs('someone-else', 'lobby')])).toEqual({
+      name: 'Ann',
+      profileId: 'ann-id',
+      isGuest: false,
+      avatarUrl: 'https://img/a.png',
+      presence: 'offline',
+      dot: 'offline',
+      where: 'Offline',
+      connectionId: null,
+    });
+  });
+
+  it('places a friend by their busiest tab, and reports that very connection', () => {
+    const menu = { ...onlineAs('ann-id', 'lobby'), id: 'menu-tab' };
+    const match = { ...onlineAs('ann-id', 'playing', 'GAME'), id: 'match-tab' };
+    const subject = subjectOfPerson({ profileId: 'ann-id', name: 'Ann' }, [menu, match]);
+    expect(subject).toMatchObject({ presence: 'playing', dot: 'playing', where: 'Playing in GAME', connectionId: 'match-tab' });
+  });
+
+  it('prefers the friendships’ picture, and falls back to the one the tab carries', () => {
+    const tab = { ...onlineAs('ann-id', 'lobby'), avatarUrl: 'https://img/tab.png' };
+    expect(subjectOfPerson({ profileId: 'ann-id', name: 'Ann', picture: 'https://img/list.png' }, [tab]).avatarUrl).toBe(
+      'https://img/list.png',
+    );
+    expect(subjectOfPerson({ profileId: 'ann-id', name: 'Ann' }, [tab]).avatarUrl).toBe('https://img/tab.png');
+    expect(subjectOfPerson({ profileId: 'ann-id', name: 'Ann' }, []).avatarUrl).toBeNull();
+  });
+
+  it('never mistakes a guest tab for the friend', () => {
+    const guest = { ...onlineAs(null, 'lobby'), nickname: 'Ann' };
+    expect(subjectOfPerson({ profileId: 'ann-id', name: 'Ann' }, [guest]).presence).toBe('offline');
+  });
+
+  it('gives a friend row the connection a report would name', () => {
+    const tab = { ...onlineAs('ann', 'lobby'), id: 'conn-9' };
+    expect(rowFor([tab]).connectionId).toBe('conn-9');
+    expect(rowFor([]).connectionId).toBeNull();
   });
 });
 

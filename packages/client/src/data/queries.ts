@@ -1,6 +1,7 @@
 import { isMatchId, parseReplay, type Replay } from '@fmm/shared';
 import { supabase } from '../auth/supabase.js';
 import { isMissingColumn } from './avatar.js';
+import { headToHead, type HeadToHead, type SeatRecord } from './headToHead.js';
 
 /**
  * Read-only queries for the profile and game-log pages.
@@ -342,6 +343,68 @@ export async function fetchProfileHistory(userId: string, limit = 1000): Promise
       outcome: seat.outcome,
     })),
   );
+}
+
+/**
+ * How many of a player's newest matches the head-to-head looks through. Far
+ * more than most players have, and under the 1000 rows Supabase returns per
+ * request, so the read is never silently cut short by the API.
+ */
+export const HEAD_TO_HEAD_LOOKBACK = 500;
+
+/**
+ * One player's seats in their newest matches, reduced to what a head-to-head
+ * needs. The same inner-joined, filtered `match_players` embed as
+ * fetchProfileHistory (ordered on the match's own date), with fewer columns:
+ * this runs every time a player card opens. Null when it cannot be read, so a
+ * failure is not mistaken for "never played".
+ */
+export async function fetchSeatRecords(
+  profileId: string,
+  limit = HEAD_TO_HEAD_LOOKBACK,
+): Promise<SeatRecord[] | null> {
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from('matches')
+    .select('id, mode, match_players!inner(profile_id, outcome, elo_delta)')
+    .eq('match_players.profile_id', profileId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('[head-to-head] seats load failed:', error.message);
+    return null;
+  }
+
+  type Embedded = { profile_id: string | null; outcome: SeatRecord['outcome']; elo_delta: number };
+  const matches = (data ?? []) as unknown as (Pick<MatchRow, 'id' | 'mode'> & {
+    match_players: Embedded[] | null;
+  })[];
+
+  return matches.flatMap((match) =>
+    (match.match_players ?? []).map((seat) => ({
+      matchId: match.id,
+      profileId: seat.profile_id,
+      mode: match.mode,
+      outcome: seat.outcome,
+      eloDelta: seat.elo_delta,
+    })),
+  );
+}
+
+/**
+ * How `viewerId` has done against `otherId`: both players' recent seats, read
+ * with the one query that is known to work and matched up by match id here.
+ * Only matches they were both in count (see headToHead). Null when either read
+ * fails, or there is no database.
+ */
+export async function fetchHeadToHead(viewerId: string, otherId: string): Promise<HeadToHead | null> {
+  if (!supabase || !viewerId || !otherId || viewerId === otherId) return null;
+
+  const [mine, theirs] = await Promise.all([fetchSeatRecords(viewerId), fetchSeatRecords(otherId)]);
+  if (!mine || !theirs) return null;
+  return headToHead([...mine, ...theirs], viewerId, otherId);
 }
 
 /**

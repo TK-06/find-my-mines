@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchMatchesByIds, fetchMatchesForProfile, fetchRecentMatches, fetchReplay } from './queries.js';
+import {
+  HEAD_TO_HEAD_LOOKBACK,
+  fetchHeadToHead,
+  fetchMatchesByIds,
+  fetchMatchesForProfile,
+  fetchRecentMatches,
+  fetchReplay,
+  fetchSeatRecords,
+} from './queries.js';
 
 /**
  * A stand-in Supabase client that records each query's builder calls and
@@ -240,6 +248,86 @@ describe('fetchReplay', () => {
   it('never asks the database about something that is not a match id', async () => {
     expect(await fetchReplay('latest')).toEqual({ status: 'none' });
     expect(await fetchReplay("x' or 1=1")).toEqual({ status: 'none' });
+    expect(fake.calls).toHaveLength(0);
+  });
+});
+
+describe('head to head', () => {
+  beforeEach(() => fake.reset());
+
+  /** A match as the inner-joined embed returns it: only the asked-for player's seat. */
+  const embedded = (id: string, mode: 'casual' | 'ranked', profileId: string, outcome: string, delta = 0) => ({
+    id,
+    mode,
+    match_players: [{ profile_id: profileId, outcome, elo_delta: delta }],
+  });
+
+  it('reads one player’s newest seats through the match date, with only the columns it needs', async () => {
+    fake.respond('matches', { data: [], error: null });
+    await fetchSeatRecords('user-1');
+
+    const call = fake.calls[0]!;
+    expect(call.table).toBe('matches');
+    expect(askedColumns(call)).toContain('match_players!inner');
+    // Not the replay, the config or anything else a card does not show.
+    expect(askedColumns(call)).not.toContain('replay');
+    expect(askedColumns(call)).not.toContain('config');
+    expect(call.steps).toContainEqual(['eq', ['match_players.profile_id', 'user-1']]);
+    expect(call.steps).toContainEqual(['order', ['created_at', { ascending: false }]]);
+    expect(call.steps).toContainEqual(['limit', [HEAD_TO_HEAD_LOOKBACK]]);
+  });
+
+  it('flattens each match to that player’s seat', async () => {
+    fake.respond('matches', {
+      data: [embedded('m2', 'ranked', 'user-1', 'win', 14), embedded('m1', 'casual', 'user-1', 'draw')],
+      error: null,
+    });
+    expect(await fetchSeatRecords('user-1')).toEqual([
+      { matchId: 'm2', profileId: 'user-1', mode: 'ranked', outcome: 'win', eloDelta: 14 },
+      { matchId: 'm1', profileId: 'user-1', mode: 'casual', outcome: 'draw', eloDelta: 0 },
+    ]);
+  });
+
+  it('says it could not read the seats, rather than that there are none', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fake.respond('matches', { data: null, error: { message: 'boom' } });
+    expect(await fetchSeatRecords('user-1')).toBeNull();
+    quiet.mockRestore();
+  });
+
+  it('matches the two players’ matches up by id, and counts only the ones they shared', async () => {
+    // Mine: shared, plus one against somebody else. Hers: shared, plus another one of her own.
+    fake.respond('matches', {
+      data: [embedded('shared', 'ranked', 'me', 'win', 16), embedded('mine', 'casual', 'me', 'loss')],
+      error: null,
+    });
+    fake.respond('matches', {
+      data: [embedded('shared', 'ranked', 'ann', 'loss', -16), embedded('hers', 'ranked', 'ann', 'win', 9)],
+      error: null,
+    });
+
+    expect(await fetchHeadToHead('me', 'ann')).toEqual({
+      games: 1,
+      wins: 1,
+      losses: 0,
+      draws: 0,
+      rankedGames: 1,
+      netElo: 16,
+    });
+  });
+
+  it('is null when either side cannot be read, so the card shows a dash instead of "no games"', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fake.respond('matches', { data: [], error: null });
+    fake.respond('matches', { data: null, error: { message: 'boom' } });
+    expect(await fetchHeadToHead('me', 'ann')).toBeNull();
+    quiet.mockRestore();
+  });
+
+  it('never asks about someone against themselves or without both ids', async () => {
+    expect(await fetchHeadToHead('me', 'me')).toBeNull();
+    expect(await fetchHeadToHead('', 'ann')).toBeNull();
+    expect(await fetchHeadToHead('me', '')).toBeNull();
     expect(fake.calls).toHaveLength(0);
   });
 });
