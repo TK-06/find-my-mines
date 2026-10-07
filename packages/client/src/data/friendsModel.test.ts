@@ -8,14 +8,17 @@ import {
   PRIVATE_ROOM_TEXT,
   addInvite,
   friendRows,
+  friendStats,
   groupFriendships,
   initialOf,
+  inviteAvailability,
   invitePlan,
   isMissingTable,
   pendingInviteLine,
   pendingInviteNotice,
   requestNotice,
   requestPlan,
+  rowInvite,
   subjectOfPerson,
   subjectOfTab,
   toFriendships,
@@ -24,6 +27,7 @@ import {
   type InviteState,
 } from './friendsModel.js';
 import { presenceLabel } from './format.js';
+import { NO_HEAD_TO_HEAD } from './headToHead.js';
 
 const ME = 'me-id';
 
@@ -650,5 +654,137 @@ describe('changeNotice', () => {
       failed: false,
     });
     expect(changeNotice({ ok: true })).toBeNull();
+  });
+});
+
+describe('inviteAvailability', () => {
+  it('is live for an online friend, from a room or the menu', () => {
+    for (const plan of ['send', 'create'] as const) {
+      expect(inviteAvailability({ friendOnline: true, plan })).toEqual({ can: true, note: null });
+    }
+  });
+
+  it('says they are offline before anything else', () => {
+    for (const plan of ['send', 'create', 'leave-computer', 'disconnected'] as const) {
+      expect(inviteAvailability({ friendOnline: false, plan })).toEqual({ can: false, note: "They're offline." });
+    }
+  });
+
+  it('gives the reason when this tab cannot invite from where it is', () => {
+    expect(inviteAvailability({ friendOnline: true, plan: 'leave-computer' })).toMatchObject({
+      can: false,
+      note: expect.stringMatching(/computer/i),
+    });
+    expect(inviteAvailability({ friendOnline: true, plan: 'disconnected' })).toMatchObject({
+      can: false,
+      note: expect.stringMatching(/connected/i),
+    });
+  });
+
+  it('is what the player card’s button follows', () => {
+    const accepted = { otherId: 'x', otherName: 'x', status: 'accepted', direction: 'outgoing' } as const;
+    for (const friendOnline of [true, false]) {
+      for (const plan of ['send', 'create', 'leave-computer', 'disconnected'] as const) {
+        const state = { friendOnline, plan };
+        const button = cardFriendButton(true, accepted, state);
+        const available = inviteAvailability(state);
+        expect(button.does === 'invite').toBe(available.can);
+        expect(button.note).toBe(available.note);
+      }
+    }
+  });
+});
+
+describe('rowInvite', () => {
+  it('is pressable for an online friend, and says whom it invites', () => {
+    const invite = rowInvite('Ann', { friendOnline: true, plan: 'send' });
+    expect(invite.enabled).toBe(true);
+    expect(invite.label).toBe('Invite Ann to your game');
+    expect(invite.hint).toBe(invite.label);
+  });
+
+  it('says a game is set up first when you are in the menu', () => {
+    const invite = rowInvite('Ann', { friendOnline: true, plan: 'create' });
+    expect(invite.enabled).toBe(true);
+    expect(invite.label).toMatch(/set up a game/);
+  });
+
+  it('is disabled for an offline friend, with the reason in the tooltip and the spoken name', () => {
+    expect(rowInvite('Bob', { friendOnline: false, plan: 'send' })).toEqual({
+      enabled: false,
+      hint: "They're offline.",
+      label: "Invite Bob (They're offline.)",
+    });
+  });
+
+  it('is disabled, with the reason, in a game against the computer or without a connection', () => {
+    for (const plan of ['leave-computer', 'disconnected'] as const) {
+      const invite = rowInvite('Ann', { friendOnline: true, plan });
+      expect(invite.enabled).toBe(false);
+      expect(invite.hint.length).toBeGreaterThan(0);
+      expect(invite.label).toBe(`Invite Ann (${invite.hint})`);
+    }
+  });
+
+  it('always starts its spoken name with the visible word', () => {
+    for (const friendOnline of [true, false]) {
+      for (const plan of ['send', 'create', 'leave-computer', 'disconnected'] as const) {
+        expect(rowInvite('Ann', { friendOnline, plan }).label.startsWith('Invite')).toBe(true);
+      }
+    }
+  });
+});
+
+describe('friendStats', () => {
+  const record = (over: Partial<typeof NO_HEAD_TO_HEAD>) => ({ ...NO_HEAD_TO_HEAD, ...over });
+
+  it('shows the Elo and your wins–losses–draws from your side', () => {
+    const stats = friendStats('Ann', 871, record({ games: 4, wins: 3, losses: 1 }));
+    expect(stats.text).toBe('871 Elo · You 3–1–0');
+  });
+
+  it('says there are no games yet when you have never played them', () => {
+    expect(friendStats('Ann', 871, NO_HEAD_TO_HEAD).text).toBe('871 Elo · No games yet');
+  });
+
+  it('shows a dash, not "No games yet", when the record could not be read', () => {
+    const stats = friendStats('Ann', 871, null);
+    expect(stats.text).toBe('871 Elo · —');
+    expect(stats.label).toMatch(/could not be loaded/);
+    expect(stats.text).not.toMatch(/no games/i);
+  });
+
+  it('is just the Elo while the record is still loading', () => {
+    expect(friendStats('Ann', 871, undefined).text).toBe('871 Elo');
+  });
+
+  it('writes a missing Elo as a dash', () => {
+    expect(friendStats('Ann', undefined, record({ games: 1, draws: 1 })).text).toBe('— Elo · You 0–0–1');
+    expect(friendStats('Ann', undefined, undefined).text).toBe('— Elo');
+  });
+
+  it('groups thousands, like the player card', () => {
+    expect(friendStats('Ann', 1234, undefined).text).toBe('1,234 Elo');
+    expect(friendStats('Ann', 0, undefined).text).toBe('0 Elo');
+  });
+
+  it('keeps a long record on the one short line', () => {
+    expect(friendStats('Ann', 1487, record({ games: 45, wins: 12, losses: 30, draws: 3 })).text).toBe(
+      '1,487 Elo · You 12–30–3',
+    );
+  });
+
+  it('says the same in words for a screen reader, ranked rating change included', () => {
+    const stats = friendStats('Ann', 871, record({ games: 5, wins: 3, losses: 1, draws: 1, rankedGames: 2, netElo: 24 }));
+    expect(stats.label).toBe(
+      'Ann has an Elo of 871. Against Ann: 3 wins, 1 loss, 1 draw; +24 Elo over 2 ranked games.',
+    );
+  });
+
+  it('says so in words when you have not played them, or their rating is unknown', () => {
+    expect(friendStats('Ann', 871, NO_HEAD_TO_HEAD).label).toBe(
+      'Ann has an Elo of 871. You and Ann have not played each other yet.',
+    );
+    expect(friendStats('Ann', undefined, undefined).label).toBe("Ann's rating is not known.");
   });
 });

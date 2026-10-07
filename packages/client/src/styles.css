@@ -1399,6 +1399,27 @@ kbd {
   color: var(--ink);
 }
 .friend-main { display: grid; gap: 2px; min-width: 0; }
+/* A friend's row on the Friends card carries more than a request's does (status,
+   Elo and record, and Invite beside Watch or Join), so its name and figures and
+   its buttons share a body instead of three grid columns: the buttons sit to the
+   right while there is room — a full-width card — and drop under the figures
+   when there is not, as in the 340px column and on a phone. The name column
+   never gets narrower than the figures line needs. */
+.list li.friend-row.has-stats { grid-template-columns: 32px minmax(0, 1fr); align-items: start; }
+.friend-row.has-stats .friend-avatar { margin-top: 2px; }
+.friend-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.friend-body > .friend-main { flex: 1 1 150px; }
+.friend-body > .friend-actions { flex: 0 1 auto; min-width: 0; max-width: 100%; margin-left: auto; }
+/* A refused invite's reason can be a sentence: it wraps in what is left of the
+   line rather than pushing the × out of the card. */
+.friend-body .friend-note { min-width: 0; }
+.friend-body .friend-note.failed { max-width: none; }
 .friend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A player's name as a link (Friends card, search results): the bold name it
    was, underlined only on hover. Other clicks are the browser's — a new tab etc. */
@@ -1410,6 +1431,17 @@ a.player-link {
 }
 a.player-link:hover { text-decoration-color: currentColor; }
 .friend-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--slate); }
+/* Their Elo and your record against them, under the status. One short line that
+   is cut off with … rather than wrapped; tabular figures keep the numbers in
+   step from one row to the next. */
+.friend-stats {
+  font-size: 12px;
+  color: var(--slate);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .friend-dot {
   width: 8px; height: 8px; border-radius: 50%;
   flex: none;
@@ -1461,6 +1493,8 @@ a.player-link:hover { text-decoration-color: currentColor; }
 @media (max-width: 480px) {
   .list li.friend-row { grid-template-columns: 32px minmax(0, 1fr); }
   .friend-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
+  /* Under the figures, the buttons start at the left, as a request's do. */
+  .friend-body > .friend-actions { margin-left: 0; }
 }
 /* ── end: friends ── */
 

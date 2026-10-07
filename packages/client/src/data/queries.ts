@@ -1,7 +1,7 @@
 import { isMatchId, parseReplay, type Replay } from '@fmm/shared';
 import { supabase } from '../auth/supabase.js';
 import { isMissingColumn } from './avatar.js';
-import { headToHead, type HeadToHead, type SeatRecord } from './headToHead.js';
+import { headToHead, headToHeads, type HeadToHead, type SeatRecord } from './headToHead.js';
 
 /**
  * Read-only queries for the profile and game-log pages.
@@ -405,6 +405,82 @@ export async function fetchHeadToHead(viewerId: string, otherId: string): Promis
   const [mine, theirs] = await Promise.all([fetchSeatRecords(viewerId), fetchSeatRecords(otherId)]);
   if (!mine || !theirs) return null;
   return headToHead([...mine, ...theirs], viewerId, otherId);
+}
+
+/**
+ * How many ids one read puts in its address. They travel in the URL, so a long
+ * list (500 matches is about 19 KB) could be refused for length; this many
+ * stays far under what a gateway allows, and a read per slice is still cheap.
+ */
+const IDS_PER_READ = 100;
+
+/** `list` cut into runs of at most `size`. */
+function slices<T>(list: readonly T[], size: number): T[][] {
+  const runs: T[][] = [];
+  for (let at = 0; at < list.length; at += size) runs.push(list.slice(at, at + size));
+  return runs;
+}
+
+/**
+ * How `viewerId` has done against every one of `otherIds` — the Friends card's
+ * rows — without a head-to-head read per friend. The viewer's newest seats are
+ * read once (`fetchSeatRecords`), then the others' seats in just those
+ * matches, a few ids at a time; each friend's record is worked out from the two
+ * (see headToHeads). Only matches the viewer is in can be shared, so nothing
+ * about the others' own history needs reading, and a friend's seat takes the
+ * mode of the match it sat in.
+ *
+ * Every other id has an entry, all zeros when they never met. Null when any
+ * read fails, or there is no database, so the rows show a dash rather than
+ * "no games".
+ */
+export async function fetchHeadToHeads(
+  viewerId: string,
+  otherIds: readonly string[],
+): Promise<Map<string, HeadToHead> | null> {
+  if (!supabase || !viewerId) return null;
+  const others = [...new Set(otherIds)].filter((id) => id && id !== viewerId);
+  // Nobody to compare with: nothing to ask, and nothing that failed.
+  if (others.length === 0) return new Map();
+
+  const client = supabase;
+  const mine = await fetchSeatRecords(viewerId);
+  if (!mine) return null;
+
+  const modes = new Map(mine.map((seat) => [seat.matchId, seat.mode] as const));
+  const reads = slices([...modes.keys()], IDS_PER_READ).flatMap((matchIds) =>
+    slices(others, IDS_PER_READ / 2).map((profileIds) =>
+      client
+        .from('match_players')
+        .select('match_id, profile_id, outcome, elo_delta')
+        .in('match_id', matchIds)
+        .in('profile_id', profileIds),
+    ),
+  );
+
+  type Embedded = {
+    match_id: string;
+    profile_id: string | null;
+    outcome: SeatRecord['outcome'];
+    elo_delta: number;
+  };
+  const theirs: SeatRecord[] = [];
+  for (const { data, error } of await Promise.all(reads)) {
+    if (error) {
+      console.error('[head-to-head] friends’ seats load failed:', error.message);
+      return null;
+    }
+    for (const seat of (data ?? []) as Embedded[]) {
+      theirs.push({
+        matchId: seat.match_id,
+        profileId: seat.profile_id,
+        mode: modes.get(seat.match_id) ?? 'casual',
+        outcome: seat.outcome,
+        eloDelta: seat.elo_delta,
+      });
+    }
+  }
+  return headToHeads([...mine, ...theirs], viewerId, others);
 }
 
 /**

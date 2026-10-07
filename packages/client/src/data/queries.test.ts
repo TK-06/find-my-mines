@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   HEAD_TO_HEAD_LOOKBACK,
   fetchHeadToHead,
+  fetchHeadToHeads,
   fetchMatchesByIds,
   fetchMatchesForProfile,
   fetchRecentMatches,
@@ -328,6 +329,130 @@ describe('head to head', () => {
     expect(await fetchHeadToHead('me', 'me')).toBeNull();
     expect(await fetchHeadToHead('', 'ann')).toBeNull();
     expect(await fetchHeadToHead('me', '')).toBeNull();
+    expect(fake.calls).toHaveLength(0);
+  });
+});
+
+describe('head to head against every friend', () => {
+  beforeEach(() => fake.reset());
+
+  /** A match as the inner-joined embed returns it: only the viewer's seat. */
+  const mine = (id: string, mode: 'casual' | 'ranked', outcome: string, delta = 0) => ({
+    id,
+    mode,
+    match_players: [{ profile_id: 'me', outcome, elo_delta: delta }],
+  });
+  /** A friend's seat, as `match_players` returns it. */
+  const theirs = (matchId: string, profileId: string, outcome: string, delta = 0) => ({
+    match_id: matchId,
+    profile_id: profileId,
+    outcome,
+    elo_delta: delta,
+  });
+  const reads = () => fake.calls.filter((call) => call.table === 'match_players');
+  const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+
+  it('reads your seats once and the friends’ seats in those matches, whatever the number of friends', async () => {
+    fake.respond('matches', {
+      data: [mine('m1', 'ranked', 'win', 16), mine('m2', 'casual', 'loss'), mine('m3', 'casual', 'draw')],
+      error: null,
+    });
+    fake.respond('match_players', {
+      data: [theirs('m1', 'ann', 'loss', -16), theirs('m2', 'bob', 'win'), theirs('m3', 'ann', 'draw')],
+      error: null,
+    });
+
+    const records = await fetchHeadToHeads('me', ['ann', 'bob', 'cy']);
+
+    // Two reads in all — not one head-to-head (two reads) per friend.
+    expect(fake.calls.map((call) => call.table)).toEqual(['matches', 'match_players']);
+    const call = reads()[0]!;
+    expect(call.steps).toContainEqual(['in', ['match_id', ['m1', 'm2', 'm3']]]);
+    expect(call.steps).toContainEqual(['in', ['profile_id', ['ann', 'bob', 'cy']]]);
+    // Not the whole seat: only what a record needs.
+    expect(askedColumns(call)).toBe('match_id, profile_id, outcome, elo_delta');
+
+    expect(records?.get('ann')).toEqual({ games: 2, wins: 1, losses: 0, draws: 1, rankedGames: 1, netElo: 16 });
+    expect(records?.get('bob')).toEqual({ games: 1, wins: 0, losses: 1, draws: 0, rankedGames: 0, netElo: 0 });
+    // Never met: a record of zeros, so the row says "No games yet" and not a dash.
+    expect(records?.get('cy')).toEqual({ games: 0, wins: 0, losses: 0, draws: 0, rankedGames: 0, netElo: 0 });
+  });
+
+  it('gives the same numbers as the player card’s one-friend read', async () => {
+    const viewer = [mine('m1', 'ranked', 'win', 16), mine('m2', 'casual', 'loss'), mine('m3', 'ranked', 'loss', -9)];
+    const her = [theirs('m1', 'ann', 'loss', -16), theirs('m3', 'ann', 'win', 9)];
+
+    fake.respond('matches', { data: viewer, error: null });
+    fake.respond('match_players', { data: her, error: null });
+    const all = await fetchHeadToHeads('me', ['ann']);
+
+    fake.reset();
+    fake.respond('matches', { data: viewer, error: null });
+    fake.respond('matches', {
+      data: [
+        { id: 'm1', mode: 'ranked', match_players: [{ profile_id: 'ann', outcome: 'loss', elo_delta: -16 }] },
+        { id: 'm3', mode: 'ranked', match_players: [{ profile_id: 'ann', outcome: 'win', elo_delta: 9 }] },
+      ],
+      error: null,
+    });
+    expect(all?.get('ann')).toEqual(await fetchHeadToHead('me', 'ann'));
+  });
+
+  it('keeps the match ids and the friend ids of each read short enough for an address', async () => {
+    const many = Array.from({ length: 250 }, (_, i) => mine(`m${i}`, 'casual', 'win'));
+    fake.respond('matches', { data: many, error: null });
+    const friends = Array.from({ length: 120 }, (_, i) => `f${i}`);
+
+    await fetchHeadToHeads('me', friends);
+
+    // 250 matches in runs of 100 × 120 friends in runs of 50.
+    expect(reads()).toHaveLength(3 * 3);
+    for (const call of reads()) {
+      const asked = (column: string) =>
+        (call.steps.find(([step, args]) => step === 'in' && args[0] === column)?.[1][1] ?? []) as string[];
+      expect(asked('match_id').length).toBeLessThanOrEqual(100);
+      expect(asked('profile_id').length).toBeLessThanOrEqual(50);
+    }
+    // Every match and every friend is asked about exactly once.
+    const seen = new Set(reads().map((call) => JSON.stringify(call.steps.filter(([step]) => step === 'in'))));
+    expect(seen.size).toBe(9);
+  });
+
+  it('does not ask about friends when you have no matches at all', async () => {
+    fake.respond('matches', { data: [], error: null });
+    const records = await fetchHeadToHeads('me', ['ann']);
+    expect(reads()).toHaveLength(0);
+    expect(records?.get('ann')).toMatchObject({ games: 0 });
+  });
+
+  it('asks about nothing, and is not a failure, when there is nobody to compare with', async () => {
+    const records = await fetchHeadToHeads('me', ['me', '', 'me']);
+    expect(records).toEqual(new Map());
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it('is null — a dash on the rows — when your own seats cannot be read', async () => {
+    const spy = quiet();
+    fake.respond('matches', { data: null, error: { message: 'boom' } });
+    expect(await fetchHeadToHeads('me', ['ann'])).toBeNull();
+    expect(reads()).toHaveLength(0);
+    spy.mockRestore();
+  });
+
+  it('is null when any read of the friends’ seats fails, rather than a record with matches missing', async () => {
+    const spy = quiet();
+    fake.respond('matches', {
+      data: Array.from({ length: 150 }, (_, i) => mine(`m${i}`, 'casual', 'win')),
+      error: null,
+    });
+    fake.respond('match_players', { data: [theirs('m1', 'ann', 'loss')], error: null });
+    fake.respond('match_players', { data: null, error: { message: 'boom' } });
+    expect(await fetchHeadToHeads('me', ['ann'])).toBeNull();
+    spy.mockRestore();
+  });
+
+  it('is null with no viewer', async () => {
+    expect(await fetchHeadToHeads('', ['ann'])).toBeNull();
     expect(fake.calls).toHaveLength(0);
   });
 });

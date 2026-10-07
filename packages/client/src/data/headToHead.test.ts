@@ -5,6 +5,7 @@ import {
   formatNetElo,
   formatRecord,
   headToHead,
+  headToHeads,
   type SeatRecord,
 } from './headToHead.js';
 
@@ -119,6 +120,105 @@ describe('headToHead', () => {
     const seats = match('m1', 'win', 'loss', 'ranked', 12);
     const copy = structuredClone(seats);
     headToHead(seats, ME, ANN);
+    expect(seats).toEqual(copy);
+  });
+});
+
+describe('headToHeads', () => {
+  const CY = 'cy';
+  /** Both seats of one match against `other`: mine first, then theirs. */
+  const against = (
+    other: string,
+    id: string,
+    mine: SeatRecord['outcome'],
+    theirs: SeatRecord['outcome'],
+    mode: SeatRecord['mode'] = 'casual',
+    myDelta = 0,
+  ): SeatRecord[] => [
+    seat(id, ME, mine, { mode, eloDelta: myDelta }),
+    seat(id, other, theirs, { mode, eloDelta: -myDelta }),
+  ];
+
+  it('works out every friend’s record from one set of seats', () => {
+    const seats = [
+      ...against(ANN, 'a1', 'win', 'loss'),
+      ...against(ANN, 'a2', 'loss', 'win'),
+      ...against(CY, 'c1', 'draw', 'draw'),
+      ...against(CY, 'c2', 'win', 'loss', 'ranked', 14),
+    ];
+    const records = headToHeads(seats, ME, [ANN, CY]);
+    expect(records.get(ANN)).toMatchObject({ games: 2, wins: 1, losses: 1, draws: 0, rankedGames: 0 });
+    expect(records.get(CY)).toMatchObject({ games: 2, wins: 1, losses: 0, draws: 1, rankedGames: 1, netElo: 14 });
+  });
+
+  it('agrees with headToHead for each of them, whatever the order or mix of the rows', () => {
+    const seats = [
+      ...against(CY, 'c1', 'loss', 'win', 'ranked', -9),
+      ...against(ANN, 'a1', 'win', 'loss', 'ranked', 16),
+      seat('both', ANN, 'loss'),
+      seat('both', CY, 'win'),
+      seat('both', ME, 'draw'),
+      seat('elsewhere', ANN, 'win'),
+      seat('elsewhere', 'dee', 'loss'),
+      seat('guests', null, 'win'),
+    ];
+    const records = headToHeads(seats, ME, [ANN, CY]);
+    expect(records.get(ANN)).toEqual(headToHead(seats, ME, ANN));
+    expect(records.get(CY)).toEqual(headToHead(seats, ME, CY));
+  });
+
+  it('gives a friend you never played an entry of zeros, not a missing one', () => {
+    const records = headToHeads(against(ANN, 'a1', 'win', 'loss'), ME, [ANN, CY]);
+    expect(records.get(CY)).toEqual(NO_HEAD_TO_HEAD);
+    expect([...records.keys()].sort()).toEqual([ANN, CY]);
+  });
+
+  it('counts a match with two friends in it for both of them', () => {
+    const seats = [seat('trio', ME, 'win'), seat('trio', ANN, 'loss'), seat('trio', CY, 'loss')];
+    const records = headToHeads(seats, ME, [ANN, CY]);
+    expect(records.get(ANN)).toMatchObject({ games: 1, wins: 1 });
+    expect(records.get(CY)).toMatchObject({ games: 1, wins: 1 });
+  });
+
+  it('does not count a match one friend played without you, or two friends played without you', () => {
+    const seats = [seat('theirs', ANN, 'win'), seat('theirs', CY, 'loss')];
+    const records = headToHeads(seats, ME, [ANN, CY]);
+    expect(records.get(ANN)).toEqual(NO_HEAD_TO_HEAD);
+    expect(records.get(CY)).toEqual(NO_HEAD_TO_HEAD);
+  });
+
+  it('keeps one friend’s matches out of another’s record', () => {
+    const records = headToHeads(against(ANN, 'a1', 'win', 'loss', 'ranked', 10), ME, [ANN, CY]);
+    expect(records.get(CY)).toEqual(NO_HEAD_TO_HEAD);
+    expect(records.get(ANN)).toMatchObject({ games: 1, netElo: 10 });
+  });
+
+  it('counts a match once even when its seats are listed twice', () => {
+    const seats = [...against(ANN, 'a1', 'win', 'loss', 'ranked', 12), ...against(ANN, 'a1', 'win', 'loss', 'ranked', 12)];
+    expect(headToHeads(seats, ME, [ANN]).get(ANN)).toMatchObject({ games: 1, wins: 1, netElo: 12 });
+  });
+
+  it('never lists you against yourself, an empty id, or anyone twice', () => {
+    const records = headToHeads(against(ANN, 'a1', 'win', 'loss'), ME, [ME, '', ANN, ANN]);
+    expect([...records.keys()]).toEqual([ANN]);
+    expect(records.get(ANN)).toMatchObject({ games: 1 });
+  });
+
+  it('has nothing to say without friends, or without who you are', () => {
+    expect(headToHeads(against(ANN, 'a1', 'win', 'loss'), ME, []).size).toBe(0);
+    expect(headToHeads(against(ANN, 'a1', 'win', 'loss'), '', [ANN]).get(ANN)).toEqual(NO_HEAD_TO_HEAD);
+  });
+
+  it('hands every friend a record of their own, not the shared empty one', () => {
+    const records = headToHeads([], ME, [ANN, CY]);
+    expect(records.get(ANN)).not.toBe(records.get(CY));
+    expect(records.get(ANN)).not.toBe(NO_HEAD_TO_HEAD);
+  });
+
+  it('does not change the rows it was given', () => {
+    const seats = against(ANN, 'a1', 'win', 'loss', 'ranked', 12);
+    const copy = structuredClone(seats);
+    headToHeads(seats, ME, [ANN]);
     expect(seats).toEqual(copy);
   });
 });

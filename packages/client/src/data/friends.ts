@@ -26,6 +26,8 @@ export interface FriendsLoad {
   friendships: Friendship[];
   /** Profile picture addresses by the other person's profile id. Only people with one. */
   pictures: ReadonlyMap<string, string>;
+  /** Their ratings by profile id, for the Friends card's rows. Missing for anyone whose profile could not be read. */
+  elos: ReadonlyMap<string, number>;
   /** Why the list could not be read, or null. */
   error: string | null;
   /** The table does not exist yet — migration 0003 has not been run. */
@@ -53,23 +55,27 @@ function failed(error: DbError | null, fallback: string): FriendsResult {
 }
 
 /**
- * Usernames and picture addresses by profile id. Profiles are publicly
- * readable. Before migration 0004 there is no picture column, and asking for
- * it fails the whole read, so the names are asked for again on their own.
+ * Usernames, picture addresses and ratings by profile id — one read for all of
+ * them, so the Friends card's rows need no read of their own. Profiles are
+ * publicly readable. Before migration 0004 there is no picture column, and
+ * asking for it fails the whole read, so the rest is asked for again on its own.
  */
-async function profilesById(
-  ids: string[],
-): Promise<{ names: Map<string, string>; pictures: Map<string, string> }> {
+async function profilesById(ids: string[]): Promise<{
+  names: Map<string, string>;
+  pictures: Map<string, string>;
+  elos: Map<string, number>;
+}> {
   const names = new Map<string, string>();
   const pictures = new Map<string, string>();
-  if (!supabase || ids.length === 0) return { names, pictures };
+  const elos = new Map<string, number>();
+  if (!supabase || ids.length === 0) return { names, pictures, elos };
 
-  type Row = { id: string; username: string; avatar_path?: string | null };
-  const first = await supabase.from('profiles').select('id, username, avatar_path').in('id', ids);
+  type Row = { id: string; username: string; elo?: number | null; avatar_path?: string | null };
+  const first = await supabase.from('profiles').select('id, username, elo, avatar_path').in('id', ids);
   let rows: Row[] | null = first.data;
   let error = first.error;
   if (isMissingColumn(error)) {
-    const again = await supabase.from('profiles').select('id, username').in('id', ids);
+    const again = await supabase.from('profiles').select('id, username, elo').in('id', ids);
     rows = again.data;
     error = again.error;
   }
@@ -77,16 +83,18 @@ async function profilesById(
 
   for (const row of rows ?? []) {
     names.set(row.id, row.username);
+    if (typeof row.elo === 'number') elos.set(row.id, row.elo);
     const url = pictureUrl(row.id, row.avatar_path);
     if (url) pictures.set(row.id, url);
   }
-  return { names, pictures };
+  return { names, pictures, elos };
 }
 
 /** Everything between me and anyone: requests both ways, and friends. */
 export async function listFriendships(myId: string): Promise<FriendsLoad> {
   const none = new Map<string, string>();
-  if (!supabase) return { friendships: [], pictures: none, error: null, missingTable: false };
+  const noElos = new Map<string, number>();
+  if (!supabase) return { friendships: [], pictures: none, elos: noElos, error: null, missingTable: false };
 
   try {
     // No filter needed: row-level security returns only rows this player is in.
@@ -96,6 +104,7 @@ export async function listFriendships(myId: string): Promise<FriendsLoad> {
       return {
         friendships: [],
         pictures: none,
+        elos: noElos,
         error: result.message ?? null,
         missingTable: result.missingTable === true,
       };
@@ -103,11 +112,11 @@ export async function listFriendships(myId: string): Promise<FriendsLoad> {
 
     const records = (data ?? []) as FriendshipRecord[];
     const others = records.map((r) => (r.requester_id === myId ? r.addressee_id : r.requester_id));
-    const { names, pictures } = await profilesById([...new Set(others)]);
-    return { friendships: toFriendships(records, myId, names), pictures, error: null, missingTable: false };
+    const { names, pictures, elos } = await profilesById([...new Set(others)]);
+    return { friendships: toFriendships(records, myId, names), pictures, elos, error: null, missingTable: false };
   } catch (error) {
     console.error('[friends] load failed:', error);
-    return { friendships: [], pictures: none, error: 'Could not load your friends.', missingTable: false };
+    return { friendships: [], pictures: none, elos: noElos, error: 'Could not load your friends.', missingTable: false };
   }
 }
 

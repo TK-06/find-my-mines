@@ -1,5 +1,6 @@
 import type { FriendInvite, OnlinePlayer, PresenceStatus, RoomSummary } from '@fmm/shared';
 import { presenceLabel } from './format.js';
+import { describeHeadToHead, formatRecord, type HeadToHead } from './headToHead.js';
 
 /**
  * Pure rules for the friends list: who is where, what each row offers, and
@@ -380,6 +381,20 @@ export interface InviteState {
   plan: InvitePlan;
 }
 
+/** Whether Invite can be pressed, and when it cannot, the one reason to say. */
+export type InviteAvailability = { can: true; note: null } | { can: false; note: string };
+
+/**
+ * The rules for Invite, shared by the player card and the Friends card's rows
+ * so the two cannot disagree. Offline wins over every other reason: it is the
+ * one the player can do nothing about.
+ */
+export function inviteAvailability(invite: InviteState): InviteAvailability {
+  if (!invite.friendOnline) return { can: false, note: "They're offline." };
+  if (invite.plan === 'send' || invite.plan === 'create') return { can: true, note: null };
+  return { can: false, note: INVITE_PLAN_NOTE[invite.plan] };
+}
+
 /** The friend button on a player card. */
 export interface CardFriendButton {
   label: string;
@@ -414,17 +429,74 @@ export function cardFriendButton(
   }
   if (existing.status === 'accepted') {
     if (!invite) return { label: 'Friends', does: 'none', primary: false, note: null };
-    if (!invite.friendOnline) {
-      return { label: 'Invite', does: 'none', primary: false, note: "They're offline." };
-    }
-    if (invite.plan === 'send' || invite.plan === 'create') {
-      return { label: 'Invite', does: 'invite', primary: true, note: null };
-    }
-    return { label: 'Invite', does: 'none', primary: false, note: INVITE_PLAN_NOTE[invite.plan] };
+    const available = inviteAvailability(invite);
+    return available.can
+      ? { label: 'Invite', does: 'invite', primary: true, note: null }
+      : { label: 'Invite', does: 'none', primary: false, note: available.note };
   }
   return existing.direction === 'incoming'
     ? { label: 'Accept request', does: 'accept', primary: true, note: 'They asked to be friends.' }
     : { label: 'Requested', does: 'none', primary: false, note: 'Waiting for them to accept.' };
+}
+
+/** The Invite button on a friend's row. */
+export interface RowInvite {
+  /** Whether it can be pressed. */
+  enabled: boolean;
+  /** Its tooltip: why it cannot be pressed, else what pressing it will do. */
+  hint: string;
+  /** Its spoken name. Starts with the visible word, "Invite", and names the friend. */
+  label: string;
+}
+
+/**
+ * What a friend's Invite button says. Where you are decides what it will do:
+ * from a room the invite goes out now; from the menu a game is set up first.
+ */
+export function rowInvite(name: string, invite: InviteState): RowInvite {
+  const available = inviteAvailability(invite);
+  if (!available.can) {
+    return { enabled: false, hint: available.note, label: `Invite ${name} (${available.note})` };
+  }
+  const label =
+    invite.plan === 'create' ? `Invite ${name} after you set up a game` : `Invite ${name} to your game`;
+  return { enabled: true, hint: label, label };
+}
+
+/** The stats under a friend's name on the Friends card, in two forms. */
+export interface FriendStats {
+  /** The short line shown: "871 Elo · You 3–1–0". */
+  text: string;
+  /** The same in words, for a screen reader and the hover title. */
+  label: string;
+}
+
+/**
+ * A friend's rating and how you have done against them, for one short line.
+ *
+ * `record` is undefined while it is still loading — the line is just the rating
+ * for now, rather than a dash that would read as a failure — null when it could
+ * not be read (a dash, never "No games yet", which would be a claim), and
+ * otherwise your wins–losses–draws from your side, as on the player card.
+ * `elo` is undefined when their profile could not be read.
+ */
+export function friendStats(
+  name: string,
+  elo: number | undefined,
+  record: HeadToHead | null | undefined,
+): FriendStats {
+  const rating = elo === undefined ? '—' : elo.toLocaleString('en-US');
+  const parts = [`${rating} Elo`];
+  const words = [elo === undefined ? `${name}'s rating is not known.` : `${name} has an Elo of ${rating}.`];
+
+  if (record === null) {
+    parts.push('—');
+    words.push(`Your record against ${name} could not be loaded.`);
+  } else if (record) {
+    parts.push(record.games === 0 ? 'No games yet' : `You ${formatRecord(record)}`);
+    words.push(describeHeadToHead(record, name));
+  }
+  return { text: parts.join(' · '), label: words.join(' ') };
 }
 
 /**

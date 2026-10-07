@@ -4,10 +4,13 @@ import { acceptFriendRequest, removeFriendship } from '../data/friends.js';
 import {
   MISSING_TABLE_MESSAGE,
   friendRows,
+  friendStats,
   groupFriendships,
+  rowInvite,
   subjectOfPerson,
   type Friendship,
 } from '../data/friendsModel.js';
+import { useFriendRecords } from '../data/useFriendRecords.js';
 import type { Friendships } from '../data/useFriendships.js';
 import { Avatar } from './Avatar.js';
 import { FriendSearch } from './FriendSearch.js';
@@ -26,9 +29,12 @@ export interface FriendsPanelProps {
   online: OnlinePlayer[];
   /** Open rooms, so a friend's room can offer Join or Watch. */
   rooms: RoomSummary[];
-  /** The room this browser is in, or null. Inviting from a row needs one. */
+  /** The room this browser is in, or null. Decides whether Watch / Join would take you out of it. */
   myRoomId: string | null;
-  /** What the card's Invite does from here, and how to send it. */
+  /**
+   * What Invite does from here — the same for a row's button and the player
+   * card's. A row sends through `friends`, which keeps the "Invited" note.
+   */
   invite: CardInvite;
   /** Reports a connection to the admins, from a card's ⋯ menu. */
   onReport: (targetId: string, reason: ReportReason, details: string) => Promise<ModerationResult>;
@@ -44,6 +50,12 @@ export interface FriendsPanelProps {
  * is comes from the live online list, so a dot changes the moment they start or
  * leave a game — only the friendships themselves are refetched (on mount, after
  * every change, and when the window regains focus).
+ *
+ * Each friend's row says where they are, their Elo and how you have done
+ * against them (wins–losses–draws from your side), with Invite right there —
+ * and Watch or Join when they are in a room you can come to. The Elo arrives
+ * with the friendships; your records are read once for the whole list
+ * (`useFriendRecords`), so a slow or failed read only blanks that one line.
  *
  * A name opens that person's player card, the same one the lobby's Online now
  * list has — stats, how you have done against them, Invite, and Copy username,
@@ -62,6 +74,7 @@ export function FriendsPanel({
   const {
     friendships,
     pictures,
+    elos,
     loaded,
     error: loadError,
     missingTable,
@@ -74,6 +87,7 @@ export function FriendsPanel({
     acceptFromSearch,
     refresh,
     run,
+    invite: inviteFriend,
   } = friends;
 
   const [adding, setAdding] = useState(false);
@@ -87,6 +101,10 @@ export function FriendsPanel({
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   const groups = useMemo(() => groupFriendships(friendships), [friendships]);
+  const records = useFriendRecords(
+    userId,
+    groups.accepted.map((f) => f.otherId),
+  );
   const rows = useMemo(
     () => friendRows(groups.accepted, online, rooms, myRoomId),
     [groups, online, rooms, myRoomId],
@@ -306,51 +324,68 @@ export function FriendsPanel({
             <ul className="list friend-list">
               {rows.map((row) => {
                 const note = inviteNotes.get(row.profileId);
-                const action = row.action;
+                // Watch, Join or Ask. The row's own Invite (a friend in the menu, while you are
+                // in a room) is not offered here: every row has the Invite button below.
+                const action = row.action?.kind === 'invite' ? null : row.action;
                 const friendship = groups.accepted.find((f) => f.otherId === row.profileId);
+                const stats = friendStats(
+                  row.name,
+                  elos.get(row.profileId),
+                  // Still loading (undefined), failed (null), or this friend's record.
+                  records === null ? null : records?.get(row.profileId),
+                );
+                const inviting = rowInvite(row.name, {
+                  friendOnline: row.presence !== 'offline',
+                  plan: invite.plan,
+                });
                 return (
                   <li
                     key={row.profileId}
-                    className={`friend-row${openId === row.profileId ? ' card-open' : ''}`}
+                    className={`friend-row has-stats${openId === row.profileId ? ' card-open' : ''}`}
                   >
                     <Avatar className="friend-avatar" name={row.name} url={pictures.get(row.profileId)} />
-                    <span className="friend-main">
-                      <strong className="friend-name">{nameButton(row.profileId, row.name)}</strong>
-                      <span className="friend-status">
-                        <span className={`friend-dot ${row.dot}`} aria-hidden />
-                        {row.statusText}
+                    {/* The name, where they are and the figures, with the buttons beside them
+                        when there is room and under them when there is not. */}
+                    <div className="friend-body">
+                      <span className="friend-main">
+                        <strong className="friend-name">{nameButton(row.profileId, row.name)}</strong>
+                        <span className="friend-status">
+                          <span className={`friend-dot ${row.dot}`} aria-hidden />
+                          {row.statusText}
+                        </span>
+                        {/* The figures are for the eye; a screen reader gets the sentence. */}
+                        <span className="friend-stats">
+                          <span aria-hidden="true" title={stats.label}>
+                            {stats.text}
+                          </span>
+                          <span className="sr-only">{stats.label}</span>
+                        </span>
                       </span>
-                    </span>
-                    <span className="friend-actions">
-                      {confirming === row.profileId ? (
-                        <>
-                          <span className="muted">Remove?</span>
-                          <button className="ghost small" onClick={() => setConfirming(null)}>
-                            Keep
-                          </button>
-                          <button
-                            className="danger small"
-                            disabled={busy.has(row.profileId)}
-                            onClick={() => {
-                              setConfirming(null);
-                              void change(
-                                row.profileId,
-                                () => removeFriendship(userId, row.profileId),
-                                `${row.name} is no longer your friend.`,
-                              );
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          {note ? (
-                            <span className={`friend-note${note.failed ? ' failed' : ''}`}>
-                              {note.text}
-                            </span>
-                          ) : (
-                            action && (
+                      <span className="friend-actions">
+                        {confirming === row.profileId ? (
+                          <>
+                            <span className="muted">Remove?</span>
+                            <button className="ghost small" onClick={() => setConfirming(null)}>
+                              Keep
+                            </button>
+                            <button
+                              className="danger small"
+                              disabled={busy.has(row.profileId)}
+                              onClick={() => {
+                                setConfirming(null);
+                                void change(
+                                  row.profileId,
+                                  () => removeFriendship(userId, row.profileId),
+                                  `${row.name} is no longer your friend.`,
+                                );
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            {action && (
                               <button
                                 className="ghost small"
                                 disabled={busy.has(row.profileId)}
@@ -358,19 +393,35 @@ export function FriendsPanel({
                               >
                                 {action.label}
                               </button>
-                            )
-                          )}
-                          <button
-                            className="ghost small friend-remove"
-                            title={`Remove ${row.name}`}
-                            aria-label={`Remove ${row.name} from your friends`}
-                            onClick={() => setConfirming(row.profileId)}
-                          >
-                            ×
-                          </button>
-                        </>
-                      )}
-                    </span>
+                            )}
+                            {/* "Invited", or why not, stands in for the button for a few seconds. */}
+                            {note ? (
+                              <span className={`friend-note${note.failed ? ' failed' : ''}`}>
+                                {note.text}
+                              </span>
+                            ) : (
+                              <button
+                                className="ghost small"
+                                disabled={!inviting.enabled || busy.has(row.profileId)}
+                                title={inviting.hint}
+                                aria-label={inviting.label}
+                                onClick={() => void inviteFriend({ profileId: row.profileId, name: row.name })}
+                              >
+                                Invite
+                              </button>
+                            )}
+                            <button
+                              className="ghost small friend-remove"
+                              title={`Remove ${row.name}`}
+                              aria-label={`Remove ${row.name} from your friends`}
+                              onClick={() => setConfirming(row.profileId)}
+                            >
+                              ×
+                            </button>
+                          </>
+                        )}
+                      </span>
+                    </div>
                     {friendship && cardFor(friendship)}
                   </li>
                 );

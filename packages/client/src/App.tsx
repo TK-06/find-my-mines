@@ -236,24 +236,6 @@ export function App() {
   };
 
   /**
-   * The signed-in player's friendships, here rather than in the Friends card so
-   * the profile page, the lobby's search and its player cards, and whatever
-   * needs the list inside a room all share one — and one change shows in all.
-   * A friend's Join, Watch and Invite buttons act through the handlers below.
-   */
-  const friends = useFriendships(accountId, {
-    onJoin: (roomId) => {
-      showPlay();
-      handleJoin(roomId);
-    },
-    onWatch: (roomId) => {
-      showPlay();
-      void spectateRoom(roomId);
-    },
-    onInvite: inviteFriend,
-  });
-
-  /**
    * A friend to invite as soon as the game being set up exists. Pressing Invite
    * on a card while not in a room sends you to Create game first (see
    * `inviteFromCard`); this is who waits for it. Dropped by Cancel on the form,
@@ -292,6 +274,25 @@ export function App() {
     }
   };
   const cardInvite = { plan, send: inviteFromCard };
+
+  /**
+   * The signed-in player's friendships, here rather than in the Friends card so
+   * the profile page, the lobby's search and its player cards, and whatever
+   * needs the list inside a room all share one — and one change shows in all.
+   * A friend's Join and Watch buttons act through the handlers here, and their
+   * Invite — on a row or on a card — through the same `inviteFromCard`.
+   */
+  const friends = useFriendships(accountId, {
+    onJoin: (roomId) => {
+      showPlay();
+      handleJoin(roomId);
+    },
+    onWatch: (roomId) => {
+      showPlay();
+      void spectateRoom(roomId);
+    },
+    onInvite: inviteFromCard,
+  });
 
   /**
    * Create game from the lobby's form. With a friend waiting, the invite is sent
