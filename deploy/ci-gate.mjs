@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SHA = /^[a-f0-9]{40}$/i;
+const CI_PATH = '.github/workflows/ci.yml';
 
 /** Decide from the CI workflow's push runs for one exact main-branch commit. */
 export function decideCiRun(payload, sha) {
@@ -14,7 +15,7 @@ export function decideCiRun(payload, sha) {
       && run.head_branch === 'main'
       && run.event === 'push'
       && typeof run.path === 'string'
-      && run.path.startsWith('.github/workflows/ci.yml@'))
+      && (run.path === CI_PATH || run.path.startsWith(`${CI_PATH}@`)))
     .sort((a, b) => {
       const time = Date.parse(b.updated_at ?? '') - Date.parse(a.updated_at ?? '');
       if (Number.isFinite(time) && time !== 0) return time;

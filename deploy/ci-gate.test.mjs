@@ -6,7 +6,7 @@ const run = (overrides = {}) => ({
   head_sha: sha,
   head_branch: 'main',
   event: 'push',
-  path: '.github/workflows/ci.yml@main',
+  path: '.github/workflows/ci.yml',
   status: 'completed',
   conclusion: 'success',
   updated_at: '2026-10-06T10:00:00Z',
@@ -21,6 +21,8 @@ describe('CI deploy gate', () => {
     expect(decideCiRun({ workflow_runs: [run({ head_branch: 'other' })] }, sha)).toBe('wait');
     expect(decideCiRun({ workflow_runs: [run({ head_sha: 'b'.repeat(40) })] }, sha)).toBe('wait');
     expect(decideCiRun({ workflow_runs: [run({ path: '.github/workflows/other.yml@main' })] }, sha)).toBe('wait');
+    expect(decideCiRun({ workflow_runs: [run({ path: '.github/workflows/ci.yml.backup' })] }, sha)).toBe('wait');
+    expect(decideCiRun({ workflow_runs: [run({ path: '.github/workflows/ci.yml@main' })] }, sha)).toBe('deploy');
   });
 
   it('waits when CI has not completed or the response is unusable', () => {
