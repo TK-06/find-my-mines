@@ -175,3 +175,35 @@ export function Leaderboard({ state, myId, moderation }: Props) {
     </div>
   );
 }
+
+/**
+ * The phone's scoreboard: one line under the turn banner with every seat's
+ * mines found, whoever is on turn edged in orange, and how many of the board's
+ * mines are found so far. The full leaderboard (and its kick and ban buttons)
+ * is still there below the board; this is what you can see while playing.
+ */
+export function ScoreStrip({ state, myId }: { state: PublicMatchState; myId: string | null }) {
+  return (
+    <div className="score-strip" aria-label="Score">
+      <ul className="score-strip-seats">
+        {state.players.map((player) => {
+          const onTurn = state.status === 'playing' && state.currentPlayerId === player.id;
+          const isMe = player.id === myId;
+          return (
+            <li key={player.id} className={`score-seat${onTurn ? ' on-turn' : ''}`}>
+              <Avatar name={player.nickname} url={player.avatarUrl} bot={player.bot?.model ?? false} size={22} />
+              <span className="score-seat-name">
+                {isMe ? 'You' : player.nickname}
+                {onTurn && <span className="chat-sr"> (on turn)</span>}
+              </span>
+              <strong className="score-seat-points">{player.score}</strong>
+            </li>
+          );
+        })}
+      </ul>
+      <span className="score-strip-found" title="Mines found">
+        {state.bombsFound}/{state.bombCount}
+      </span>
+    </div>
+  );
+}

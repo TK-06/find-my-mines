@@ -17,7 +17,15 @@ interface Props {
    * pointed at. Only ever this player's own — the hint is never broadcast.
    */
   hint?: { row: number; col: number } | null;
+  /**
+   * Phones only, for boards over 12 columns: full-size cells that scroll inside
+   * the board, instead of shrinking every cell to fit the screen's width.
+   */
+  zoomed?: boolean;
 }
+
+/** Wider than this, a phone drops the rulers to give the cells their room. */
+const DENSE_COLS = 12;
 
 /** Index the reveal history by cell for O(1) lookup while rendering. */
 function revealMap(revealed: RevealedCell[]): Map<string, RevealedCell> {
@@ -30,8 +38,11 @@ const colName = (col: number) => String.fromCharCode(65 + col);
 /**
  * The board as a survey grid: lettered columns, numbered rows, and the turn
  * clock as a line along the top edge that drains while the turn runs.
+ *
+ * Its cells are sized from the board's own width (see .board in styles.css),
+ * so the grid always ends flush with the board's edge, whatever the screen.
  */
-export function Board({ state, myTurn, onReveal, mines, hint }: Props) {
+export function Board({ state, myTurn, onReveal, mines, hint, zoomed = false }: Props) {
   const revealed = revealMap(state.revealed);
   const hiddenMines = new Set((mines ?? []).map((m) => `${m.row}:${m.col}`));
   const interactive = myTurn && state.status === 'playing';
@@ -41,7 +52,11 @@ export function Board({ state, myTurn, onReveal, mines, hint }: Props) {
   const style = { '--cols': state.cols } as CSSProperties;
 
   return (
-    <div className={`board ${interactive ? 'my-turn' : ''}`} style={style}>
+    <div
+      className={`board${interactive ? ' my-turn' : ''}${zoomed ? ' zoomed' : ''}`}
+      style={style}
+      data-dense={state.cols > DENSE_COLS ? '' : undefined}
+    >
       <div className="board-clock" aria-hidden="true">
         <i
           className={playing && state.secondsLeft <= 3 ? 'urgent' : ''}

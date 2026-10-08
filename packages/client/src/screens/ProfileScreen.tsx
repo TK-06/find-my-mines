@@ -8,6 +8,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { authEnabled } from '../auth/supabase.js';
 import { FriendsPanel } from '../components/FriendsPanel.js';
+import { Sheet } from '../components/Sheet.js';
 import type { CardInvite } from '../components/PlayerCard.js';
 import { ActivityHeatmap } from '../components/profile/ActivityHeatmap.js';
 import { IdentityCard } from '../components/profile/IdentityCard.js';
@@ -34,6 +35,7 @@ import {
   type ProfileHistoryRow,
   type ProfileRow,
 } from '../data/queries.js';
+import { useIsPhone } from '../useMediaQuery.js';
 
 /** How many matches the "Your recent matches" table lists. */
 const RECENT_MATCHES = 10;
@@ -87,6 +89,9 @@ export function ProfileScreen({
   const [standing, setStanding] = useState<{ rank: number; total: number | null } | null>(null);
   const [recent, setRecent] = useState<MatchRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // On a phone the friends list is one line under your stats that opens in a sheet.
+  const isPhone = useIsPhone();
+  const [friendsOpen, setFriendsOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -176,21 +181,48 @@ export function ProfileScreen({
   const { record: tally, mines, series, streak } = stats;
   const best = bestElo(history, profile.elo);
 
+  const friendsPanel = (
+    <FriendsPanel
+      userId={userId}
+      friends={friends}
+      online={online}
+      rooms={rooms}
+      myRoomId={myRoomId}
+      invite={invite}
+      onReport={onReport}
+      onViewProfile={(name) => {
+        setFriendsOpen(false);
+        onViewProfile(name);
+      }}
+    />
+  );
+  const accepted = friends.friendships.filter((f) => f.status === 'accepted').length;
+  const waiting = friends.friendships.filter((f) => f.status === 'pending' && f.direction === 'incoming').length;
+
+  // One column below desktop width: who you are, then your numbers, then your
+  // friends (styles.css orders them); two columns from 1024px.
   return (
     <div className="profile-layout">
       <div className="profile-side">
         <IdentityCard profile={profile} streak={streak} standing={standing} onRename={rename} />
-        <FriendsPanel
-          userId={userId}
-          friends={friends}
-          online={online}
-          rooms={rooms}
-          myRoomId={myRoomId}
-          invite={invite}
-          onReport={onReport}
-          onViewProfile={onViewProfile}
-        />
+        {isPhone ? (
+          <button type="button" className="card friends-summary" aria-haspopup="dialog" onClick={() => setFriendsOpen(true)}>
+            <strong>Friends</strong>
+            <span className="muted">
+              {accepted} {accepted === 1 ? 'friend' : 'friends'}
+              {waiting > 0 && ` · ${waiting} waiting on you`}
+            </span>
+            <span aria-hidden="true">›</span>
+          </button>
+        ) : (
+          friendsPanel
+        )}
       </div>
+      {isPhone && friendsOpen && (
+        <Sheet title="Friends" className="friends-sheet" onClose={() => setFriendsOpen(false)}>
+          {friendsPanel}
+        </Sheet>
+      )}
 
       <div className="profile-main">
         <dl className="profile-tiles">

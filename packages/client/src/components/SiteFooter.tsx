@@ -44,11 +44,14 @@ export function SiteFooter({
   onNavigate,
   theme,
   onToggleTheme,
+  sound = null,
 }: {
   route: Route;
   onNavigate: (next: Route) => void;
   theme: Theme;
   onToggleTheme: () => void;
+  /** The speaker button, here on a phone where the header has no room for it. */
+  sound?: ReactNode;
 }) {
   const [contactOpen, setContactOpen] = useState(false);
   // The label names the theme the button switches to, as the old header button did.
@@ -92,6 +95,7 @@ export function SiteFooter({
         </nav>
 
         <div className="footer-group footer-meta">
+          {sound}
           <button
             type="button"
             className="footer-link"

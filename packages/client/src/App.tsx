@@ -1,4 +1,4 @@
-import { hostCanModerate, type RoomConfig, type RoomSummary } from '@fmm/shared';
+import { TURN_SECONDS, hostCanModerate, type RoomConfig, type RoomSummary } from '@fmm/shared';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { identityChanged } from './auth/session.js';
 import { authEnabled, supabase } from './auth/supabase.js';
@@ -6,22 +6,25 @@ import { signOutAfterRemoval } from './data/format.js';
 import type { GuestProfile } from './data/guestCookie.js';
 import { AiPanel, HintButton, HintLine, useAiHint } from './components/AiPanel.js';
 import { Board } from './components/Board.js';
+import { ChatDock } from './components/ChatDock.js';
 import { FriendInviteToasts } from './components/FriendInviteToasts.js';
 import { JoinRequestDialog } from './components/JoinRequestDialog.js';
 import { JoinRequestToasts } from './components/JoinRequestToasts.js';
-import { Leaderboard } from './components/Leaderboard.js';
+import { Leaderboard, ScoreStrip } from './components/Leaderboard.js';
 import { LoadBoundary } from './components/LoadBoundary.js';
-import { OnlinePanel } from './components/OnlinePanel.js';
+import { OnlinePanel, OnlineSummary } from './components/OnlinePanel.js';
+import { PhoneLobbyHeader, PhoneLobbyMenu } from './components/PhoneLobbyMenu.js';
 import { ProfileButton, type HeaderUser } from './components/ProfileButton.js';
 import { QueuePanel } from './components/QueuePanel.js';
 import { ReasonDialog } from './components/ReasonDialog.js';
 import { ForfeitOverlay, ResultOverlay } from './components/ResultOverlay.js';
 import { RoomChat } from './components/RoomChat.js';
 import { RoomFriendInvites } from './components/RoomFriendInvites.js';
+import { Sheet } from './components/Sheet.js';
 import { ShareRoom } from './components/ShareRoom.js';
 import { SiteFooter } from './components/SiteFooter.js';
 import { SoundControl } from './components/SoundControl.js';
-import { PostInviteButton, WorldChat } from './components/WorldChat.js';
+import { PostInviteButton } from './components/WorldChat.js';
 import {
   invitePlan,
   pendingInviteNotice,
@@ -29,10 +32,12 @@ import {
 } from './data/friendsModel.js';
 import { replayForPopup } from './data/latestReplay.js';
 import { isPolicy } from './data/policies.js';
+import { lobbyModeFrom, type LobbyMode } from './data/layout.js';
 import { hasSeatToOffer, showInviteCard } from './data/roomInvites.js';
 import { useFriendships } from './data/useFriendships.js';
 import {
   NavBar,
+  appDepth,
   joinCodeFromPath,
   pathFor,
   pathForPlayer,
@@ -53,6 +58,7 @@ import { useSoundSettings } from './sound/settings.js';
 import { useGameSounds } from './sound/useGameSounds.js';
 import { useTheme } from './theme.js';
 import { forgetStoredGuest, storedGuestName, useGame } from './useGame.js';
+import { useIsDesktop, useIsPhone } from './useMediaQuery.js';
 
 // Puzzle mode loads on first visit: most players never open it, and its board
 // and solver-backed hint need not weigh on the main game's first load.
@@ -350,6 +356,81 @@ export function App() {
     if (ready && !signedIn && !named && connected && guestName) join(guestName);
   }, [ready, signedIn, named, connected, guestName, join]);
 
+  // Which of the three layouts is showing. Most of the difference is CSS; these
+  // pick what is rendered at all (the online list or its one-line summary, the
+  // room chat beside the board or in the chat sheet).
+  const isPhone = useIsPhone();
+  const isDesktop = useIsDesktop();
+  /** The phone's "N online" summary, opened into the full list. */
+  const [onlineOpen, setOnlineOpen] = useState(false);
+  /** A big board on a phone: fit the screen (default) or full-size cells that scroll. */
+  const [zoomed, setZoomed] = useState(false);
+
+  // The Play page on a phone is a menu of three (Join a game, Quick match, Play
+  // vs AI), each opening a screen of its own. The open one is kept in the
+  // history entry, so the back gesture returns to the menu.
+  const [lobbyMode, setLobbyMode] = useState<LobbyMode | null>(() => lobbyModeFrom(window.history.state));
+  useEffect(() => {
+    const onPop = () => setLobbyMode(lobbyModeFrom(window.history.state));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  const openLobbyMode = (mode: LobbyMode) => {
+    if (lobbyModeFrom(window.history.state) === mode) return;
+    window.history.pushState(
+      { depth: appDepth(window.history.state) + 1, lobbyMode: mode },
+      '',
+      window.location.pathname,
+    );
+    setLobbyMode(mode);
+    window.scrollTo(0, 0);
+  };
+  const closeLobbyMode = () => {
+    // Pushed by openLobbyMode: step back, as the back gesture would.
+    if (lobbyModeFrom(window.history.state) !== null) window.history.back();
+    else setLobbyMode(null);
+  };
+
+  // An invite waiting for a game to be made (Invite on a friend's card): on a
+  // phone that game is made from the Join a game screen.
+  useEffect(() => {
+    // openLobbyMode is left out of the list: it is remade each render but always does the same.
+    if (isPhone && pendingInvite && !state) openLobbyMode('games');
+  }, [isPhone, pendingInvite, state]);
+
+  // Entering or leaving a room swaps the whole screen without a navigation, so
+  // start it at the top: the lobby's scroll would otherwise open the game on its chat.
+  const roomId = state?.roomId ?? null;
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    setOnlineOpen(false);
+    setZoomed(false);
+  }, [roomId]);
+
+  // World chat on every page once this tab has a name; in a room on a phone the
+  // room's chat joins it, since the game screen has no room for the chat card.
+  const chatDock = named ? (
+    <ChatDock
+      world={{
+        messages: lobbyMessages,
+        rooms,
+        connected,
+        myId: playerId,
+        onSay: sayInLobby,
+        // An invite card's Join, from any page: back to Play, then the usual join.
+        onJoin: (id) => {
+          showPlay();
+          handleJoin(id);
+        },
+      }}
+      room={
+        isPhone && state
+          ? { roomId: state.roomId, messages: roomMessages, players: state.players, connected, onSay: sayInRoom }
+          : null
+      }
+    />
+  ) : null;
+
   // A friend's invite pops up on every page — except inside a room, where
   // joining another would give up your seat (a forfeit, mid-match). Invites
   // that arrive meanwhile wait, and show once you are back out.
@@ -371,7 +452,7 @@ export function App() {
   // chosen. Only the game itself needs an identity.
   if (route === 'profile') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
         <ProfileScreen
           online={online}
           rooms={rooms}
@@ -397,7 +478,7 @@ export function App() {
     // page: a guest who shares a name with an account is not that account.
     const viewingOwn = me !== null && !isGuest && playerName.toLowerCase() === me.name.toLowerCase();
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} ownProfile={viewingOwn}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} ownProfile={viewingOwn} dock={chatDock}>
         <PlayerProfileScreen
           key={playerName}
           username={playerName}
@@ -416,7 +497,7 @@ export function App() {
   const reviewTarget = route === 'review' ? reviewTargetFromPath(path) : null;
   if (route === 'review' && reviewTarget) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
         <LoadBoundary what="the review">
           <Suspense
             fallback={
@@ -443,7 +524,7 @@ export function App() {
   // sign-in or server round trip needed.
   if (route === 'puzzle') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
         <LoadBoundary what="the puzzle">
           <Suspense
             fallback={
@@ -462,7 +543,7 @@ export function App() {
 
   if (route === 'ranks') {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
         <LeaderboardScreen />
         {inviteToasts}
       </Shell>
@@ -473,7 +554,7 @@ export function App() {
   // no sign-in and no database.
   if (isPolicy(route)) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
         <PolicyScreen policy={route} onNavigate={navigate} />
         {inviteToasts}
       </Shell>
@@ -483,7 +564,7 @@ export function App() {
   // Kicked, banned, or the room was ended: say so before anything else.
   if (removed) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
         <RemovedScreen
           notice={removed}
           onContinue={() => {
@@ -498,7 +579,7 @@ export function App() {
 
   if (!named) {
     return (
-      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
+      <Shell connected={connected} error={error} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
         {ready && !(guestName && !signedIn) ? (
           <>
             {linkCode && (
@@ -518,52 +599,85 @@ export function App() {
     );
   }
 
+  // The games list with Join by code and + Create game.
+  const lobbyScreen = (
+    <LobbyScreen
+      rooms={rooms}
+      clientCount={clientCount}
+      onCreate={createGame}
+      onJoin={handleJoin}
+      onSpectate={spectateRoom}
+      inviteFor={pendingInvite?.name ?? null}
+      onCancelInvite={() => setPendingInvite(null)}
+    />
+  );
+
+  const onlinePanel = (
+    <OnlinePanel
+      online={online}
+      myId={playerId}
+      rooms={rooms}
+      onJoin={(id) => {
+        setOnlineOpen(false);
+        handleJoin(id);
+      }}
+      friends={friends}
+      invite={cardInvite}
+      onViewProfile={(name) => navigate('player', pathForPlayer(name))}
+      onOpenOwnProfile={() => navigate('profile')}
+      onReport={reportPlayer}
+      // The rail shows the first few and a "Show all"; the phone's sheet shows everyone.
+      limit={isPhone ? undefined : 8}
+    />
+  );
+
   if (!state) {
     return (
-      <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
-        <div className="stack">
-          <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
-          <div className="lobby-layout">
-            {/* Games (with + Create game) first: players could not find it
-                under the quick match and the computer opponents. */}
+      <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
+        {isPhone ? (
+          lobbyMode === null ? (
+            // A phone: who you are, who is online, and three ways to play.
             <div className="stack">
-              <LobbyScreen
-                rooms={rooms}
-                clientCount={clientCount}
-                onCreate={createGame}
-                onJoin={handleJoin}
-                onSpectate={spectateRoom}
-                inviteFor={pendingInvite?.name ?? null}
-                onCancelInvite={() => setPendingInvite(null)}
-              />
-              <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
-              <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} />
+              <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
+              <OnlineSummary online={online} myId={playerId} onOpen={() => setOnlineOpen(true)} />
+              <PhoneLobbyMenu openGames={rooms.length} queue={queue} onOpen={openLobbyMode} />
             </div>
-            {/* Who is online, then what they are saying. On phones the two split
-                up: the online list first, the chat after the games. */}
-            <div className="stack lobby-side">
-              <OnlinePanel
-                online={online}
-                myId={playerId}
-                rooms={rooms}
-                onJoin={handleJoin}
-                friends={friends}
-                invite={cardInvite}
-                onViewProfile={(name) => navigate('player', pathForPlayer(name))}
-                onOpenOwnProfile={() => navigate('profile')}
-                onReport={reportPlayer}
+          ) : (
+            // One of the three, on a screen of its own.
+            <div className="stack phone-lobby-mode">
+              <PhoneLobbyHeader
+                title={lobbyMode === 'games' ? 'Join a game' : lobbyMode === 'quick' ? 'Quick match' : 'Play vs AI'}
+                onBack={closeLobbyMode}
               />
-              <WorldChat
-                messages={lobbyMessages}
-                rooms={rooms}
-                connected={connected}
-                myId={playerId}
-                onSay={sayInLobby}
-                onJoin={handleJoin}
-              />
+              {lobbyMode === 'games' && lobbyScreen}
+              {lobbyMode === 'quick' && <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />}
+              {lobbyMode === 'ai' && <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} />}
+            </div>
+          )
+        ) : (
+          <div className="stack">
+            <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
+            <div className="lobby-layout">
+              {/* Games (with + Create game) first: players could not find it
+                  under the quick match and the computer opponents. */}
+              <div className="stack">
+                {lobbyScreen}
+                <QueuePanel queue={queue} onJoin={joinQueue} onLeave={leaveQueue} />
+                {/* Below desktop width the settings fold behind one Play button. */}
+                <AiPanel connected={connected} onPlay={playVsAi} onAbout={aiAbout} compact={!isDesktop} />
+              </div>
+              {/* Who is online, in a rail beside the games. The world chat lives
+                  behind the chat button on every page. */}
+              <div className="stack lobby-side">{onlinePanel}</div>
             </div>
           </div>
-        </div>
+        )}
+
+        {isPhone && onlineOpen && (
+          <Sheet title={`${online.length} online now`} className="online-sheet" onClose={() => setOnlineOpen(false)}>
+            {onlinePanel}
+          </Sheet>
+        )}
 
         {joinTarget && (
           <JoinRequestDialog
@@ -605,7 +719,19 @@ export function App() {
   const turnBanner =
     state.status === 'playing' && !isSpectator ? (
       <div className={`banner ${myTurn ? 'you-turn' : 'wait'}${aiSeat ? ' with-hint' : ''}`}>
-        {myTurn ? 'Your turn. Pick a slot.' : `${state.players.find((p) => p.id === state.currentPlayerId)?.nickname ?? 'Another player'} is picking…`}
+        {/* The clock rides in the banner on a phone, where the timer card is
+            below the board; wider screens show the card beside it instead. */}
+        <span className={`turn-secs${state.secondsLeft <= 3 ? ' urgent' : ''}`} aria-hidden="true">
+          {Math.max(0, state.secondsLeft)}s
+        </span>
+        <span className="turn-text">
+          {myTurn ? 'Your turn. Pick a slot.' : `${state.players.find((p) => p.id === state.currentPlayerId)?.nickname ?? 'Another player'} is picking…`}
+        </span>
+        <i
+          className="turn-progress"
+          aria-hidden="true"
+          style={{ transform: `scaleX(${Math.max(0, state.secondsLeft) / TURN_SECONDS})` }}
+        />
         {hint.available && (
           <HintButton
             hintsLeft={hint.hintsLeft}
@@ -617,11 +743,41 @@ export function App() {
       </div>
     ) : null;
 
+  // A match on a phone keeps the board as high up the screen as it can go:
+  // the welcome line and your rating wait for the menu, and the room's
+  // buttons fold into one menu.
+  const playingOnPhone = isPhone && state.status === 'playing';
+
+  // Share, Post invite and Leave: in the room bar, or in its ··· menu on a phone mid-match.
+  const roomActions = (
+    <>
+      {/* Keyed by room, so an open popover never shows the last room's code. */}
+      <ShareRoom
+        key={state.roomId}
+        roomId={state.roomId}
+        roomName={state.roomName}
+        isPrivate={state.config.private === true}
+      />
+      {/* Players only, as the server enforces; a private room's code goes
+          public only on its host's say-so. A full room — a game against
+          the computer included — has no seat to advertise (hasSeatToOffer,
+          also what the Invite friends card goes by). Its own key:
+          two siblings sharing one would leave a stale Share control behind
+          when the room changes. */}
+      {hasSeatToOffer(state, playerId) && (
+        <PostInviteButton key={`invite-${state.roomId}`} connected={connected} onPost={postInvite} />
+      )}
+      <button className="ghost" onClick={leaveRoom}>
+        Leave room
+      </button>
+    </>
+  );
+
   return (
-    <Shell connected={connected} error={error} welcome={welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me}>
+    <Shell connected={connected} error={error} welcome={playingOnPhone ? null : welcome} route={route} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} me={me} dock={chatDock}>
       <div className="stack">
-        <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />
-        <div className="room-bar card">
+        {!playingOnPhone && <IdentityBar isGuest={isGuest} elo={elo} guest={guestProfile} onForgetGuest={forgetGuest} />}
+        <div className={`room-bar card${playingOnPhone ? ' compact' : ''}`}>
           <div>
             <span className="room-code">{state.roomId}</span>
             <strong style={{ marginLeft: 8 }}>{state.roomName}</strong>
@@ -632,27 +788,16 @@ export function App() {
               {isSpectator && ' · you are spectating'}
             </div>
           </div>
-          <div className="room-bar-actions">
-            {/* Keyed by room, so an open popover never shows the last room's code. */}
-            <ShareRoom
-              key={state.roomId}
-              roomId={state.roomId}
-              roomName={state.roomName}
-              isPrivate={state.config.private === true}
-            />
-            {/* Players only, as the server enforces; a private room's code goes
-                public only on its host's say-so. A full room — a game against
-                the computer included — has no seat to advertise (hasSeatToOffer,
-                also what the Invite friends card goes by). Its own key:
-                two siblings sharing one would leave a stale Share control behind
-                when the room changes. */}
-            {hasSeatToOffer(state, playerId) && (
-              <PostInviteButton key={`invite-${state.roomId}`} connected={connected} onPost={postInvite} />
-            )}
-            <button className="ghost" onClick={leaveRoom}>
-              Leave room
-            </button>
-          </div>
+          {playingOnPhone ? (
+            <details className="room-menu">
+              <summary className="room-menu-button" aria-label="Room options">
+                ···
+              </summary>
+              <div className="room-bar-actions room-menu-pop card">{roomActions}</div>
+            </details>
+          ) : (
+            <div className="room-bar-actions">{roomActions}</div>
+          )}
         </div>
 
         {state.status === 'waiting' && (
@@ -687,29 +832,60 @@ export function App() {
           />
         )}
 
-        {aiSeat && turnBanner ? (
-          <div className="ai-turn">
-            {turnBanner}
-            <HintLine note={hint.note} />
+        {/* Pinned to the top of the screen on a phone, so the clock and whose
+            turn it is stay in view while the board scrolls. */}
+        {turnBanner && (
+          <div className="turn-sticky">
+            {aiSeat ? (
+              <div className="ai-turn">
+                {turnBanner}
+                <HintLine note={hint.note} />
+              </div>
+            ) : (
+              turnBanner
+            )}
           </div>
-        ) : (
-          turnBanner
         )}
+
+        {/* The phone's scoreboard, right above the board (the full one is below it). */}
+        {isPhone && state.status !== 'waiting' && <ScoreStrip state={state} myId={playerId} />}
 
         <div className={`play-area ${state.status === 'waiting' ? 'no-board' : ''}`}>
           {state.status !== 'waiting' && (
-            <Board state={state} myTurn={myTurn && !isSpectator} onReveal={reveal} hint={hint.cell} />
+            <div className="board-column">
+              <Board
+                state={state}
+                myTurn={myTurn && !isSpectator}
+                onReveal={reveal}
+                hint={hint.cell}
+                zoomed={isPhone && zoomed}
+              />
+              {/* More than 12 columns on a phone: fit the screen, or full-size cells that scroll. */}
+              {isPhone && state.cols > 12 && (
+                <div className="board-zoom" role="group" aria-label="Board size">
+                  <button type="button" className="ghost small" aria-pressed={!zoomed} onClick={() => setZoomed(false)}>
+                    Fit
+                  </button>
+                  <button type="button" className="ghost small" aria-pressed={zoomed} onClick={() => setZoomed(true)}>
+                    Zoom
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           <div className="stack room-side">
             <Leaderboard state={state} myId={playerId} moderation={moderation} />
-            {/* Keyed by room: a half-typed line or an error never carries over. */}
-            <RoomChat
-              key={state.roomId}
-              messages={roomMessages}
-              players={state.players}
-              connected={connected}
-              onSay={sayInRoom}
-            />
+            {/* On a phone the room chat is a tab of the chat button instead.
+                Keyed by room: a half-typed line or an error never carries over. */}
+            {!isPhone && (
+              <RoomChat
+                key={state.roomId}
+                messages={roomMessages}
+                players={state.players}
+                connected={connected}
+                onSay={sayInRoom}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -813,6 +989,7 @@ function Shell({
   onToggleTheme,
   me,
   ownProfile = false,
+  dock = null,
   children,
 }: {
   connected: boolean;
@@ -826,20 +1003,25 @@ function Shell({
   me: HeaderUser | null;
   /** The page on screen is your own public page (/u/<you>), which counts as your profile. */
   ownProfile?: boolean;
+  /** The chat button, on every page once this tab has a name. */
+  dock?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  // A phone's header is one row: the title, the links, the connection dot and
+  // your picture. The speaker moves down to the footer to make the room.
+  const isPhone = useIsPhone();
   return (
     // A full-height column, so the footer sits at the bottom of the window on
     // short pages and after the content on long ones.
-    <div className="app site-shell">
+    <div className={`app site-shell${dock ? ' has-dock' : ''}`}>
       <header className="header site-header">
         <h1 className="title">Find My Mines</h1>
         <div className="header-right">
           <NavBar route={route} onNavigate={onNavigate} />
-          <span className={`conn ${connected ? 'online' : 'offline'}`}>
-            {connected ? 'Online' : 'Offline'}
+          <span className={`conn ${connected ? 'online' : 'offline'}`} title={connected ? 'Online' : 'Offline'}>
+            <span className="conn-label">{connected ? 'Online' : 'Offline'}</span>
           </span>
-          <SoundControl />
+          {!isPhone && <SoundControl />}
           <ProfileButton me={me} current={route === 'profile' || ownProfile} onNavigate={onNavigate} />
         </div>
       </header>
@@ -849,7 +1031,15 @@ function Shell({
 
       <main className="site-main">{children}</main>
 
-      <SiteFooter route={route} onNavigate={onNavigate} theme={theme} onToggleTheme={onToggleTheme} />
+      <SiteFooter
+        route={route}
+        onNavigate={onNavigate}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+        sound={isPhone ? <SoundControl /> : null}
+      />
+
+      {dock}
 
       {error && <div className="toast">{error}</div>}
     </div>
