@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { authEnabled } from '../auth/supabase.js';
 import { Avatar } from '../components/Avatar.js';
 import { pictureUrl } from '../data/avatar.js';
@@ -15,6 +15,9 @@ export function LeaderboardScreen() {
   const [rows, setRows] = useState<LeaderboardRow[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /** Your own row, and whether it is out of sight below: a phone then shows a "You" bar. */
+  const myRow = useRef<HTMLLIElement>(null);
+  const [meBelow, setMeBelow] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -27,6 +30,18 @@ export function LeaderboardScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const myIndex = rows.findIndex((row) => row.id === userId);
+  useEffect(() => {
+    const el = myRow.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(([entry]) => {
+      // Below the screen, not above it: scrolled past your row means you have seen it.
+      setMeBelow(entry !== undefined && !entry.isIntersecting && entry.boundingClientRect.top > 0);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [myIndex]);
 
   if (!authEnabled) {
     return (
@@ -74,7 +89,7 @@ export function LeaderboardScreen() {
               const isMe = row.id === userId;
 
               return (
-                <li key={row.id} className={isMe ? 'is-me' : undefined}>
+                <li key={row.id} className={isMe ? 'is-me' : undefined} ref={isMe ? myRow : undefined}>
                   <span className="rank-cell">
                     <span className="rank-number">{row.rank}</span>
                     <Avatar name={row.username} url={pictureUrl(row.id, row.avatar_path)} size={32} />
@@ -83,19 +98,33 @@ export function LeaderboardScreen() {
                       {isMe && <span className="tag me">you</span>}
                     </span>
                   </span>
+                  {/* Elo, record and win rate: under the name on a phone, columns on wider screens. */}
                   <span className="rank-stats">
-                    <strong>{row.elo}</strong>
-                    <span className="muted">
-                      {' '}
-                      · {row.wins}W {row.losses}L {row.draws}D ·{' '}
-                      {winRate(row.wins, row.games_played)}%
+                    <strong className="rank-elo">{row.elo}</strong>
+                    <span className="muted rank-record">
+                      {row.wins}W {row.losses}L {row.draws}D
                     </span>
+                    <span className="muted rank-rate">{winRate(row.wins, row.games_played)}% won</span>
                   </span>
                 </li>
               );
             })}
           </ul>
         </div>
+      )}
+
+      {/* Phones only (styles.css): your place, while your row is further down. */}
+      {meBelow && myIndex >= 0 && (
+        <button
+          type="button"
+          className="rank-me-bar"
+          onClick={() => myRow.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })}
+        >
+          <span>You</span>
+          <strong>#{rows[myIndex]!.rank}</strong>
+          <span>· {rows[myIndex]!.elo}</span>
+          <span className="rank-me-go">Show me</span>
+        </button>
       )}
     </div>
   );

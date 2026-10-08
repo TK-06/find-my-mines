@@ -33,6 +33,7 @@ import {
   loadAiSetup,
   opponentNote,
   playLabel,
+  boardChoiceLabel,
   playableModel,
   saveAiSetup,
   type AiSetup,
@@ -48,6 +49,11 @@ interface Props {
   onPlay: (setup: AiSetup) => Promise<RoomActionResult>;
   /** Asks the server what its language model is, for the About dialog. */
   onAbout: () => Promise<AiAbout | null>;
+  /**
+   * Phones and tablets: the opponent and board pickers fold away behind one
+   * Play button that says what it will start, with a Change button to open them.
+   */
+  compact?: boolean;
 }
 
 interface ChoiceOption<T extends string | number> {
@@ -131,7 +137,7 @@ function Choice<T extends string | number>({
  * device. A refusal shows as the usual toast (useGame handles it); success
  * swaps the lobby for the room, so this card simply goes away.
  */
-export function AiPanel({ connected, onPlay, onAbout }: Props) {
+export function AiPanel({ connected, onPlay, onAbout, compact = false }: Props) {
   const [setup, setSetup] = useState<AiSetup>(loadAiSetup);
   // Asked once when the card appears (the About dialog shares the answer):
   // JEV can only be played on a server that has its key.
@@ -142,6 +148,8 @@ export function AiPanel({ connected, onPlay, onAbout }: Props) {
   const [looking, setLooking] = useState<AiModel>(setup.model);
   const [soon, setSoon] = useState<string | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
+  /** Compact only: the pickers are showing. */
+  const [expanded, setExpanded] = useState(false);
   /** Set while the game is being made, so a second click cannot make two. */
   const [starting, setStarting] = useState(false);
   const alive = useRef(true);
@@ -184,6 +192,19 @@ export function AiPanel({ connected, onPlay, onAbout }: Props) {
         </p>
       </div>
 
+      {compact && (
+        <button
+          type="button"
+          className="ghost small ai-change"
+          aria-expanded={expanded}
+          aria-controls="ai-options"
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded ? 'Hide options' : 'Change opponent or board'}
+        </button>
+      )}
+
+      <div id="ai-options" className="ai-options" hidden={compact && !expanded}>
       <div className="ai-field">
         <div className="ai-field-head">
           <span id="ai-opponent-label" className="field-label">
@@ -312,9 +333,11 @@ export function AiPanel({ connected, onPlay, onAbout }: Props) {
           {boardSummary(setup.size, setup.density)}
         </p>
       </div>
+      </div>
 
       <button type="button" className="ai-play" disabled={!connected || starting} onClick={() => void play()}>
         {starting ? 'Starting…' : playLabel(model, setup.level)}
+        {compact && !expanded && <span className="ai-play-sub">{boardChoiceLabel(setup.size, setup.density)}</span>}
       </button>
 
       {aboutOpen && <AiAboutDialog model={looking} onAbout={onAbout} onClose={() => setAboutOpen(false)} />}

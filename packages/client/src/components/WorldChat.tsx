@@ -18,6 +18,8 @@ interface Props {
   onSay: (text: string) => Promise<ModerationResult>;
   /** The lobby's own join: asks first where the room requires it. */
   onJoin: (roomId: string) => void;
+  /** Inside the chat sheet, which has its own title: no card frame or heading. */
+  embedded?: boolean;
 }
 
 /**
@@ -29,7 +31,7 @@ interface Props {
  * back, your own included. Text is rendered as text (React escapes it), so
  * nothing anyone types is ever treated as markup.
  */
-export function WorldChat({ messages, rooms, connected, myId, onSay, onJoin }: Props) {
+export function WorldChat({ messages, rooms, connected, myId, onSay, onJoin, embedded = false }: Props) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,18 +79,27 @@ export function WorldChat({ messages, rooms, connected, myId, onSay, onJoin }: P
   }
 
   return (
-    <section className="card world-chat" aria-labelledby="world-chat-title">
-      <div className="world-chat-head">
-        <h3 id="world-chat-title">World chat</h3>
-        <p className="muted">Everyone in the lobby sees this. Nothing is saved.</p>
-      </div>
+    <section
+      className={`world-chat${embedded ? ' embedded' : ' card'}`}
+      aria-labelledby={embedded ? undefined : 'world-chat-title'}
+      aria-label={embedded ? 'World chat' : undefined}
+    >
+      {embedded ? (
+        <p className="muted world-chat-note">Everyone online sees this. Nothing is saved.</p>
+      ) : (
+        <div className="world-chat-head">
+          <h3 id="world-chat-title">World chat</h3>
+          <p className="muted">Everyone in the lobby sees this. Nothing is saved.</p>
+        </div>
+      )}
 
       <div
         ref={log}
         className="chat-log"
         role="log"
         aria-live="polite"
-        aria-labelledby="world-chat-title"
+        aria-labelledby={embedded ? undefined : 'world-chat-title'}
+        aria-label={embedded ? 'World chat messages' : undefined}
         // Scrollable, so it must be reachable by keyboard too.
         tabIndex={0}
         onScroll={(event) => {

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { authEnabled } from '../auth/supabase.js';
 import { removeFriendship } from '../data/friends.js';
 import { presenceLabel } from '../data/format.js';
+import { onlinePreview } from '../data/layout.js';
 import { PRIVATE_ROOM_TEXT, subjectOfTab } from '../data/friendsModel.js';
 import type { Friendships } from '../data/useFriendships.js';
 import { LobbyFriendSearch } from './LobbyFriendSearch.js';
@@ -25,6 +26,11 @@ interface Props {
   /** Your own name goes straight to your profile. */
   onOpenOwnProfile: () => void;
   onReport: (targetId: string, reason: ReportReason, details: string) => Promise<ModerationResult>;
+  /**
+   * Show only the first this many (you first), with a "Show all" button: the
+   * rail beside the games must not grow with a busy lobby. All when unset.
+   */
+  limit?: number;
 }
 
 /**
@@ -50,7 +56,9 @@ export function OnlinePanel({
   onViewProfile,
   onOpenOwnProfile,
   onReport,
+  limit,
 }: Props) {
+  const [showAll, setShowAll] = useState(false);
   // Yourself first, then everyone else in the order they connected.
   const ordered = [...online].sort((a, b) => Number(b.id === myId) - Number(a.id === myId));
   const roomsById = new Map(rooms.map((room) => [room.id, room]));
@@ -102,7 +110,7 @@ export function OnlinePanel({
       ) : null}
 
       <ul className="list online-list">
-        {ordered.map((player) => {
+        {(limit !== undefined && !showAll ? ordered.slice(0, limit) : ordered).map((player) => {
           const room = player.roomId ? roomsById.get(player.roomId) : undefined;
           const isMe = player.id === myId;
           const canJoin = !isMe && room !== undefined && room.joinable;
@@ -179,6 +187,12 @@ export function OnlinePanel({
         })}
       </ul>
 
+      {limit !== undefined && ordered.length > limit && (
+        <button type="button" className="ghost small online-more" onClick={() => setShowAll((all) => !all)}>
+          {showAll ? 'Show fewer' : `Show all ${ordered.length}`}
+        </button>
+      )}
+
       {reporting && (
         <ReportDialog
           targetId={reporting.id}
@@ -192,5 +206,34 @@ export function OnlinePanel({
         />
       )}
     </aside>
+  );
+}
+
+/**
+ * The phone's stand-in for the list: one line with the count and the first
+ * few names, which opens the full list in a sheet. The list itself would push
+ * the games off the first screen.
+ */
+export function OnlineSummary({
+  online,
+  myId,
+  onOpen,
+}: {
+  online: OnlinePlayer[];
+  myId: string | null;
+  onOpen: () => void;
+}) {
+  const { names, more } = onlinePreview(online, myId, 4);
+  const others = names.length === 0 ? 'just you so far' : `${names.join(', ')}${more > 0 ? ` +${more}` : ''}`;
+  return (
+    <button type="button" className="online-summary" aria-haspopup="dialog" onClick={onOpen}>
+      <span className="presence-dot" aria-hidden />
+      <strong>{online.length}</strong>
+      <span>online</span>
+      <span className="online-summary-names">{others}</span>
+      <span className="online-summary-open" aria-hidden="true">
+        ›
+      </span>
+    </button>
   );
 }
