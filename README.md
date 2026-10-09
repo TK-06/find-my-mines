@@ -16,6 +16,11 @@ and a player limit (or no limit at all).
 > rules, and **[ROADMAP.md](./ROADMAP.md)** for what is built and what is left.
 > Architecture and design decisions live in **[scaffold.md](./scaffold.md)**.
 
+> **Project diagrams:** [Architecture guide](./docs/architecture.md) covers the
+> frontend, backend, database, AI integrations, Cloudflare/AWS hosting, deployment,
+> and LAN demo. For the designed visual edition, download
+> [architecture.html](./docs/diagrams/architecture.html) and open it in a browser.
+
 ---
 
 ## Quick start
