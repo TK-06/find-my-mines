@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from 'react';
 import { MineSprite } from '../MineSprite.js';
+import { indexAt, moveInView, viewSize } from './boardView.js';
 import { FlagSprite } from './FlagSprite.js';
 import { cellAriaLabel } from './puzzleCopy.js';
 
@@ -30,7 +31,15 @@ interface Props {
   onFlag: (row: number, col: number) => void;
   /** Id of the text that explains the controls, for screen readers. */
   describedBy?: string;
+  /**
+   * Draw the board turned upright (game columns down the screen), for a board
+   * wider than the screen can show (Hard on a phone). See boardView.ts.
+   */
+  transposed?: boolean;
 }
+
+/** Wider than this many columns on screen, a phone drops the rulers to give the cells their room. */
+const DENSE_COLS = 12;
 
 /** How long a finger must rest on a cell to flag it, in milliseconds. */
 const LONG_PRESS_MS = 400;
@@ -63,9 +72,10 @@ function indexFrom(target: EventTarget | null): number | null {
  * click opens or chords, right click flags. Touch: tap opens, a long press
  * flags. Keyboard: arrows move, Enter or Space opens, F flags.
  */
-export function PuzzleBoard({ game, hint, onPlay, onFlag, describedBy }: Props) {
+export function PuzzleBoard({ game, hint, onPlay, onFlag, describedBy, transposed = false }: Props) {
   const { rows, cols } = game;
   const total = rows * cols;
+  const { viewRows, viewCols } = viewSize(rows, cols, transposed);
   const [cursor, setCursor] = useState(0);
   // A new, smaller board keeps the cursor on it.
   const active = Math.min(cursor, total - 1);
@@ -100,38 +110,18 @@ export function PuzzleBoard({ game, hint, onPlay, onFlag, describedBy }: Props) 
     if (index === null) return;
     lastPointer.current = 'keyboard';
     swallowClick.current = false;
-    const { row, col } = at(index);
-    let next: number;
-    switch (event.key) {
-      case 'ArrowUp':
-        next = row > 0 ? index - cols : index;
-        break;
-      case 'ArrowDown':
-        next = row < rows - 1 ? index + cols : index;
-        break;
-      case 'ArrowLeft':
-        next = col > 0 ? index - 1 : index;
-        break;
-      case 'ArrowRight':
-        next = col < cols - 1 ? index + 1 : index;
-        break;
-      case 'Home':
-        next = event.ctrlKey ? 0 : row * cols;
-        break;
-      case 'End':
-        next = event.ctrlKey ? total - 1 : row * cols + cols - 1;
-        break;
-      case 'f':
-      case 'F':
-        // Leave Ctrl+F and friends to the browser.
-        if (event.ctrlKey || event.metaKey || event.altKey) return;
-        event.preventDefault();
-        handlers.current.onFlag(row, col);
-        return;
-      default:
-        // Enter and Space reach the cell as a native button click.
-        return;
+    if (event.key === 'f' || event.key === 'F') {
+      // Leave Ctrl+F and friends to the browser.
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      event.preventDefault();
+      const { row, col } = at(index);
+      handlers.current.onFlag(row, col);
+      return;
     }
+    // Arrow keys follow the screen, so on an upright board Down is still the cell
+    // drawn below. Enter and Space reach the cell as a native button click.
+    const next = moveInView(index, event.key, rows, cols, transposed, event.ctrlKey);
+    if (next === null) return;
     event.preventDefault();
     focusCell(next);
   }
@@ -194,15 +184,23 @@ export function PuzzleBoard({ game, hint, onPlay, onFlag, describedBy }: Props) 
   }
 
   const live = game.status === 'ready' || game.status === 'playing';
-  const style = { '--cols': cols, '--rows': rows } as CSSProperties;
+  // The screen's columns and rows: swapped when the board is drawn upright.
+  const style = { '--cols': viewCols, '--rows': viewRows } as CSSProperties;
+  // The rulers name game columns by letter and game rows by number, wherever they are drawn.
+  const rulerFor = (axis: 'top' | 'side', n: number) =>
+    (axis === 'top') !== transposed ? puzzleColumnName(n) : String(n + 1);
 
   return (
-    <div className={`puzzle-board${live ? ' live' : ''}`} style={style}>
+    <div
+      className={`puzzle-board${live ? ' live' : ''}${transposed ? ' upright' : ''}`}
+      style={style}
+      data-dense={viewCols > DENSE_COLS ? '' : undefined}
+    >
       <div className="puzzle-row" aria-hidden="true">
         <span className="ruler corner" />
-        {Array.from({ length: cols }, (_, col) => (
+        {Array.from({ length: viewCols }, (_, col) => (
           <span key={col} className="ruler">
-            {puzzleColumnName(col)}
+            {rulerFor('top', col)}
           </span>
         ))}
       </div>
@@ -210,7 +208,7 @@ export function PuzzleBoard({ game, hint, onPlay, onFlag, describedBy }: Props) 
       <div
         ref={gridRef}
         role="grid"
-        aria-label={`Minefield, ${cols} columns by ${rows} rows`}
+        aria-label={`Minefield, ${cols} columns by ${rows} rows${transposed ? ', turned upright: columns run down the screen' : ''}`}
         aria-describedby={describedBy}
         className="puzzle-grid"
         onKeyDown={onKeyDown}
@@ -222,13 +220,15 @@ export function PuzzleBoard({ game, hint, onPlay, onFlag, describedBy }: Props) 
         onPointerCancel={cancelPress}
         onFocus={onFocus}
       >
-        {Array.from({ length: rows }, (_, row) => (
-          <div key={row} role="row" className="puzzle-row">
+        {Array.from({ length: viewRows }, (_, viewRow) => (
+          <div key={viewRow} role="row" className="puzzle-row">
             <span className="ruler" aria-hidden="true">
-              {row + 1}
+              {rulerFor('side', viewRow)}
             </span>
-            {Array.from({ length: cols }, (__, col) => {
-              const index = row * cols + col;
+            {Array.from({ length: viewCols }, (__, viewCol) => {
+              const index = indexAt(viewRow, viewCol, cols, transposed);
+              const row = Math.floor(index / cols);
+              const col = index % cols;
               const state = puzzleCellState(game, index);
               const adjacent = game.adjacent[index]!;
               const hinted = hint?.row === row && hint?.col === col;
@@ -239,7 +239,7 @@ export function PuzzleBoard({ game, hint, onPlay, onFlag, describedBy }: Props) 
               else if (state === 'mine' || state === 'exploded') content = <MineSprite />;
               return (
                 <button
-                  key={col}
+                  key={viewCol}
                   type="button"
                   role="gridcell"
                   data-index={index}

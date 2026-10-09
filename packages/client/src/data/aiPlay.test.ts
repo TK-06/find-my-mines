@@ -10,6 +10,7 @@ import {
   JEV_UNAVAILABLE,
   JEV_UNAVAILABLE_NOTE,
   applyHintWhy,
+  boardChoiceLabel,
   boardSummary,
   canAskHint,
   densityPercent,
@@ -133,6 +134,18 @@ describe('boardSummary', () => {
     expect(boardSummary(6, 'classic')).toBe('6×6 · 11 mines — the Classic board from the assignment');
     // Only that exact board is the assignment's.
     expect(boardSummary(8, 'classic')).not.toMatch(/assignment/);
+  });
+});
+
+describe('boardChoiceLabel', () => {
+  it('names the assignment board Classic', () => {
+    expect(boardChoiceLabel(6, 'classic')).toBe('6×6 Classic · 11 mines');
+  });
+
+  it('gives only the size and the mines on any other board', () => {
+    expect(boardChoiceLabel(10, 'heavy')).toBe('10×10 · 40 mines');
+    // The Classic density on a bigger board is not the Classic board.
+    expect(boardChoiceLabel(16, 'classic')).toBe('16×16 · 78 mines');
   });
 });
 

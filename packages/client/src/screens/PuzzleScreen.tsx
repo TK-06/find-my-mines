@@ -1,7 +1,8 @@
 import { PUZZLE_HINTS_PER_GAME, PUZZLE_LEVELS, dailyKey, describePuzzleHint, puzzleMinesLeft } from '@fmm/shared';
-import { useCallback, useEffect, useMemo, useReducer } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import { HintWithWhy } from '../components/HintWithWhy.js';
 import { DailyPanel } from '../components/puzzle/DailyPanel.js';
+import { shouldTranspose } from '../components/puzzle/boardView.js';
 import { PuzzleBoard } from '../components/puzzle/PuzzleBoard.js';
 import { PuzzleClock } from '../components/puzzle/PuzzleClock.js';
 import {
@@ -38,6 +39,7 @@ import {
 } from '../data/puzzleStore.js';
 import { useSoundSettings } from '../sound/settings.js';
 import { usePuzzleSounds } from '../sound/useGameSounds.js';
+import { useElementWidth } from '../useMediaQuery.js';
 
 /** A fresh seed with every move; only the first click's is used, to lay the mines. */
 const newSeed = () => Math.floor(Math.random() * 0x1_0000_0000);
@@ -58,6 +60,12 @@ export function PuzzleScreen() {
   });
   const { game } = session;
   const today = useToday();
+
+  // Hard is 30 columns wide. Where they would be smaller than a fingertip, the
+  // board is drawn turned upright instead and scrolls down, not sideways.
+  const boardBox = useRef<HTMLDivElement>(null);
+  const boardWidth = useElementWidth(boardBox);
+  const upright = shouldTranspose(game.rows, game.cols, boardWidth);
 
   // The explosion when a mine goes off, the fanfare on a win.
   usePuzzleSounds(game.status, useSoundSettings());
@@ -208,9 +216,16 @@ export function PuzzleScreen() {
           />
         )}
 
-        {/* The 30-wide board scrolls sideways in here on a narrow screen; the page never does. */}
-        <div className="puzzle-scroll">
-          <PuzzleBoard game={game} hint={session.hint} onPlay={play} onFlag={flag} describedBy="puzzle-controls" />
+        {/* A board that still does not fit scrolls in here; the page never does. */}
+        <div className="puzzle-scroll" ref={boardBox}>
+          <PuzzleBoard
+            game={game}
+            hint={session.hint}
+            onPlay={play}
+            onFlag={flag}
+            describedBy="puzzle-controls"
+            transposed={upright}
+          />
         </div>
 
         <p role="status" aria-live="polite" className={`puzzle-result ${game.status}`}>

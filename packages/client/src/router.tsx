@@ -302,9 +302,11 @@ export function NavBar({
   route: Route;
   onNavigate: (next: Route) => void;
 }) {
-  const items: { key: Route; label: string }[] = [
+  // `short` is what a phone shows: the three links share one row with the
+  // title and your picture there. The button keeps the full name for screen readers.
+  const items: { key: Route; label: string; short?: string }[] = [
     { key: 'game', label: 'Play' },
-    { key: 'ranks', label: 'Rankings' },
+    { key: 'ranks', label: 'Rankings', short: 'Ranks' },
     { key: 'puzzle', label: 'Puzzle' },
   ];
 
@@ -315,8 +317,16 @@ export function NavBar({
           key={item.key}
           className={route === item.key ? 'nav-link active' : 'nav-link'}
           onClick={() => onNavigate(item.key)}
+          aria-label={item.short ? item.label : undefined}
         >
-          {item.label}
+          {item.short ? (
+            <>
+              <span className="nav-full">{item.label}</span>
+              <span className="nav-short">{item.short}</span>
+            </>
+          ) : (
+            item.label
+          )}
         </button>
       ))}
     </nav>

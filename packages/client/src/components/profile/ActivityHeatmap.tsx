@@ -1,4 +1,5 @@
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { heatmapStart } from '../../data/layout.js';
 import {
   activityGrid,
   formatDay,
@@ -7,6 +8,10 @@ import {
   LABEL_COLUMNS,
   type ActivityDay,
 } from '../../data/profileStats.js';
+import { useElementWidth } from '../../useMediaQuery.js';
+
+/** Narrower than this, a year of squares is too small to see: the card shows six months. */
+const NARROW_PX = 480;
 
 interface Props {
   /** Your seats; only when each match was played is read. */
@@ -40,11 +45,23 @@ export function ActivityHeatmap({ seats, today }: Props) {
   const cells = useRef(new Map<string, HTMLDivElement>());
   const scroller = useRef<HTMLDivElement>(null);
 
-  // On a narrow screen the grid scrolls sideways; start at today, not a year ago.
+  // A phone shows the last 26 weeks with squares big enough to see; "Full year"
+  // brings back all 53, scrolling sideways. Wider cards always show the year.
+  const card = useRef<HTMLElement>(null);
+  const width = useElementWidth(card);
+  const narrow = width > 0 && width < NARROW_PX;
+  const [fullYear, setFullYear] = useState(false);
+  const start = heatmapStart(HEATMAP_WEEKS, narrow, fullYear);
+  const scrolls = narrow && fullYear;
+  // The one day in the tab order must be on show: a cursor left in a hidden
+  // week (the card just narrowed) goes back to today.
+  const tabStop: [number, number] = cursor[0] < start ? [lastWeek, today.getDay()] : cursor;
+
+  // When the year scrolls sideways, start at today, not a year ago.
   useLayoutEffect(() => {
     const box = scroller.current;
     if (box) box.scrollLeft = box.scrollWidth;
-  }, []);
+  }, [scrolls]);
 
   const busiest = useMemo(() => {
     let top: ActivityDay | null = null;
@@ -55,6 +72,7 @@ export function ActivityHeatmap({ seats, today }: Props) {
   }, [grid]);
 
   function moveTo(week: number, weekday: number) {
+    if (week < start) return; // before the weeks on show
     const target = grid.weeks[week]?.[weekday];
     if (!target) return; // off the grid, or a day still to come
     setCursor([week, weekday]);
@@ -62,13 +80,13 @@ export function ActivityHeatmap({ seats, today }: Props) {
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const [week, weekday] = cursor;
+    const [week, weekday] = tabStop;
     const moves: Record<string, [number, number]> = {
       ArrowLeft: [week - 1, weekday],
       ArrowRight: [week + 1, weekday],
       ArrowUp: [week, weekday - 1],
       ArrowDown: [week, weekday + 1],
-      Home: [0, 0],
+      Home: [start, 0],
       End: [lastWeek, today.getDay()],
     };
     const next = moves[event.key];
@@ -80,21 +98,29 @@ export function ActivityHeatmap({ seats, today }: Props) {
   const total = `${grid.total} match${grid.total === 1 ? '' : 'es'} in the last year`;
 
   return (
-    <section className="card">
+    <section className="card" ref={card}>
       <div className="profile-card-head">
         <h3>Activity</h3>
         <span className="muted">{total}</span>
       </div>
 
       <div className="heat-scroll" ref={scroller}>
-        <div className="heatmap">
+        <div
+          className={`heatmap${scrolls ? ' full-year' : ''}`}
+          style={{ '--weeks': HEATMAP_WEEKS - start } as CSSProperties}
+        >
           <div className="heat-months" aria-hidden="true">
-            {grid.months.map((month) => (
-              // +2: grid lines count from 1, and the first column holds the day names.
-              <span key={month.column} style={{ gridColumn: `${month.column + 2} / span ${LABEL_COLUMNS}` }}>
-                {month.label}
-              </span>
-            ))}
+            {grid.months
+              .filter((month) => month.column >= start)
+              .map((month) => (
+                // +2: grid lines count from 1, and the first column holds the day names.
+                <span
+                  key={month.column}
+                  style={{ gridColumn: `${month.column - start + 2} / span ${LABEL_COLUMNS}` }}
+                >
+                  {month.label}
+                </span>
+              ))}
           </div>
 
           <div
@@ -110,10 +136,11 @@ export function ActivityHeatmap({ seats, today }: Props) {
                   {label}
                 </span>
                 {grid.weeks.map((week, index) => {
+                  if (index < start) return null;
                   const day = week[weekday];
                   if (!day) return <span key={index} className="heat-cell is-future" aria-hidden="true" />;
                   const text = describe(day);
-                  const isCursor = cursor[0] === index && cursor[1] === weekday;
+                  const isCursor = tabStop[0] === index && tabStop[1] === weekday;
                   return (
                     <div
                       key={day.key}
@@ -150,6 +177,11 @@ export function ActivityHeatmap({ seats, today }: Props) {
               ? `Busiest day: ${describe(busiest)}`
               : 'No matches in the last year yet.'}
         </p>
+        {narrow && (
+          <button type="button" className="ghost small heat-range" onClick={() => setFullYear((full) => !full)}>
+            {fullYear ? 'Last 6 months' : 'Full year'}
+          </button>
+        )}
         <div className="heat-legend" aria-hidden="true">
           Less
           {Array.from({ length: HEATMAP_LEVELS + 1 }, (_, level) => (
