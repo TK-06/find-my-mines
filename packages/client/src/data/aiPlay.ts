@@ -109,6 +109,18 @@ export function boardSummary(size: number, density: AiDensity): string {
 }
 
 /** The Play button: "Play Fruit Fly · Hard". */
+/**
+ * The board under the folded Play button (below desktop width): size, mines
+ * and the mine count, short enough for one line on a phone.
+ */
+export function boardChoiceLabel(size: number, density: AiDensity): string {
+  const { mineCount } = aiBoard(size, density);
+  const classic = size === AI_DEFAULT_SIZE && density === AI_DEFAULT_DENSITY;
+  // "Classic" names the assignment's board only: it is also a density's name,
+  // which on any other board would read as a board.
+  return `${size}×${size}${classic ? ' Classic' : ''} · ${mineCount} mines`;
+}
+
 export function playLabel(model: AiModel, level: AiLevel): string {
   return `Play ${AI_MODEL_NAME[model]} · ${AI_LEVEL_COPY[level].label}`;
 }

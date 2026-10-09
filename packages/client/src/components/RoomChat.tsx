@@ -9,6 +9,8 @@ interface Props {
   players?: PlayerPublic[];
   connected: boolean;
   onSay: (text: string) => Promise<ModerationResult>;
+  /** Inside the chat sheet, which has its own title: no card frame or heading. */
+  embedded?: boolean;
 }
 
 /**
@@ -22,7 +24,7 @@ interface Props {
  * you see is what everyone in the room saw. Text is rendered as text (React
  * escapes it); nothing a player types is ever treated as markup.
  */
-export function RoomChat({ messages, players, connected, onSay }: Props) {
+export function RoomChat({ messages, players, connected, onSay, embedded = false }: Props) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,15 +73,20 @@ export function RoomChat({ messages, players, connected, onSay }: Props) {
   }
 
   return (
-    <section className="card room-chat" aria-labelledby="room-chat-title">
-      <h3 id="room-chat-title">Room chat</h3>
+    <section
+      className={`room-chat${embedded ? ' embedded' : ' card'}`}
+      aria-labelledby={embedded ? undefined : 'room-chat-title'}
+      aria-label={embedded ? 'Room chat' : undefined}
+    >
+      {!embedded && <h3 id="room-chat-title">Room chat</h3>}
 
       <div
         ref={log}
         className="chat-log"
         role="log"
         aria-live="polite"
-        aria-labelledby="room-chat-title"
+        aria-labelledby={embedded ? undefined : 'room-chat-title'}
+        aria-label={embedded ? 'Room chat messages' : undefined}
         // Scrollable, so it must be reachable by keyboard too.
         tabIndex={0}
         onScroll={(event) => {

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   POLICIES,
   POLICY_ORDER,
@@ -8,6 +8,7 @@ import {
   type PolicyId,
 } from '../data/policies.js';
 import { RouteLink, routeFromPath, type Route } from '../router.js';
+import { useIsDesktop } from '../useMediaQuery.js';
 
 /**
  * Privacy, security and terms: one screen, three documents.
@@ -24,6 +25,10 @@ export function PolicyScreen({
   onNavigate: (next: Route) => void;
 }) {
   const doc = POLICIES[policy];
+  // Beside the text on a desktop; a folded row above it on anything narrower,
+  // where ten links would fill the first screen before a word of the policy.
+  const isDesktop = useIsDesktop();
+  const fold = useRef<HTMLDetailsElement>(null);
 
   // A deep link like /privacy#your-browser arrives before this page has
   // rendered, so the browser had nothing to scroll to. Do it now.
@@ -31,6 +36,16 @@ export function PolicyScreen({
     const id = decodeURIComponent(window.location.hash.slice(1));
     if (id) document.getElementById(id)?.scrollIntoView();
   }, [policy]);
+
+  const contents = (
+    <ol>
+      {doc.sections.map((section) => (
+        <li key={section.id}>
+          <a href={`#${section.id}`}>{section.title}</a>
+        </li>
+      ))}
+    </ol>
+  );
 
   return (
     <div className="policy-page">
@@ -48,18 +63,24 @@ export function PolicyScreen({
       </nav>
 
       <div className="policy-layout">
-        <nav className="policy-toc" aria-labelledby="policy-toc-title">
-          <h3 id="policy-toc-title" className="policy-toc-title">
-            On this page
-          </h3>
-          <ol>
-            {doc.sections.map((section) => (
-              <li key={section.id}>
-                <a href={`#${section.id}`}>{section.title}</a>
-              </li>
-            ))}
-          </ol>
-        </nav>
+        {isDesktop ? (
+          <nav className="policy-toc" aria-labelledby="policy-toc-title">
+            <h3 id="policy-toc-title" className="policy-toc-title">
+              On this page
+            </h3>
+            {contents}
+          </nav>
+        ) : (
+          <details className="policy-toc policy-toc-fold" ref={fold}>
+            <summary>
+              On this page <span className="muted">{doc.sections.length} sections</span>
+            </summary>
+            {/* Folds back up once a section is picked, so the text is what shows. */}
+            <nav aria-label="On this page" onClick={() => fold.current?.removeAttribute('open')}>
+              {contents}
+            </nav>
+          </details>
+        )}
 
         <article className="policy-body">
           <p className="policy-intro">{doc.intro}</p>

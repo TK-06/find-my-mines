@@ -21,7 +21,10 @@ const RESULT = { win: 'Win', loss: 'Loss', draw: 'Draw' } as const;
  */
 export function RecentMatches({ matches, userId, title = 'Your recent matches', onOpenReview }: Props) {
   return (
-    <section className="card">
+    // The table reflows to the card's own width (container queries in
+    // styles.css): every column on a desktop, the key five on a tablet, and on a
+    // phone a two-line row with the rest folded into a line under the opponent.
+    <section className="card recent-card">
       <div className="profile-card-head">
         <h3>{title}</h3>
       </div>
@@ -33,14 +36,14 @@ export function RecentMatches({ matches, userId, title = 'Your recent matches', 
           <table className="recent-table">
             <thead>
               <tr>
-                <th scope="col">When</th>
-                <th scope="col">Mode</th>
-                <th scope="col">Board</th>
-                <th scope="col">Opponents</th>
-                <th scope="col" className="num">Mines</th>
-                <th scope="col">Result</th>
-                <th scope="col" className="num">Elo</th>
-                <th scope="col">Replay</th>
+                <th scope="col" className="col-when">When</th>
+                <th scope="col" className="col-mode">Mode</th>
+                <th scope="col" className="col-board">Board</th>
+                <th scope="col" className="col-opp">Opponents</th>
+                <th scope="col" className="num col-mines">Mines</th>
+                <th scope="col" className="col-result">Result</th>
+                <th scope="col" className="num col-elo">Elo</th>
+                <th scope="col" className="col-review">Replay</th>
               </tr>
             </thead>
             <tbody>
@@ -53,23 +56,30 @@ export function RecentMatches({ matches, userId, title = 'Your recent matches', 
 
                 return (
                   <tr key={match.id}>
-                    <td className="when">
+                    <td className="when col-when">
                       <time dateTime={match.created_at} title={formatDay(new Date(match.created_at))}>
                         {relativeTime(match.created_at)}
                       </time>
                     </td>
-                    <td>
+                    <td className="col-mode">
                       <span className={`tag mode-${match.mode}`}>{match.mode}</span>
                     </td>
-                    <td>{boardLabel(match.config)}</td>
-                    <td className="opponents">{opponentsLabel(opponents)}</td>
-                    <td className="num">
+                    <td className="col-board">{boardLabel(match.config)}</td>
+                    <td className="opponents col-opp">
+                      <span className="recent-opp">{opponentsLabel(opponents)}</span>
+                      {/* Only shown on a narrow card, where those columns are hidden. */}
+                      <span className="recent-meta">
+                        {relativeTime(match.created_at)} · {match.mode} · {boardLabel(match.config)} ·{' '}
+                        {me ? me.score : '—'}/{match.config?.mineCount ?? '?'} mines
+                      </span>
+                    </td>
+                    <td className="num col-mines">
                       {me ? me.score : '—'} / {match.config?.mineCount ?? '?'}
                     </td>
-                    <td>
+                    <td className="col-result">
                       {me ? <span className={`recent-result ${me.outcome}`}>{RESULT[me.outcome]}</span> : '—'}
                     </td>
-                    <td className="num">
+                    <td className="num col-elo">
                       {rated ? (
                         <span className={`profile-since ${deltaTone(me.elo_delta)}`}>{signed(me.elo_delta)}</span>
                       ) : (
@@ -79,7 +89,7 @@ export function RecentMatches({ matches, userId, title = 'Your recent matches', 
                         </span>
                       )}
                     </td>
-                    <td className="review-cell">
+                    <td className="review-cell col-review">
                       <ReviewLink matchId={match.id} hasReplay={match.has_replay} onOpen={onOpenReview} />
                     </td>
                   </tr>
